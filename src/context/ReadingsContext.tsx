@@ -14,7 +14,7 @@ interface ReadingsContextType {
   isUsingRealData: boolean;
   dataSource: DataSource;
   setDataSource: (source: DataSource) => void;
-  updateReadingStatus: (id: string, status: ReadingStatus) => void;
+  updateReadingStatus: (id: string, status: ReadingStatus) => Promise<void>;
   updateReadingComments: (id: string, comments: string) => void;
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
   getReadingsByStatus: (status: ReadingStatus | 'all') => S3MeterReading[];
@@ -80,13 +80,38 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     await loadData(dataSource);
   }, [loadData, dataSource]);
 
-  const updateReadingStatus = useCallback((id: string, status: ReadingStatus) => {
-    setAllReadings(prev => prev.map(reading => 
-      reading.id === id 
-        ? { ...reading, status, updatedAt: new Date().toISOString() }
-        : reading
-    ));
-  }, []);
+  const updateReadingStatus = useCallback(async (id: string, status: ReadingStatus) => {
+    // Find the reading to get current status and type
+    const reading = allReadings.find(r => r.id === id);
+    if (!reading) return;
+
+    // If status hasn't changed, just update locally
+    if (reading.status === status) {
+      return;
+    }
+
+    try {
+      // Call API to move files in S3
+      await bulkMoveReadings([{
+        sessionId: reading.id,
+        sourceType: reading.type,
+        currentStatus: reading.status,
+        targetStatus: status,
+      }]);
+
+      // Update local state after successful S3 move
+      setAllReadings(prev => prev.map(r => 
+        r.id === id 
+          ? { ...r, status, updatedAt: new Date().toISOString() }
+          : r
+      ));
+
+      console.log(`✅ Moved reading ${id} from ${reading.status} to ${status}`);
+    } catch (error) {
+      console.error('Failed to update status:', error);
+      throw error;
+    }
+  }, [allReadings]);
 
   const updateReadingComments = useCallback((id: string, comments: string) => {
     setAllReadings(prev => prev.map(reading => 

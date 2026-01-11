@@ -19,7 +19,8 @@ import {
   Zap,
   Target,
   Clock,
-  RotateCw
+  RotateCw,
+  Loader2
 } from 'lucide-react';
 
 const ReadingDetail: React.FC = () => {
@@ -33,6 +34,7 @@ const ReadingDetail: React.FC = () => {
     reading?.status || 'incorrect_new'
   );
   const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -93,11 +95,21 @@ const ReadingDetail: React.FC = () => {
     );
   }
 
-  const handleSave = () => {
-    updateReadingStatus(reading.id, selectedStatus);
-    updateReadingComments(reading.id, comments);
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      // Update status (this also moves files in S3)
+      await updateReadingStatus(reading.id, selectedStatus);
+      // Update comments locally
+      updateReadingComments(reading.id, comments);
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 2000);
+    } catch (error) {
+      console.error('Failed to save:', error);
+      alert('Failed to update status. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -217,10 +229,16 @@ const ReadingDetail: React.FC = () => {
             </div>
 
             <button 
-              className={`save-button ${isSaved ? 'saved' : ''}`}
+              className={`save-button ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
               onClick={handleSave}
+              disabled={isSaving}
             >
-              {isSaved ? (
+              {isSaving ? (
+                <>
+                  <Loader2 size={18} className="spin" />
+                  <span>Moving in S3...</span>
+                </>
+              ) : isSaved ? (
                 <>
                   <Check size={18} />
                   <span>Saved!</span>
