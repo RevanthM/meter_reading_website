@@ -20,7 +20,7 @@ app.use(express.static(path.join(__dirname, '../dist')));
 
 // S3 Configuration - Single bucket with folder prefixes
 const BUCKET_NAME = 'meter-reader-training-feedback';
-const REGION = 'us-west-2';
+const REGION = 'us-east-1';
 
 // Supported work types (4-digit numeric codes)
 const WORK_TYPES = ['1000', '2000', '3000', '4000', '5000'];
