@@ -431,7 +431,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Serve React app for all non-API routes (client-side routing)
-app.get('*', (req, res) => {
+app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
