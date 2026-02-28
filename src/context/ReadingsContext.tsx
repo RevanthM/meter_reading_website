@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import type { ReadingStatus, DashboardCounts, WorkType } from '../types';
 import { fetchReadings, bulkMoveReadings, type S3MeterReading } from '../services/api';
-import { mockReadings, calculateCounts } from '../data/mockData';
+import { mockReadings } from '../data/mockData';
 
 export type DataSource = 'all' | 'field' | 'simulator';
 

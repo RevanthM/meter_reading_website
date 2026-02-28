@@ -1,14 +1,22 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from the dist folder (built frontend)
+app.use(express.static(path.join(__dirname, '../dist')));
 
 // S3 Configuration - Single bucket with folder prefixes
 const BUCKET_NAME = 'meter-reader-training-feedback';
@@ -422,8 +430,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Serve React app for all non-API routes (client-side routing)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../dist/index.html'));
+});
+
 app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on http://localhost:${PORT}`);
+  console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📦 Bucket: ${BUCKET_NAME}`);
   console.log(`🌎 Region: ${REGION}`);
   console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
