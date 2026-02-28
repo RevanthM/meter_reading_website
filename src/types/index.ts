@@ -9,6 +9,17 @@ export type ReadingStatus =
 // Reading type - simulator or field
 export type ReadingType = 'simulator' | 'field';
 
+// Work types supported by the system
+export type WorkType = 'ANALOG_METER' | 'GO95' | 'RISR' | 'LEAK' | 'INTR';
+
+export const workTypeLabels: Record<WorkType, string> = {
+  ANALOG_METER: 'Analog Meter Reading',
+  GO95: 'GO95 Electrical Pole Inspection',
+  RISR: 'Riser Inspection',
+  LEAK: 'Leak Inspection',
+  INTR: 'Intrusive Inspection',
+};
+
 // Interface for meter images
 export type MeterImage = {
   id: string;

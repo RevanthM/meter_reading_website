@@ -15,9 +15,12 @@ import {
   Loader2,
   Radio,
   Monitor,
-  Layers
+  Layers,
+  ChevronDown,
+  Briefcase
 } from 'lucide-react';
-import type { ReadingStatus } from '../types';
+import type { ReadingStatus, WorkType } from '../types';
+import { workTypeLabels } from '../types';
 
 interface StatCardProps {
   title: string;
@@ -55,7 +58,7 @@ const StatCard: React.FC<StatCardProps> = ({
 );
 
 const Dashboard: React.FC = () => {
-  const { counts, loading, error, isUsingRealData, refreshData, dataSource, setDataSource } = useReadings();
+  const { counts, loading, error, isUsingRealData, refreshData, dataSource, setDataSource, workType, setWorkType } = useReadings();
   const navigate = useNavigate();
 
   const handleCardClick = (status: ReadingStatus | 'all') => {
@@ -70,6 +73,8 @@ const Dashboard: React.FC = () => {
     { value: 'field', label: 'Field', icon: <Radio size={14} /> },
     { value: 'simulator', label: 'Simulator', icon: <Monitor size={14} /> },
   ];
+
+  const workTypeOptions: WorkType[] = ['ANALOG_METER', 'GO95', 'RISR', 'LEAK', 'INTR'];
 
   if (loading) {
     return (
@@ -138,6 +143,31 @@ const Dashboard: React.FC = () => {
           <span className="hint">Start the API server with: npm run server</span>
         </div>
       )}
+
+      {/* Work Type Selector */}
+      <div className="work-type-section">
+        <div className="work-type-label">
+          <Briefcase size={16} />
+          <span>WORK TYPE</span>
+        </div>
+        <div className="work-type-dropdown">
+          <select
+            value={workType}
+            onChange={(e) => setWorkType(e.target.value as WorkType)}
+            className="work-type-select"
+          >
+            {workTypeOptions.map((wt) => (
+              <option key={wt} value={wt}>
+                {wt.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={16} className="dropdown-icon" />
+        </div>
+        <div className="work-type-name">
+          {workTypeLabels[workType]}
+        </div>
+      </div>
 
       <main className="dashboard-content">
         <section className="stats-section">

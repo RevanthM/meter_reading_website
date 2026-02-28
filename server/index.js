@@ -12,10 +12,13 @@ app.use(express.json());
 
 // S3 Configuration - Single bucket with folder prefixes
 const BUCKET_NAME = 'meter-reader-training-feedback';
-const REGION = 'us-east-1';
+const REGION = 'us-west-2';
 
-// Folder structure in the bucket
-const FOLDERS = {
+// Supported work types
+const WORK_TYPES = ['ANALOG_METER', 'GO95', 'RISR', 'LEAK', 'INTR'];
+
+// Legacy folder structure (for backward compatibility with existing data)
+const LEGACY_FOLDERS = {
   field: {
     correct: 'f_correct/',
     incorrect: 'f_incorrect/',
@@ -35,10 +38,14 @@ const STATUS_FOLDER_MAP = {
   incorrect_training: 'incorrect_training',
 };
 
-// Get folder prefix for a status and source type
-function getFolderForStatus(sourceType, status) {
+// Get folder prefix for a status, source type, and work type
+function getFolderForStatus(sourceType, status, workType = null) {
   const prefix = sourceType === 'field' ? 'f_' : 's_';
   const suffix = STATUS_FOLDER_MAP[status] || 'incorrect';
+  
+  if (workType && workType !== 'ANALOG_METER') {
+    return `${workType}/${prefix}${suffix}/`;
+  }
   return `${prefix}${suffix}/`;
 }
 
@@ -69,7 +76,7 @@ async function getSignedImageUrl(key) {
 }
 
 // Parse session folder and extract reading data
-async function parseSession(prefix, status, sourceType) {
+async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER') {
   try {
     // Get metadata.json
     const metadataCommand = new GetObjectCommand({
@@ -133,6 +140,7 @@ async function parseSession(prefix, status, sourceType) {
       location: sourceType === 'simulator' ? 'Simulator' : 'Field Capture',
       type: sourceType,
       status,
+      workType: metadata.work_type || workType,
       meterValue: metadata.ml_prediction,
       expectedValue: metadata.user_correction || undefined,
       rawPrediction: metadata.ml_raw_prediction,
@@ -141,6 +149,7 @@ async function parseSession(prefix, status, sourceType) {
       processingTimeMs: metadata.processing_time_ms,
       dialCount: metadata.dial_count,
       dialDetails: metadata.dial_details,
+      conditionCode: metadata.condition_code,
       comments: '',
       images,
       createdAt: metadata.timestamp,
@@ -153,7 +162,7 @@ async function parseSession(prefix, status, sourceType) {
 }
 
 // Get readings from a specific folder prefix
-async function getReadingsFromFolder(folderPrefix, status, sourceType) {
+async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = 'ANALOG_METER') {
   const readings = [];
   
   try {
@@ -169,7 +178,7 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType) {
     console.log(`   📂 ${folderPrefix} - ${folders.length} sessions`);
     
     for (const folder of folders) {
-      const reading = await parseSession(folder.Prefix, status, sourceType);
+      const reading = await parseSession(folder.Prefix, status, sourceType, workType);
       if (reading) readings.push(reading);
     }
   } catch (error) {
@@ -182,19 +191,19 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType) {
 // All status folders to scan
 const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'];
 
-// Get all readings based on source filter
-async function getAllReadings(source = 'all') {
+// Get all readings based on source and work type filter
+async function getAllReadings(source = 'all', workType = 'ANALOG_METER') {
   let readings = [];
   
-  console.log(`\n🔍 Fetching readings (source: ${source})`);
+  console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
   
   // Field data
   if (source === 'all' || source === 'field') {
     console.log('📦 Loading FIELD data...');
     
     for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('field', status);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'field');
+      const folder = getFolderForStatus('field', status, workType);
+      const statusReadings = await getReadingsFromFolder(folder, status, 'field', workType);
       readings = readings.concat(statusReadings);
     }
   }
@@ -204,8 +213,8 @@ async function getAllReadings(source = 'all') {
     console.log('📦 Loading SIMULATOR data...');
     
     for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('simulator', status);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'simulator');
+      const folder = getFolderForStatus('simulator', status, workType);
+      const statusReadings = await getReadingsFromFolder(folder, status, 'simulator', workType);
       readings = readings.concat(statusReadings);
     }
   }
@@ -220,11 +229,26 @@ async function getAllReadings(source = 'all') {
 
 // API Routes
 
+// Get all work types
+app.get('/api/work-types', (req, res) => {
+  res.json(WORK_TYPES.map(code => ({
+    code,
+    name: {
+      'ANALOG_METER': 'Analog Meter Reading',
+      'GO95': 'GO95 Electrical Pole Inspection',
+      'RISR': 'Riser Inspection',
+      'LEAK': 'Leak Inspection',
+      'INTR': 'Intrusive Inspection',
+    }[code] || code,
+  })));
+});
+
 // Get all readings
 app.get('/api/readings', async (req, res) => {
   try {
     const source = req.query.source || 'all';
-    const readings = await getAllReadings(source);
+    const workType = req.query.workType || 'ANALOG_METER';
+    const readings = await getAllReadings(source, workType);
     res.json(readings);
   } catch (error) {
     console.error('Error fetching readings:', error);
@@ -236,8 +260,9 @@ app.get('/api/readings', async (req, res) => {
 app.get('/api/counts', async (req, res) => {
   try {
     const source = req.query.source || 'all';
-    console.log(`\n📊 Calculating counts (source: ${source})`);
-    const readings = await getAllReadings(source);
+    const workType = req.query.workType || 'ANALOG_METER';
+    console.log(`\n📊 Calculating counts (source: ${source}, workType: ${workType})`);
+    const readings = await getAllReadings(source, workType);
     
     const counts = {
       totalPictures: readings.reduce((sum, r) => sum + r.images.length, 0),
@@ -392,7 +417,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     bucket: BUCKET_NAME,
-    folders: FOLDERS,
+    workTypes: WORK_TYPES,
     region: REGION 
   });
 });
@@ -400,8 +425,7 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Server running on http://localhost:${PORT}`);
   console.log(`📦 Bucket: ${BUCKET_NAME}`);
-  console.log(`📁 Folder structure:`);
-  console.log(`   Field:     ${FOLDERS.field.correct}, ${FOLDERS.field.incorrect}`);
-  console.log(`   Simulator: ${FOLDERS.simulator.correct}, ${FOLDERS.simulator.incorrect}`);
+  console.log(`🌎 Region: ${REGION}`);
+  console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
   console.log('');
 });

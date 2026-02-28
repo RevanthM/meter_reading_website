@@ -1,7 +1,7 @@
-import type { MeterReading, DashboardCounts } from '../types';
+import type { MeterReading, DashboardCounts, WorkType } from '../types';
 import type { DataSource } from '../context/ReadingsContext';
 
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = '/api';
 
 export interface S3MeterReading extends MeterReading {
   rawPrediction?: string;
@@ -15,13 +15,37 @@ export interface S3MeterReading extends MeterReading {
     direction: string;
     confidence: number;
   }>;
-  bucket?: string; // Which bucket this came from
+  bucket?: string;
+  workType?: WorkType;
+  conditionCode?: string;
 }
 
-export async function fetchReadings(source?: DataSource): Promise<S3MeterReading[]> {
+export interface WorkTypeInfo {
+  code: WorkType;
+  name: string;
+}
+
+export async function fetchWorkTypes(): Promise<WorkTypeInfo[]> {
   try {
-    const url = source && source !== 'all' 
-      ? `${API_BASE_URL}/readings?source=${source}`
+    const response = await fetch(`${API_BASE_URL}/work-types`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to fetch work types:', error);
+    throw error;
+  }
+}
+
+export async function fetchReadings(source?: DataSource, workType?: WorkType): Promise<S3MeterReading[]> {
+  try {
+    const params = new URLSearchParams();
+    if (source && source !== 'all') params.set('source', source);
+    if (workType) params.set('workType', workType);
+    
+    const url = params.toString() 
+      ? `${API_BASE_URL}/readings?${params}`
       : `${API_BASE_URL}/readings`;
     const response = await fetch(url);
     if (!response.ok) {
@@ -34,10 +58,14 @@ export async function fetchReadings(source?: DataSource): Promise<S3MeterReading
   }
 }
 
-export async function fetchCounts(source?: DataSource): Promise<DashboardCounts> {
+export async function fetchCounts(source?: DataSource, workType?: WorkType): Promise<DashboardCounts> {
   try {
-    const url = source && source !== 'all'
-      ? `${API_BASE_URL}/counts?source=${source}`
+    const params = new URLSearchParams();
+    if (source && source !== 'all') params.set('source', source);
+    if (workType) params.set('workType', workType);
+    
+    const url = params.toString()
+      ? `${API_BASE_URL}/counts?${params}`
       : `${API_BASE_URL}/counts`;
     const response = await fetch(url);
     if (!response.ok) {

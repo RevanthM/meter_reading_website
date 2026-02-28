@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
-import type { ReadingStatus, DashboardCounts } from '../types';
+import type { ReadingStatus, DashboardCounts, WorkType } from '../types';
 import { fetchReadings, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings, calculateCounts } from '../data/mockData';
 
@@ -14,6 +14,8 @@ interface ReadingsContextType {
   isUsingRealData: boolean;
   dataSource: DataSource;
   setDataSource: (source: DataSource) => void;
+  workType: WorkType;
+  setWorkType: (workType: WorkType) => void;
   updateReadingStatus: (id: string, status: ReadingStatus) => Promise<void>;
   updateReadingComments: (id: string, comments: string) => void;
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
@@ -30,18 +32,19 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [error, setError] = useState<string | null>(null);
   const [isUsingRealData, setIsUsingRealData] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>('all');
+  const [workType, setWorkType] = useState<WorkType>('ANALOG_METER');
 
-  const loadData = useCallback(async (source?: DataSource) => {
+  const loadData = useCallback(async (source?: DataSource, wt?: WorkType) => {
     setLoading(true);
     setError(null);
 
     try {
-      // Try to fetch from API with optional source filter
-      const apiReadings = await fetchReadings(source);
+      // Try to fetch from API with optional source and workType filter
+      const apiReadings = await fetchReadings(source, wt);
       
       setAllReadings(apiReadings);
       setIsUsingRealData(true);
-      console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'})`);
+      console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || 'ANALOG_METER'})`);
     } catch (err) {
       console.warn('⚠️ Failed to load from API, using mock data:', err);
       // Fall back to mock data
@@ -54,8 +57,8 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   }, []);
 
   useEffect(() => {
-    loadData(dataSource);
-  }, [loadData, dataSource]);
+    loadData(dataSource, workType);
+  }, [loadData, dataSource, workType]);
 
   // Filter readings based on data source
   const filteredReadings = useMemo(() => {
@@ -77,8 +80,8 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   }, [filteredReadings]);
 
   const refreshData = useCallback(async () => {
-    await loadData(dataSource);
-  }, [loadData, dataSource]);
+    await loadData(dataSource, workType);
+  }, [loadData, dataSource, workType]);
 
   const updateReadingStatus = useCallback(async (id: string, status: ReadingStatus) => {
     // Find the reading to get current status and type
@@ -169,6 +172,8 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       isUsingRealData,
       dataSource,
       setDataSource,
+      workType,
+      setWorkType,
       updateReadingStatus,
       updateReadingComments,
       bulkUpdateStatus,
