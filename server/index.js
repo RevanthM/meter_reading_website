@@ -22,8 +22,17 @@ app.use(express.static(path.join(__dirname, '../dist')));
 const BUCKET_NAME = 'meter-reader-training-feedback';
 const REGION = 'us-west-2';
 
-// Supported work types
-const WORK_TYPES = ['ANALOG_METER', 'GO95', 'RISR', 'LEAK', 'INTR'];
+// Supported work types (4-digit numeric codes)
+const WORK_TYPES = ['1000', '2000', '3000', '4000', '5000'];
+
+// Work type labels for display
+const WORK_TYPE_LABELS = {
+  '1000': 'Meter Reading',
+  '2000': 'GO95 Electrical Pole Inspection',
+  '3000': 'Riser Inspection',
+  '4000': 'Leak Inspection',
+  '5000': 'Intrusive Inspection',
+};
 
 // Legacy folder structure (for backward compatibility with existing data)
 const LEGACY_FOLDERS = {
@@ -51,7 +60,9 @@ function getFolderForStatus(sourceType, status, workType = null) {
   const prefix = sourceType === 'field' ? 'f_' : 's_';
   const suffix = STATUS_FOLDER_MAP[status] || 'incorrect';
   
-  if (workType && workType !== 'ANALOG_METER') {
+  // Work type '1000' (Meter Reading) uses legacy folder structure at root
+  // Other work types use {workType}/{prefix}{suffix}/ structure
+  if (workType && workType !== '1000') {
     return `${workType}/${prefix}${suffix}/`;
   }
   return `${prefix}${suffix}/`;
@@ -170,7 +181,7 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
 }
 
 // Get readings from a specific folder prefix
-async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = 'ANALOG_METER') {
+async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = '1000') {
   const readings = [];
   
   try {
@@ -200,7 +211,7 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType, workType 
 const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'];
 
 // Get all readings based on source and work type filter
-async function getAllReadings(source = 'all', workType = 'ANALOG_METER') {
+async function getAllReadings(source = 'all', workType = '1000') {
   let readings = [];
   
   console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
@@ -241,13 +252,7 @@ async function getAllReadings(source = 'all', workType = 'ANALOG_METER') {
 app.get('/api/work-types', (req, res) => {
   res.json(WORK_TYPES.map(code => ({
     code,
-    name: {
-      'ANALOG_METER': 'Analog Meter Reading',
-      'GO95': 'GO95 Electrical Pole Inspection',
-      'RISR': 'Riser Inspection',
-      'LEAK': 'Leak Inspection',
-      'INTR': 'Intrusive Inspection',
-    }[code] || code,
+    name: WORK_TYPE_LABELS[code] || code,
   })));
 });
 
@@ -255,7 +260,7 @@ app.get('/api/work-types', (req, res) => {
 app.get('/api/readings', async (req, res) => {
   try {
     const source = req.query.source || 'all';
-    const workType = req.query.workType || 'ANALOG_METER';
+    const workType = req.query.workType || '1000';
     const readings = await getAllReadings(source, workType);
     res.json(readings);
   } catch (error) {
@@ -268,7 +273,7 @@ app.get('/api/readings', async (req, res) => {
 app.get('/api/counts', async (req, res) => {
   try {
     const source = req.query.source || 'all';
-    const workType = req.query.workType || 'ANALOG_METER';
+    const workType = req.query.workType || '1000';
     console.log(`\n📊 Calculating counts (source: ${source}, workType: ${workType})`);
     const readings = await getAllReadings(source, workType);
     

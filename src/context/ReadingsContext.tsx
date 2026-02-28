@@ -32,7 +32,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [error, setError] = useState<string | null>(null);
   const [isUsingRealData, setIsUsingRealData] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>('all');
-  const [workType, setWorkType] = useState<WorkType>('ANALOG_METER');
+  const [workType, setWorkType] = useState<WorkType>('1000');
 
   const loadData = useCallback(async (source?: DataSource, wt?: WorkType) => {
     setLoading(true);
@@ -44,7 +44,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       
       setAllReadings(apiReadings);
       setIsUsingRealData(true);
-      console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || 'ANALOG_METER'})`);
+      console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || '1000'})`);
     } catch (err) {
       console.warn('⚠️ Failed to load from API, using mock data:', err);
       // Fall back to mock data

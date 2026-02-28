@@ -74,7 +74,7 @@ const Dashboard: React.FC = () => {
     { value: 'simulator', label: 'Simulator', icon: <Monitor size={14} /> },
   ];
 
-  const workTypeOptions: WorkType[] = ['ANALOG_METER', 'GO95', 'RISR', 'LEAK', 'INTR'];
+  const workTypeOptions: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
   if (loading) {
     return (
