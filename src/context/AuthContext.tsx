@@ -42,6 +42,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      console.log('[AUTH] onAuthStateChanged:', currentUser ? `uid=${currentUser.uid}` : 'null');
       if (currentUser) {
         await checkAuthorization(currentUser);
         setUser(currentUser);
@@ -61,10 +62,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setMfaResolver(null);
 
     try {
+      console.log('[AUTH] signInWithEmailAndPassword starting...');
       const result = await signInWithEmailAndPassword(auth, email, password);
+      console.log('[AUTH] signInWithEmailAndPassword SUCCESS, uid:', result.user.uid);
       setIsAuthorized(true);
       setUser(result.user);
+      console.log('[AUTH] setIsAuthorized(true) and setUser() called');
     } catch (err: any) {
+      console.error('[AUTH] signInWithEmailAndPassword FAILED:', err.code, err.message);
       if (err.code === 'auth/multi-factor-auth-required') {
         setMfaRequired(true);
         setMfaResolver(err.resolver);

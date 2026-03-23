@@ -12,10 +12,12 @@ const Login: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    console.log('[LOGIN] useEffect: user=', !!user, 'isAuthorized=', isAuthorized, 'loading=', loading);
     if (user && isAuthorized) {
+      console.log('[LOGIN] Navigating to /');
       navigate('/', { replace: true });
     }
-  }, [user, isAuthorized, navigate]);
+  }, [user, isAuthorized, loading, navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
