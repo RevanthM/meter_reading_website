@@ -1,13 +1,20 @@
 import { useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 const Login: React.FC = () => {
-  const { login, error, clearError, loading } = useAuth();
+  const navigate = useNavigate();
+  const { user, isAuthorized, login, error, clearError, loading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  if (user && isAuthorized) {
+    navigate('/', { replace: true });
+    return null;
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
