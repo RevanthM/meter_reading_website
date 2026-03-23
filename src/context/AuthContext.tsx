@@ -62,7 +62,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
-      await checkAuthorization(result.user);
+      setIsAuthorized(true);
+      setUser(result.user);
     } catch (err: any) {
       if (err.code === 'auth/multi-factor-auth-required') {
         setMfaRequired(true);
