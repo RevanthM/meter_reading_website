@@ -1,23 +1,38 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff, Smartphone } from 'lucide-react';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAuthorized, login, error, clearError, loading } = useAuth();
+  const {
+    user, isAuthorized, login, error, clearError, loading,
+    mfaRequired, mfaPhoneHint, sendMfaCode, verifyMfaCode,
+  } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaSent, setMfaSent] = useState(false);
+  const [mfaSending, setMfaSending] = useState(false);
+  const recaptchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    console.log('[LOGIN] useEffect: user=', !!user, 'isAuthorized=', isAuthorized, 'loading=', loading);
     if (user && isAuthorized) {
-      console.log('[LOGIN] Navigating to /');
       navigate('/', { replace: true });
     }
-  }, [user, isAuthorized, loading, navigate]);
+  }, [user, isAuthorized, navigate]);
+
+  useEffect(() => {
+    if (mfaRequired && !mfaSent && recaptchaRef.current) {
+      setMfaSending(true);
+      sendMfaCode(recaptchaRef.current)
+        .then(() => setMfaSent(true))
+        .catch(() => {})
+        .finally(() => setMfaSending(false));
+    }
+  }, [mfaRequired, mfaSent, sendMfaCode]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -33,6 +48,20 @@ const Login: React.FC = () => {
     }
   };
 
+  const handleMfaSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!mfaCode || mfaCode.length < 6) return;
+
+    setSubmitting(true);
+    try {
+      await verifyMfaCode(mfaCode);
+    } catch {
+      // error state is set by verifyMfaCode()
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="login-page">
@@ -40,6 +69,75 @@ const Login: React.FC = () => {
           <Loader2 size={48} className="spin" />
           <p>Checking authentication...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (mfaRequired) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-header">
+            <div className="login-logo">
+              <Smartphone size={48} strokeWidth={1.5} />
+            </div>
+            <h1>Verification Required</h1>
+            <p>
+              {mfaSending
+                ? 'Sending verification code...'
+                : `Enter the code sent to ${mfaPhoneHint || 'your phone'}`}
+            </p>
+          </div>
+
+          {error && (
+            <div className="login-error">
+              <AlertCircle size={16} />
+              <span>{error}</span>
+              <button onClick={clearError} className="dismiss-error">&times;</button>
+            </div>
+          )}
+
+          <form onSubmit={handleMfaSubmit} className="login-form">
+            <div className="form-group">
+              <label htmlFor="mfa-code">Verification Code</label>
+              <div className="input-wrapper">
+                <Lock size={18} className="input-icon" />
+                <input
+                  id="mfa-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="123456"
+                  required
+                  autoFocus
+                  maxLength={6}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="login-submit"
+              disabled={submitting || mfaCode.length < 6 || !mfaSent}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={18} className="spin" />
+                  Verifying...
+                </>
+              ) : (
+                'Verify'
+              )}
+            </button>
+          </form>
+
+          <div className="login-footer">
+            <p>Didn't receive the code? Check your SMS messages.</p>
+          </div>
+        </div>
+        <div ref={recaptchaRef} id="recaptcha-container" />
       </div>
     );
   }
@@ -125,6 +223,7 @@ const Login: React.FC = () => {
           <p>Contact your administrator if you need access.</p>
         </div>
       </div>
+      <div ref={recaptchaRef} id="recaptcha-container" />
     </div>
   );
 };

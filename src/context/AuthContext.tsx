@@ -19,7 +19,10 @@ interface AuthContextType {
   error: string | null;
   mfaRequired: boolean;
   mfaResolver: MultiFactorResolver | null;
+  mfaPhoneHint: string | null;
   login: (email: string, password: string) => Promise<void>;
+  sendMfaCode: (recaptchaContainer: HTMLElement) => Promise<void>;
+  verifyMfaCode: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
   isAuthorized: boolean;
@@ -34,6 +37,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
+  const [mfaPhoneHint, setMfaPhoneHint] = useState<string | null>(null);
+  const [mfaVerificationId, setMfaVerificationId] = useState<string | null>(null);
 
   const checkAuthorization = useCallback(async (_currentUser: User) => {
     setIsAuthorized(true);
@@ -71,8 +76,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch (err: any) {
       console.error('[AUTH] signInWithEmailAndPassword FAILED:', err.code, err.message);
       if (err.code === 'auth/multi-factor-auth-required') {
+        const resolver: MultiFactorResolver = err.resolver;
         setMfaRequired(true);
-        setMfaResolver(err.resolver);
+        setMfaResolver(resolver);
+        const phoneHint = resolver.hints.find(h => h.factorId === PhoneMultiFactorGenerator.FACTOR_ID);
+        setMfaPhoneHint(phoneHint ? (phoneHint as any).phoneNumber : 'phone on file');
         return;
       }
 
@@ -89,6 +97,45 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw err;
     }
   }, [checkAuthorization]);
+
+  const sendMfaCode = useCallback(async (recaptchaContainer: HTMLElement) => {
+    if (!mfaResolver) throw new Error('No MFA resolver');
+    setError(null);
+
+    const phoneHint = mfaResolver.hints.find(
+      h => h.factorId === PhoneMultiFactorGenerator.FACTOR_ID
+    );
+    if (!phoneHint) throw new Error('No phone factor enrolled');
+
+    const recaptchaVerifier = new RecaptchaVerifier(auth, recaptchaContainer, { size: 'invisible' });
+    const phoneProvider = new PhoneAuthProvider(auth);
+    const verificationId = await phoneProvider.verifyPhoneNumber(
+      { multiFactorHint: phoneHint, session: mfaResolver.session },
+      recaptchaVerifier
+    );
+    setMfaVerificationId(verificationId);
+  }, [mfaResolver]);
+
+  const verifyMfaCode = useCallback(async (code: string) => {
+    if (!mfaResolver || !mfaVerificationId) throw new Error('No MFA session');
+    setError(null);
+
+    try {
+      const credential = PhoneAuthProvider.credential(mfaVerificationId, code);
+      const multiFactorAssertion = PhoneMultiFactorGenerator.assertion(credential);
+      const result = await mfaResolver.resolveSignIn(multiFactorAssertion);
+      setIsAuthorized(true);
+      setUser(result.user);
+      setMfaRequired(false);
+      setMfaResolver(null);
+      setMfaVerificationId(null);
+    } catch (err: any) {
+      setError(err.code === 'auth/invalid-verification-code'
+        ? 'Invalid verification code. Please try again.'
+        : 'MFA verification failed. Please try again.');
+      throw err;
+    }
+  }, [mfaResolver, mfaVerificationId]);
 
   const logout = useCallback(async () => {
     try {
@@ -112,7 +159,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       error,
       mfaRequired,
       mfaResolver,
+      mfaPhoneHint,
       login,
+      sendMfaCode,
+      verifyMfaCode,
       logout,
       clearError,
       isAuthorized,
