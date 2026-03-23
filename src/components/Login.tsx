@@ -19,10 +19,10 @@ const Login: React.FC = () => {
   const recaptchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (user && isAuthorized) {
+    if (user && isAuthorized && !loading) {
       navigate('/', { replace: true });
     }
-  }, [user, isAuthorized, navigate]);
+  }, [user, isAuthorized, loading, navigate]);
 
   useEffect(() => {
     if (mfaRequired && !mfaSent && recaptchaRef.current) {
