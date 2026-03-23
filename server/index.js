@@ -418,10 +418,59 @@ app.post('/api/readings/bulk-move', async (req, res) => {
     
     console.log(`✅ Moved ${movedCount}/${readings.length} readings\n`);
     
+    for (const reading of readings) {
+      activityLog.unshift({
+        id: `${Date.now()}-${reading.sessionId}`,
+        timestamp: new Date().toISOString(),
+        userEmail: req.headers['x-user-email'] || 'unknown',
+        action: 'status_change',
+        sessionId: reading.sessionId,
+        fromStatus: reading.currentStatus,
+        toStatus: reading.targetStatus,
+        sourceType: reading.sourceType,
+      });
+    }
+    
     res.json({ success: true, moved: movedCount, total: readings.length });
   } catch (error) {
     console.error('Error in bulk move:', error);
     res.status(500).json({ error: 'Failed to move readings' });
+  }
+});
+
+// Activity log (stored in-memory for now; persists per server session)
+const activityLog = [];
+
+app.get('/api/activity-log', (req, res) => {
+  res.json(activityLog);
+});
+
+// Get uploads (returns readings as upload entries)
+app.get('/api/uploads', async (req, res) => {
+  try {
+    const email = req.query.email;
+    const source = req.query.source || 'all';
+    const workType = req.query.workType || '1000';
+    
+    const readings = await getAllReadings(source, workType);
+    
+    const uploads = readings.map(r => ({
+      id: r.id,
+      sessionId: r.id,
+      timestamp: r.dateOfReading,
+      userEmail: email || '',
+      sourceType: r.type,
+      workType: r.workType || workType,
+      imageCount: r.images.length,
+      prediction: r.meterValue,
+      isCorrect: r.isCorrect ?? (r.status === 'correct'),
+      status: r.status,
+    }));
+    
+    res.json(uploads);
+  } catch (error) {
+    console.error('Error fetching uploads:', error);
+    res.status(500).json({ error: 'Failed to fetch uploads' });
   }
 });
 
