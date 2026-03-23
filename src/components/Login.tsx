@@ -21,7 +21,8 @@ const Login: React.FC = () => {
     setSubmitting(true);
     try {
       await login(email, password);
-    } finally {
+      window.location.href = '/';
+    } catch {
       setSubmitting(false);
     }
   };

@@ -81,6 +81,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
 
       setError(messages[err.code] || 'Failed to sign in. Please check your credentials.');
+      throw err;
     }
   }, [checkAuthorization]);
 
