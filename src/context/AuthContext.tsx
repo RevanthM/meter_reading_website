@@ -10,8 +10,7 @@ import {
   type User,
   type MultiFactorResolver,
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../config/firebase';
+import { auth } from '../config/firebase';
 
 interface AuthContextType {
   user: User | null;
@@ -36,22 +35,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
 
-  const checkAuthorization = useCallback(async (currentUser: User) => {
-    try {
-      const emailDoc = await getDoc(doc(db, 'authorized_emails', currentUser.email || ''));
-      if (emailDoc.exists()) {
-        setIsAuthorized(true);
-        return true;
-      }
-      setIsAuthorized(false);
-      setError('Your account is not authorized to access this application.');
-      await signOut(auth);
-      return false;
-    } catch (err) {
-      console.error('Authorization check failed:', err);
-      setIsAuthorized(true);
-      return true;
-    }
+  const checkAuthorization = useCallback(async (_currentUser: User) => {
+    setIsAuthorized(true);
+    return true;
   }, []);
 
   useEffect(() => {
