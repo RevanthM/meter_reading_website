@@ -70,7 +70,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const counts = useMemo((): DashboardCounts => {
     const readings = filteredReadings;
     return {
-      totalPictures: readings.reduce((sum, r) => sum + r.images.length, 0),
+      totalPictures: readings.length,
       correctCount: readings.filter(r => r.status === 'correct').length,
       incorrectNewCount: readings.filter(r => r.status === 'incorrect_new').length,
       incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,

@@ -278,7 +278,7 @@ app.get('/api/counts', async (req, res) => {
     const readings = await getAllReadings(source, workType);
     
     const counts = {
-      totalPictures: readings.reduce((sum, r) => sum + r.images.length, 0),
+      totalPictures: readings.length,
       correctCount: readings.filter(r => r.status === 'correct').length,
       incorrectNewCount: readings.filter(r => r.status === 'incorrect_new').length,
       incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,
