@@ -5,9 +5,28 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import admin from 'firebase-admin';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// --- Firebase Admin SDK ---
+const FIREBASE_API_KEY = process.env.VITE_FIREBASE_API_KEY;
+try {
+  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+  if (b64) {
+    const serviceAccount = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: serviceAccount.project_id,
+    });
+    console.log('🔐 Firebase Admin SDK initialized');
+  } else {
+    console.warn('⚠️  FIREBASE_SERVICE_ACCOUNT_BASE64 not set — email link MFA bypass disabled');
+  }
+} catch (err) {
+  console.error('❌ Firebase Admin SDK init failed:', err.message);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -550,6 +569,42 @@ app.get('/api/health', (req, res) => {
     workTypes: WORK_TYPES,
     region: REGION 
   });
+});
+
+// Verify Firebase email link and issue a custom token (bypasses MFA)
+app.post('/api/auth/verify-email-link', async (req, res) => {
+  const { email, oobCode } = req.body;
+  if (!email || !oobCode) return res.status(400).json({ error: 'Email and oobCode are required' });
+  if (!FIREBASE_API_KEY) return res.status(503).json({ error: 'Firebase API key not configured' });
+
+  try {
+    // Verify the oobCode by calling Firebase's REST API
+    const verifyRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=${FIREBASE_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, oobCode }),
+      }
+    );
+    const verifyData = await verifyRes.json();
+
+    // Either success or MFA-required means the oobCode was valid
+    const isValid = verifyData.localId || (verifyData.error?.message || '').startsWith('MULTI_FACTOR_AUTH_REQUIRED');
+    if (!isValid) {
+      console.error('Email link verification failed:', verifyData.error?.message);
+      return res.status(400).json({ error: 'Invalid or expired email link. Please request a new one.' });
+    }
+
+    // oobCode is valid — create a custom token for this user
+    const user = await admin.auth().getUserByEmail(email);
+    const customToken = await admin.auth().createCustomToken(user.uid);
+    console.log(`✅ Email link verified for ${email}, issuing custom token`);
+    res.json({ success: true, customToken });
+  } catch (err) {
+    console.error('Email link verification error:', err.message);
+    res.status(500).json({ error: 'Verification failed' });
+  }
 });
 
 app.get('/{*path}', (req, res) => {

@@ -3,7 +3,7 @@ import {
   signInWithEmailAndPassword,
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
-  signInWithEmailLink,
+  signInWithCustomToken,
   signOut,
   onAuthStateChanged,
   multiFactor,
@@ -176,8 +176,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return false;
     }
 
+    const url = new URL(window.location.href);
+    const oobCode = url.searchParams.get('oobCode');
+    if (!oobCode) {
+      setError('Invalid email link.');
+      return false;
+    }
+
     try {
-      const result = await signInWithEmailLink(auth, email, window.location.href);
+      const res = await fetch('/api/auth/verify-email-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, oobCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Email link verification failed');
+        return false;
+      }
+
+      const result = await signInWithCustomToken(auth, data.customToken);
       window.localStorage.removeItem('emailForSignIn');
       setIsAuthorized(true);
       setUser(result.user);
