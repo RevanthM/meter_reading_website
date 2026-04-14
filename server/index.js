@@ -208,7 +208,7 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       dialCount: metadata.dial_count,
       dialDetails: metadata.dial_details,
       conditionCode: metadata.condition_code,
-      userName: metadata.user_name || '',
+      userName: metadata.user_name || metadata.user_email || '',
       imageSource: metadata.image_source || '',
       uploadMode: metadata.upload_mode || '',
       comments: '',
