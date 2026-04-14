@@ -69,11 +69,11 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <ReadingsProvider>
-        <Router>
+      <Router>
+        <ReadingsProvider>
           <AppContent />
-        </Router>
-      </ReadingsProvider>
+        </ReadingsProvider>
+      </Router>
     </AuthProvider>
   );
 }

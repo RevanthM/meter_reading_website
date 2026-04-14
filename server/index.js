@@ -15,17 +15,13 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Serve static files from the dist folder (built frontend)
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// S3 Configuration - Single bucket with folder prefixes
 const BUCKET_NAME = 'meter-reader-training-feedback';
 const REGION = 'us-east-1';
 
-// Supported work types (4-digit numeric codes)
 const WORK_TYPES = ['1000', '2000', '3000', '4000', '5000'];
 
-// Work type labels for display
 const WORK_TYPE_LABELS = {
   '1000': 'Meter Reading',
   '2000': 'GO95 Electrical Pole Inspection',
@@ -34,19 +30,6 @@ const WORK_TYPE_LABELS = {
   '5000': 'Intrusive Inspection',
 };
 
-// Legacy folder structure (for backward compatibility with existing data)
-const LEGACY_FOLDERS = {
-  field: {
-    correct: 'f_correct/',
-    incorrect: 'f_incorrect/',
-  },
-  simulator: {
-    correct: 's_correct/',
-    incorrect: 's_incorrect/',
-  },
-};
-
-// Status to folder suffix mapping
 const STATUS_FOLDER_MAP = {
   correct: 'correct',
   incorrect_new: 'incorrect',
@@ -55,13 +38,10 @@ const STATUS_FOLDER_MAP = {
   incorrect_training: 'incorrect_training',
 };
 
-// Get folder prefix for a status, source type, and work type
 function getFolderForStatus(sourceType, status, workType = null) {
   const prefix = sourceType === 'field' ? 'f_' : 's_';
   const suffix = STATUS_FOLDER_MAP[status] || 'incorrect';
   
-  // Work type '1000' (Meter Reading) uses legacy folder structure at root
-  // Other work types use {workType}/{prefix}{suffix}/ structure
   if (workType && workType !== '1000') {
     return `${workType}/${prefix}${suffix}/`;
   }
@@ -76,7 +56,31 @@ const s3Client = new S3Client({
   },
 });
 
-// Helper to convert stream to string
+// --- In-memory cache ---
+const cache = new Map();
+const CACHE_TTL_MS = 60_000; // 1 minute
+
+function getCacheKey(source, workType) {
+  return `${source}:${workType}`;
+}
+
+function getCached(key) {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
+    return entry.data;
+  }
+  cache.delete(key);
+  return null;
+}
+
+function setCache(key, data) {
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
+function invalidateCache() {
+  cache.clear();
+}
+
 async function streamToString(stream) {
   const chunks = [];
   for await (const chunk of stream) {
@@ -85,7 +89,6 @@ async function streamToString(stream) {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-// Get signed URL for an image
 async function getSignedImageUrl(key) {
   const command = new GetObjectCommand({
     Bucket: BUCKET_NAME,
@@ -94,59 +97,55 @@ async function getSignedImageUrl(key) {
   return await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
-// Parse session folder and extract reading data
 async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER') {
   try {
-    // Get metadata.json
     const metadataCommand = new GetObjectCommand({
       Bucket: BUCKET_NAME,
       Key: `${prefix}metadata.json`,
     });
     
-    const metadataResponse = await s3Client.send(metadataCommand);
+    const [metadataResponse, listResponse] = await Promise.all([
+      s3Client.send(metadataCommand),
+      s3Client.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME, Prefix: prefix })),
+    ]);
+
     const metadataJson = await streamToString(metadataResponse.Body);
     const metadata = JSON.parse(metadataJson);
     
-    // List all files in this session
-    const listCommand = new ListObjectsV2Command({
-      Bucket: BUCKET_NAME,
-      Prefix: prefix,
-    });
-    
-    const listResponse = await s3Client.send(listCommand);
     const files = listResponse.Contents || [];
     
-    // Get signed URLs for images
-    const images = [];
-    for (const file of files) {
-      if (file.Key.endsWith('.jpg') || file.Key.endsWith('.jpeg') || file.Key.endsWith('.png')) {
-        const fileName = file.Key.split('/').pop();
-        const signedUrl = await getSignedImageUrl(file.Key);
-        
-        let label = 'Image';
-        if (fileName === 'original.jpg') {
-          label = 'Full Meter View';
-        } else if (fileName.startsWith('dial_')) {
-          const dialNum = fileName.match(/dial_(\d+)/)?.[1] || '?';
-          label = `Dial ${dialNum}`;
-        }
-        
-        images.push({
-          id: file.Key,
-          url: signedUrl,
-          label,
-          fileName,
-          metadata: {
-            capturedAt: metadata.timestamp,
-            resolution: fileName === 'original.jpg' ? '4032x3024' : '224x224',
-            fileSize: `${Math.round((file.Size || 0) / 1024)} KB`,
-            dialIndex: fileName.startsWith('dial_') ? parseInt(fileName.match(/dial_(\d+)/)?.[1] || '0') - 1 : undefined,
-          },
-        });
+    const imageFiles = files.filter(f =>
+      f.Key.endsWith('.jpg') || f.Key.endsWith('.jpeg') || f.Key.endsWith('.png')
+    );
+
+    const signedUrls = await Promise.all(
+      imageFiles.map(f => getSignedImageUrl(f.Key))
+    );
+
+    const images = imageFiles.map((file, i) => {
+      const fileName = file.Key.split('/').pop();
+      let label = 'Image';
+      if (fileName === 'original.jpg') {
+        label = 'Full Meter View';
+      } else if (fileName.startsWith('dial_')) {
+        const dialNum = fileName.match(/dial_(\d+)/)?.[1] || '?';
+        label = `Dial ${dialNum}`;
       }
-    }
+      
+      return {
+        id: file.Key,
+        url: signedUrls[i],
+        label,
+        fileName,
+        metadata: {
+          capturedAt: metadata.timestamp,
+          resolution: fileName === 'original.jpg' ? '4032x3024' : '224x224',
+          fileSize: `${Math.round((file.Size || 0) / 1024)} KB`,
+          dialIndex: fileName.startsWith('dial_') ? parseInt(fileName.match(/dial_(\d+)/)?.[1] || '0') - 1 : undefined,
+        },
+      };
+    });
     
-    // Sort images: original first, then dials in order
     images.sort((a, b) => {
       if (a.fileName === 'original.jpg') return -1;
       if (b.fileName === 'original.jpg') return 1;
@@ -180,10 +179,7 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
   }
 }
 
-// Get readings from a specific folder prefix
 async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = '1000') {
-  const readings = [];
-  
   try {
     const command = new ListObjectsV2Command({
       Bucket: BUCKET_NAME,
@@ -196,59 +192,119 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType, workType 
     
     console.log(`   📂 ${folderPrefix} - ${folders.length} sessions`);
     
-    for (const folder of folders) {
-      const reading = await parseSession(folder.Prefix, status, sourceType, workType);
-      if (reading) readings.push(reading);
-    }
+    const results = await Promise.all(
+      folders.map(folder => parseSession(folder.Prefix, status, sourceType, workType))
+    );
+
+    return results.filter(Boolean);
   } catch (error) {
     console.error(`Error listing folder ${folderPrefix}:`, error.message);
+    return [];
   }
-  
-  return readings;
 }
 
-// All status folders to scan
 const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'];
 
-// Get all readings based on source and work type filter
 async function getAllReadings(source = 'all', workType = '1000') {
-  let readings = [];
-  
+  const cacheKey = getCacheKey(source, workType);
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`⚡ Cache hit for ${cacheKey} (${cached.length} readings)`);
+    return cached;
+  }
+
   console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
   
-  // Field data
+  const folderJobs = [];
+
   if (source === 'all' || source === 'field') {
-    console.log('📦 Loading FIELD data...');
-    
     for (const status of ALL_STATUSES) {
       const folder = getFolderForStatus('field', status, workType);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'field', workType);
-      readings = readings.concat(statusReadings);
+      folderJobs.push(getReadingsFromFolder(folder, status, 'field', workType));
     }
   }
   
-  // Simulator data
   if (source === 'all' || source === 'simulator') {
-    console.log('📦 Loading SIMULATOR data...');
-    
     for (const status of ALL_STATUSES) {
       const folder = getFolderForStatus('simulator', status, workType);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'simulator', workType);
-      readings = readings.concat(statusReadings);
+      folderJobs.push(getReadingsFromFolder(folder, status, 'simulator', workType));
     }
   }
+
+  const results = await Promise.all(folderJobs);
+  const readings = results.flat();
   
-  // Sort by date, newest first
   readings.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
   
   console.log(`✅ Total readings: ${readings.length}\n`);
   
+  setCache(cacheKey, readings);
   return readings;
+}
+
+// Lightweight counts: just count session folders without parsing metadata
+async function getCountsFromFolders(source = 'all', workType = '1000') {
+  const cacheKey = `counts:${source}:${workType}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`⚡ Cache hit for counts ${source}:${workType}`);
+    return cached;
+  }
+
+  console.log(`\n📊 Counting sessions (source: ${source}, workType: ${workType})`);
+
+  const countJobs = [];
+  const statusLabels = [];
+
+  const sources = source === 'all' ? ['field', 'simulator'] : [source];
+
+  for (const src of sources) {
+    for (const status of ALL_STATUSES) {
+      const folder = getFolderForStatus(src, status, workType);
+      statusLabels.push(status);
+      countJobs.push(
+        s3Client.send(new ListObjectsV2Command({
+          Bucket: BUCKET_NAME,
+          Prefix: folder,
+          Delimiter: '/',
+        })).then(r => (r.CommonPrefixes || []).length)
+          .catch(() => 0)
+      );
+    }
+  }
+
+  const results = await Promise.all(countJobs);
+
+  const counts = {
+    totalPictures: 0,
+    correctCount: 0,
+    incorrectNewCount: 0,
+    incorrectAnalyzedCount: 0,
+    incorrectLabeledCount: 0,
+    incorrectTrainingCount: 0,
+  };
+
+  const statusToKey = {
+    correct: 'correctCount',
+    incorrect_new: 'incorrectNewCount',
+    incorrect_analyzed: 'incorrectAnalyzedCount',
+    incorrect_labeled: 'incorrectLabeledCount',
+    incorrect_training: 'incorrectTrainingCount',
+  };
+
+  results.forEach((count, i) => {
+    const status = statusLabels[i];
+    counts[statusToKey[status]] += count;
+    counts.totalPictures += count;
+  });
+
+  console.log('📊 Counts:', counts);
+  setCache(cacheKey, counts);
+  return counts;
 }
 
 // API Routes
 
-// Get all work types
 app.get('/api/work-types', (req, res) => {
   res.json(WORK_TYPES.map(code => ({
     code,
@@ -256,7 +312,6 @@ app.get('/api/work-types', (req, res) => {
   })));
 });
 
-// Get all readings
 app.get('/api/readings', async (req, res) => {
   try {
     const source = req.query.source || 'all';
@@ -269,24 +324,11 @@ app.get('/api/readings', async (req, res) => {
   }
 });
 
-// Get dashboard counts
 app.get('/api/counts', async (req, res) => {
   try {
     const source = req.query.source || 'all';
     const workType = req.query.workType || '1000';
-    console.log(`\n📊 Calculating counts (source: ${source}, workType: ${workType})`);
-    const readings = await getAllReadings(source, workType);
-    
-    const counts = {
-      totalPictures: readings.length,
-      correctCount: readings.filter(r => r.status === 'correct').length,
-      incorrectNewCount: readings.filter(r => r.status === 'incorrect_new').length,
-      incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,
-      incorrectLabeledCount: readings.filter(r => r.status === 'incorrect_labeled').length,
-      incorrectTrainingCount: readings.filter(r => r.status === 'incorrect_training').length,
-    };
-    
-    console.log('📊 Counts:', counts);
+    const counts = await getCountsFromFolders(source, workType);
     res.json(counts);
   } catch (error) {
     console.error('Error calculating counts:', error);
@@ -294,7 +336,6 @@ app.get('/api/counts', async (req, res) => {
   }
 });
 
-// Get single reading by ID
 app.get('/api/readings/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -314,12 +355,10 @@ app.get('/api/readings/:id', async (req, res) => {
   }
 });
 
-// Move a session folder from one status folder to another
 async function moveSessionFolder(sessionId, sourceType, currentStatus, targetStatus) {
   const sourceFolder = getFolderForStatus(sourceType, currentStatus);
   const targetFolder = getFolderForStatus(sourceType, targetStatus);
   
-  // Find the session folder - it could have a prefix like f_ or just the session ID
   const possiblePrefixes = [
     `${sourceFolder}${sessionId}/`,
     `${sourceFolder}${sourceType === 'field' ? 'f_' : 's_'}${sessionId}/`,
@@ -352,7 +391,6 @@ async function moveSessionFolder(sessionId, sourceType, currentStatus, targetSta
   console.log(`  📦 Moving ${sourcePrefix} -> ${targetFolder}`);
   
   try {
-    // List all objects in the source folder
     const listCommand = new ListObjectsV2Command({
       Bucket: BUCKET_NAME,
       Prefix: sourcePrefix,
@@ -366,26 +404,21 @@ async function moveSessionFolder(sessionId, sourceType, currentStatus, targetSta
       return false;
     }
     
-    // Copy each object to the new location
-    for (const obj of objects) {
+    await Promise.all(objects.map(async (obj) => {
       const fileName = obj.Key.replace(sourcePrefix, '');
       const newKey = `${targetFolder}${sourcePrefix.split('/').slice(-2, -1)[0]}/${fileName}`;
       
-      // Copy object
-      const copyCommand = new CopyObjectCommand({
+      await s3Client.send(new CopyObjectCommand({
         Bucket: BUCKET_NAME,
         CopySource: `${BUCKET_NAME}/${obj.Key}`,
         Key: newKey,
-      });
-      await s3Client.send(copyCommand);
+      }));
       
-      // Delete original
-      const deleteCommand = new DeleteObjectCommand({
+      await s3Client.send(new DeleteObjectCommand({
         Bucket: BUCKET_NAME,
         Key: obj.Key,
-      });
-      await s3Client.send(deleteCommand);
-    }
+      }));
+    }));
     
     console.log(`  ✅ Moved ${objects.length} files`);
     return true;
@@ -395,7 +428,8 @@ async function moveSessionFolder(sessionId, sourceType, currentStatus, targetSta
   }
 }
 
-// Bulk move readings between status folders
+const activityLog = [];
+
 app.post('/api/readings/bulk-move', async (req, res) => {
   try {
     const { readings } = req.body;
@@ -406,17 +440,18 @@ app.post('/api/readings/bulk-move', async (req, res) => {
     
     console.log(`\n🔄 Bulk moving ${readings.length} readings...`);
     
-    let movedCount = 0;
-    
-    for (const reading of readings) {
-      const { sessionId, sourceType, currentStatus, targetStatus } = reading;
-      console.log(`  Moving ${sessionId}: ${currentStatus} -> ${targetStatus}`);
-      
-      const success = await moveSessionFolder(sessionId, sourceType, currentStatus, targetStatus);
-      if (success) movedCount++;
-    }
+    const moveResults = await Promise.all(
+      readings.map(({ sessionId, sourceType, currentStatus, targetStatus }) => {
+        console.log(`  Moving ${sessionId}: ${currentStatus} -> ${targetStatus}`);
+        return moveSessionFolder(sessionId, sourceType, currentStatus, targetStatus);
+      })
+    );
+
+    const movedCount = moveResults.filter(Boolean).length;
     
     console.log(`✅ Moved ${movedCount}/${readings.length} readings\n`);
+
+    invalidateCache();
     
     for (const reading of readings) {
       activityLog.unshift({
@@ -438,14 +473,10 @@ app.post('/api/readings/bulk-move', async (req, res) => {
   }
 });
 
-// Activity log (stored in-memory for now; persists per server session)
-const activityLog = [];
-
 app.get('/api/activity-log', (req, res) => {
   res.json(activityLog);
 });
 
-// Get uploads (returns readings as upload entries)
 app.get('/api/uploads', async (req, res) => {
   try {
     const email = req.query.email;
@@ -474,7 +505,6 @@ app.get('/api/uploads', async (req, res) => {
   }
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -484,7 +514,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Serve React app for all non-API routes (client-side routing)
 app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });

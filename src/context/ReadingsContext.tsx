@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import type { ReadingStatus, DashboardCounts, WorkType } from '../types';
-import { fetchReadings, bulkMoveReadings, type S3MeterReading } from '../services/api';
+import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
+import { useAuth } from './AuthContext';
 
 export type DataSource = 'all' | 'field' | 'simulator';
 
@@ -27,27 +28,37 @@ interface ReadingsContextType {
 const ReadingsContext = createContext<ReadingsContextType | undefined>(undefined);
 
 export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { user, isAuthorized } = useAuth();
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [serverCounts, setServerCounts] = useState<DashboardCounts | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUsingRealData, setIsUsingRealData] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>('all');
   const [workType, setWorkType] = useState<WorkType>('1000');
+  const [hasLoadedReadings, setHasLoadedReadings] = useState(false);
 
+  // Load lightweight counts first (fast), then full readings in background
   const loadData = useCallback(async (source?: DataSource, wt?: WorkType) => {
     setLoading(true);
     setError(null);
 
     try {
-      // Try to fetch from API with optional source and workType filter
-      const apiReadings = await fetchReadings(source, wt);
-      
-      setAllReadings(apiReadings);
+      // Fetch counts first (lightweight, fast)
+      const countsPromise = fetchCounts(source, wt);
+      // Fetch full readings in parallel
+      const readingsPromise = fetchReadings(source, wt);
+
+      const counts = await countsPromise;
+      setServerCounts(counts);
       setIsUsingRealData(true);
+
+      const apiReadings = await readingsPromise;
+      setAllReadings(apiReadings);
+      setHasLoadedReadings(true);
       console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || '1000'})`);
     } catch (err) {
       console.warn('⚠️ Failed to load from API, using mock data:', err);
-      // Fall back to mock data
       setAllReadings(mockReadings as S3MeterReading[]);
       setIsUsingRealData(false);
       setError('Using mock data - API server not running');
@@ -56,9 +67,12 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   }, []);
 
+  // Only load data when user is authenticated
   useEffect(() => {
-    loadData(dataSource, workType);
-  }, [loadData, dataSource, workType]);
+    if (user && isAuthorized) {
+      loadData(dataSource, workType);
+    }
+  }, [loadData, dataSource, workType, user, isAuthorized]);
 
   // Filter readings based on data source
   const filteredReadings = useMemo(() => {
@@ -66,8 +80,11 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     return allReadings.filter(r => r.type === dataSource);
   }, [allReadings, dataSource]);
 
-  // Calculate counts from filtered readings
+  // Use server counts if available (faster), otherwise compute from loaded readings
   const counts = useMemo((): DashboardCounts => {
+    if (serverCounts && !hasLoadedReadings) {
+      return serverCounts;
+    }
     const readings = filteredReadings;
     return {
       totalPictures: readings.length,
@@ -77,7 +94,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       incorrectLabeledCount: readings.filter(r => r.status === 'incorrect_labeled').length,
       incorrectTrainingCount: readings.filter(r => r.status === 'incorrect_training').length,
     };
-  }, [filteredReadings]);
+  }, [filteredReadings, serverCounts, hasLoadedReadings]);
 
   const refreshData = useCallback(async () => {
     await loadData(dataSource, workType);
