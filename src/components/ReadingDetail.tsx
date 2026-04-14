@@ -26,9 +26,15 @@ import {
 const ReadingDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getReadingById, updateReadingStatus, updateReadingComments, loading, readings } = useReadings();
+  const { getReadingById, updateReadingStatus, updateReadingComments } = useReadings();
 
-  const reading = getReadingById(id || '') as S3MeterReading | undefined;
+  const contextReading = getReadingById(id || '') as S3MeterReading | undefined;
+  const [directReading, setDirectReading] = useState<S3MeterReading | null>(null);
+  const [fetchLoading, setFetchLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+
+  const reading = directReading || contextReading;
+
   const [comments, setComments] = useState(reading?.comments || '');
   const [selectedStatus, setSelectedStatus] = useState<ReadingStatus>(
     reading?.status || 'incorrect_new'
@@ -38,14 +44,31 @@ const ReadingDetail: React.FC = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setFetchLoading(true);
+    setFetchError(false);
+
+    fetch(`/api/readings/${encodeURIComponent(id)}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        return res.json();
+      })
+      .then(data => { if (!cancelled) setDirectReading(data); })
+      .catch(() => { if (!cancelled) setFetchError(true); })
+      .finally(() => { if (!cancelled) setFetchLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [id]);
+
+  useEffect(() => {
     if (reading) {
       setComments(reading.comments);
       setSelectedStatus(reading.status);
     }
   }, [reading]);
 
-  // Show loading state while data is being fetched
-  if (loading) {
+  if (fetchLoading) {
     return (
       <div className="detail-page">
         <header className="page-header">
@@ -73,23 +96,12 @@ const ReadingDetail: React.FC = () => {
     );
   }
 
-  if (!reading && readings.length > 0) {
-    return (
-      <div className="detail-page">
-        <div className="error-state">
-          <p>Reading not found</p>
-          <button onClick={() => navigate(-1)}>Go Back</button>
-        </div>
-      </div>
-    );
-  }
-  
   if (!reading) {
     return (
       <div className="detail-page">
         <div className="error-state">
-          <p>No readings available</p>
-          <button onClick={() => navigate('/')}>Go to Dashboard</button>
+          <p>{fetchError ? 'Reading not found' : 'No readings available'}</p>
+          <button onClick={() => navigate(-1)}>Go Back</button>
         </div>
       </div>
     );
