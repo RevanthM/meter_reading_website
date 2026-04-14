@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import admin from 'firebase-admin';
 
@@ -485,7 +485,41 @@ async function moveSessionFolder(sessionId, sourceType, currentStatus, targetSta
   }
 }
 
-const activityLog = [];
+const ACTIVITY_LOG_KEY = 'activity-log.json';
+let activityLog = [];
+let activityLogLoaded = false;
+
+async function loadActivityLog() {
+  if (activityLogLoaded) return;
+  try {
+    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: ACTIVITY_LOG_KEY });
+    const response = await s3Client.send(command);
+    const json = await streamToString(response.Body);
+    activityLog = JSON.parse(json);
+    console.log(`📋 Loaded ${activityLog.length} activity log entries from S3`);
+  } catch (err) {
+    if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+      console.log('📋 No existing activity log found, starting fresh');
+    } else {
+      console.error('Failed to load activity log:', err.message);
+    }
+    activityLog = [];
+  }
+  activityLogLoaded = true;
+}
+
+async function saveActivityLog() {
+  try {
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: ACTIVITY_LOG_KEY,
+      Body: JSON.stringify(activityLog),
+      ContentType: 'application/json',
+    }));
+  } catch (err) {
+    console.error('Failed to save activity log to S3:', err.message);
+  }
+}
 
 app.post('/api/readings/bulk-move', async (req, res) => {
   try {
@@ -510,6 +544,7 @@ app.post('/api/readings/bulk-move', async (req, res) => {
 
     invalidateCache();
     
+    await loadActivityLog();
     for (const reading of readings) {
       activityLog.unshift({
         id: `${Date.now()}-${reading.sessionId}`,
@@ -522,6 +557,7 @@ app.post('/api/readings/bulk-move', async (req, res) => {
         sourceType: reading.sourceType,
       });
     }
+    await saveActivityLog();
     
     res.json({ success: true, moved: movedCount, total: readings.length });
   } catch (error) {
@@ -530,7 +566,8 @@ app.post('/api/readings/bulk-move', async (req, res) => {
   }
 });
 
-app.get('/api/activity-log', (req, res) => {
+app.get('/api/activity-log', async (req, res) => {
+  await loadActivityLog();
   res.json(activityLog);
 });
 
@@ -611,10 +648,11 @@ app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📦 Bucket: ${BUCKET_NAME}`);
   console.log(`🌎 Region: ${REGION}`);
   console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
+  await loadActivityLog();
   console.log('');
 });

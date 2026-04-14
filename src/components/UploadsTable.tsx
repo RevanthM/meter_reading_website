@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   Eye,
   BarChart3,
+  Download,
 } from 'lucide-react';
 
 interface UploadEntry {
@@ -146,6 +147,28 @@ const UploadsTable: React.FC = () => {
     setSortBy('newest');
   };
 
+  const exportCSV = () => {
+    const headers = ['Session ID', 'Date', 'User', 'Source', 'Work Type', 'Images', 'Prediction', 'Status'];
+    const rows = filteredUploads.map(u => [
+      u.sessionId,
+      new Date(u.timestamp).toISOString(),
+      u.userEmail || 'Unknown',
+      u.sourceType,
+      u.workType,
+      u.imageCount,
+      u.prediction,
+      u.status,
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `uploads-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="uploads-page">
       <header className="page-header">
@@ -212,6 +235,10 @@ const UploadsTable: React.FC = () => {
 
             <div className="filter-actions">
               <span className="uploads-count">{filteredUploads.length} result{filteredUploads.length !== 1 ? 's' : ''}</span>
+              <button className="export-button" onClick={exportCSV} title="Export CSV" disabled={filteredUploads.length === 0}>
+                <Download size={16} />
+                <span>Export</span>
+              </button>
               <button className="refresh-button" onClick={loadUploads} title="Refresh">
                 <RefreshCw size={16} />
               </button>

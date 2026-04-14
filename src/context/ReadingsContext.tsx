@@ -28,7 +28,7 @@ interface ReadingsContextType {
 const ReadingsContext = createContext<ReadingsContextType | undefined>(undefined);
 
 export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, isAuthorized } = useAuth();
+  const { user, isAuthorized, userEmail } = useAuth();
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
   const [serverCounts, setServerCounts] = useState<DashboardCounts | null>(null);
   const [loading, setLoading] = useState(false);
@@ -119,7 +119,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         sourceType: reading.type,
         currentStatus: reading.status,
         targetStatus: status,
-      }]);
+      }], userEmail || undefined);
 
       // Update local state after successful S3 move
       setAllReadings(prev => prev.map(r => 
@@ -133,7 +133,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       console.error('Failed to update status:', error);
       throw error;
     }
-  }, [allReadings]);
+  }, [allReadings, userEmail]);
 
   const updateReadingComments = useCallback((id: string, comments: string) => {
     setAllReadings(prev => prev.map(reading => 
@@ -156,7 +156,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         sourceType: r.type,
         currentStatus: r.status,
         targetStatus: status,
-      })));
+      })), userEmail || undefined);
 
       // Update local state
       setAllReadings(prev => prev.map(reading => 
@@ -170,7 +170,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       console.error('Failed to bulk update:', error);
       throw error;
     }
-  }, [allReadings]);
+  }, [allReadings, userEmail]);
 
   const getReadingsByStatus = useCallback((status: ReadingStatus | 'all') => {
     if (status === 'all') return filteredReadings;

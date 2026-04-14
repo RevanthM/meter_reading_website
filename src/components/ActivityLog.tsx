@@ -111,7 +111,6 @@ const ActivityLog: React.FC = () => {
             >
               <option value="all">All Actions</option>
               <option value="status_change">Status Changes</option>
-              <option value="bulk_move">Bulk Moves</option>
             </select>
           </div>
           <div className="activity-count">

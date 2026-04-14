@@ -108,13 +108,13 @@ export interface BulkMoveRequest {
   targetStatus: string;
 }
 
-export async function bulkMoveReadings(readings: BulkMoveRequest[]): Promise<{ success: boolean; moved: number }> {
+export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (userEmail) headers['x-user-email'] = userEmail;
     const response = await fetch(`${API_BASE_URL}/readings/bulk-move`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ readings }),
     });
     if (!response.ok) {

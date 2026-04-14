@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useReadings, type DataSource } from '../context/ReadingsContext';
 import { 
@@ -19,10 +20,13 @@ import {
   ChevronDown,
   Briefcase,
   CircleSlash,
-  HelpCircle
+  HelpCircle,
+  TrendingUp,
+  BarChart3,
 } from 'lucide-react';
 import type { ReadingStatus, WorkType } from '../types';
 import { workTypeLabels } from '../types';
+import type { S3MeterReading } from '../services/api';
 
 interface StatCardProps {
   title: string;
@@ -59,8 +63,170 @@ const StatCard: React.FC<StatCardProps> = ({
   </div>
 );
 
+function computeChartData(readings: S3MeterReading[]) {
+  const now = new Date();
+  const days: string[] = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().split('T')[0]);
+  }
+
+  const dayMap = new Map<string, { total: number; correct: number; field: number; simulator: number }>();
+  for (const day of days) {
+    dayMap.set(day, { total: 0, correct: 0, field: 0, simulator: 0 });
+  }
+
+  for (const r of readings) {
+    const day = r.dateOfReading?.split('T')[0];
+    if (!day) continue;
+    const entry = dayMap.get(day);
+    if (entry) {
+      entry.total++;
+      if (r.status === 'correct') entry.correct++;
+      if (r.type === 'field') entry.field++;
+      else entry.simulator++;
+    }
+  }
+
+  const dailyData = days.map(day => {
+    const d = dayMap.get(day)!;
+    return { date: day, ...d, accuracy: d.total > 0 ? Math.round((d.correct / d.total) * 100) : null };
+  });
+
+  const activeDays = dailyData.filter(d => d.total > 0);
+
+  return { dailyData, activeDays };
+}
+
+const DailyVolumeChart: React.FC<{ data: ReturnType<typeof computeChartData>['dailyData'] }> = ({ data }) => {
+  const maxCount = Math.max(...data.map(d => d.total), 1);
+  const recentData = data.slice(-14);
+
+  return (
+    <div className="chart-card">
+      <div className="chart-header">
+        <BarChart3 size={18} />
+        <h3>Daily Upload Volume</h3>
+        <span className="chart-subtitle">Last 14 days</span>
+      </div>
+      <div className="chart-bar-area">
+        {recentData.map((day) => (
+          <div key={day.date} className="chart-bar-col">
+            <div className="chart-bar-track">
+              {day.total > 0 && (
+                <div className="chart-bar-tooltip">{day.total}</div>
+              )}
+              <div
+                className="chart-bar-fill"
+                style={{ height: `${(day.total / maxCount) * 100}%` }}
+              >
+                {day.field > 0 && (
+                  <div
+                    className="chart-bar-segment field"
+                    style={{ height: `${(day.field / day.total) * 100}%` }}
+                  />
+                )}
+                {day.simulator > 0 && (
+                  <div
+                    className="chart-bar-segment simulator"
+                    style={{ height: `${(day.simulator / day.total) * 100}%` }}
+                  />
+                )}
+              </div>
+            </div>
+            <span className="chart-bar-label">
+              {new Date(day.date + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="chart-legend-row">
+        <span className="chart-legend-item"><span className="chart-dot" style={{ background: 'var(--accent-amber)' }} /> Field</span>
+        <span className="chart-legend-item"><span className="chart-dot" style={{ background: '#06b6d4' }} /> Simulator</span>
+      </div>
+    </div>
+  );
+};
+
+const AccuracyChart: React.FC<{ data: ReturnType<typeof computeChartData>['activeDays'] }> = ({ data }) => {
+  const recentDays = data.slice(-10);
+
+  if (recentDays.length === 0) {
+    return (
+      <div className="chart-card">
+        <div className="chart-header">
+          <TrendingUp size={18} />
+          <h3>Accuracy Trend</h3>
+        </div>
+        <div className="chart-empty">No data with readings available</div>
+      </div>
+    );
+  }
+
+  const points = recentDays.map((d, i) => ({
+    x: (i / Math.max(recentDays.length - 1, 1)) * 100,
+    y: d.accuracy ?? 0,
+    date: d.date,
+    total: d.total,
+    correct: d.correct,
+  }));
+
+  const polyline = points.map(p => `${p.x},${100 - p.y}`).join(' ');
+  const areaPath = `M ${points[0].x},100 ` + points.map(p => `L ${p.x},${100 - p.y}`).join(' ') + ` L ${points[points.length - 1].x},100 Z`;
+
+  const overallCorrect = recentDays.reduce((s, d) => s + d.correct, 0);
+  const overallTotal = recentDays.reduce((s, d) => s + d.total, 0);
+  const overallAccuracy = overallTotal > 0 ? ((overallCorrect / overallTotal) * 100).toFixed(1) : '0';
+
+  return (
+    <div className="chart-card">
+      <div className="chart-header">
+        <TrendingUp size={18} />
+        <h3>Accuracy Trend</h3>
+        <span className="chart-accuracy-badge">{overallAccuracy}%</span>
+      </div>
+      <div className="chart-svg-area">
+        <svg viewBox="-2 -5 104 115" preserveAspectRatio="none" className="accuracy-svg">
+          {[0, 25, 50, 75, 100].map(y => (
+            <line key={y} x1="0" y1={100 - y} x2="100" y2={100 - y} stroke="var(--border-color)" strokeWidth="0.5" />
+          ))}
+          <path d={areaPath} fill="url(#accuracyGradient)" />
+          <polyline points={polyline} fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          {points.map((p, i) => (
+            <circle key={i} cx={p.x} cy={100 - p.y} r="2.5" fill="#10b981" stroke="var(--bg-tertiary)" strokeWidth="1" />
+          ))}
+          <defs>
+            <linearGradient id="accuracyGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+        </svg>
+        <div className="chart-y-labels">
+          <span>100%</span>
+          <span>75%</span>
+          <span>50%</span>
+          <span>25%</span>
+          <span>0%</span>
+        </div>
+      </div>
+      <div className="chart-x-labels">
+        {recentDays.length > 0 && (
+          <>
+            <span>{new Date(recentDays[0].date + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span>
+            <span>{new Date(recentDays[recentDays.length - 1].date + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const Dashboard: React.FC = () => {
-  const { counts, loading, error, isUsingRealData, refreshData, dataSource, setDataSource, workType, setWorkType } = useReadings();
+  const { counts, loading, error, isUsingRealData, refreshData, dataSource, setDataSource, workType, setWorkType, filteredReadings } = useReadings();
+
+  const chartData = useMemo(() => computeChartData(filteredReadings), [filteredReadings]);
   const navigate = useNavigate();
 
   const handleCardClick = (status: ReadingStatus | 'all') => {
@@ -280,6 +446,16 @@ const Dashboard: React.FC = () => {
               <span className="legend-item"><span className="dot training"></span> Training</span>
               <span className="legend-item"><span className="dot" style={{backgroundColor: '#6b7280'}}></span> No Dials</span>
               <span className="legend-item"><span className="dot" style={{backgroundColor: '#d97706'}}></span> Not Sure</span>
+            </div>
+          </section>
+        )}
+
+        {filteredReadings.length > 0 && (
+          <section className="stats-section">
+            <h2 className="section-title">Trends</h2>
+            <div className="charts-grid">
+              <DailyVolumeChart data={chartData.dailyData} />
+              <AccuracyChart data={chartData.activeDays} />
             </div>
           </section>
         )}
