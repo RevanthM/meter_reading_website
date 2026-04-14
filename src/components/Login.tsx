@@ -29,10 +29,25 @@ const Login: React.FC = () => {
       setMfaSending(true);
       sendMfaCode(recaptchaRef.current)
         .then(() => setMfaSent(true))
-        .catch(() => {})
+        .catch((err) => {
+          console.error('Failed to send MFA code:', err);
+        })
         .finally(() => setMfaSending(false));
     }
   }, [mfaRequired, mfaSent, sendMfaCode]);
+
+  const handleResendCode = () => {
+    if (recaptchaRef.current) {
+      setMfaSent(false);
+      setMfaSending(true);
+      sendMfaCode(recaptchaRef.current)
+        .then(() => setMfaSent(true))
+        .catch((err) => {
+          console.error('Failed to resend MFA code:', err);
+        })
+        .finally(() => setMfaSending(false));
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -134,7 +149,17 @@ const Login: React.FC = () => {
           </form>
 
           <div className="login-footer">
-            <p>Didn't receive the code? Check your SMS messages.</p>
+            <p>
+              Didn't receive the code?{' '}
+              <button
+                type="button"
+                onClick={handleResendCode}
+                disabled={mfaSending}
+                style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+              >
+                {mfaSending ? 'Sending...' : 'Resend code'}
+              </button>
+            </p>
           </div>
         </div>
         <div ref={recaptchaRef} id="recaptcha-container" />

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
   signOut,
@@ -93,6 +93,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [checkAuthorization]);
 
+  const mfaRecaptchaRef = useRef<RecaptchaVerifier | null>(null);
+
   const sendMfaCode = useCallback(async (recaptchaContainer: HTMLElement) => {
     if (!mfaResolver) throw new Error('No MFA resolver');
     setError(null);
@@ -102,7 +104,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     );
     if (!phoneHint) throw new Error('No phone factor enrolled');
 
+    if (mfaRecaptchaRef.current) {
+      mfaRecaptchaRef.current.clear();
+      mfaRecaptchaRef.current = null;
+    }
+
     const recaptchaVerifier = new RecaptchaVerifier(auth, recaptchaContainer, { size: 'invisible' });
+    mfaRecaptchaRef.current = recaptchaVerifier;
+
     const phoneProvider = new PhoneAuthProvider(auth);
     const verificationId = await phoneProvider.verifyPhoneNumber(
       { multiFactorHint: phoneHint, session: mfaResolver.session },
