@@ -2,51 +2,12 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import admin from 'firebase-admin';
-import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// --- Firebase Admin SDK ---
-let firebaseAdmin = null;
-try {
-  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-  if (b64) {
-    const serviceAccount = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
-    firebaseAdmin = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: serviceAccount.project_id,
-    });
-    console.log('🔐 Firebase Admin SDK initialized');
-  } else {
-    console.warn('⚠️  FIREBASE_SERVICE_ACCOUNT_BASE64 not set — email MFA bypass disabled');
-  }
-} catch (err) {
-  console.error('❌ Firebase Admin SDK init failed:', err.message);
-}
-
-// --- Email transporter ---
-let emailTransporter = null;
-if (process.env.SMTP_HOST && process.env.SMTP_USER) {
-  emailTransporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_PORT === '465',
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-  console.log('📧 SMTP email transport configured');
-} else {
-  console.warn('⚠️  SMTP not configured — email codes will be returned in API response');
-}
-
-// --- OTP store (email → { code, expiresAt }) ---
-const otpStore = new Map();
-const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -589,83 +550,6 @@ app.get('/api/health', (req, res) => {
     workTypes: WORK_TYPES,
     region: REGION 
   });
-});
-
-// --- Email MFA endpoints ---
-
-app.post('/api/auth/send-email-code', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email is required' });
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Email verification not available' });
-
-  try {
-    const user = await admin.auth().getUserByEmail(email);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const code = crypto.randomInt(100000, 999999).toString();
-    otpStore.set(email.toLowerCase(), { code, expiresAt: Date.now() + OTP_TTL_MS });
-
-    console.log(`🔑 Email OTP for ${email}: ${code}`);
-
-    let emailSent = false;
-    if (emailTransporter) {
-      try {
-        await emailTransporter.sendMail({
-          from: process.env.SMTP_FROM || process.env.SMTP_USER,
-          to: email,
-          subject: 'Meter Reading Analytics - Verification Code',
-          text: `Your verification code is: ${code}\n\nThis code expires in 5 minutes.`,
-          html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:24px;">
-            <h2 style="color:#1e293b;">Verification Code</h2>
-            <p style="color:#64748b;">Use the code below to sign in to Meter Reading Analytics:</p>
-            <div style="background:#f1f5f9;border-radius:8px;padding:20px;text-align:center;margin:20px 0;">
-              <span style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#1e293b;">${code}</span>
-            </div>
-            <p style="color:#94a3b8;font-size:13px;">This code expires in 5 minutes.</p>
-          </div>`,
-        });
-        emailSent = true;
-      } catch (emailErr) {
-        console.error('📧 Email send failed:', emailErr.message);
-      }
-    }
-
-    const response = { success: true, message: 'Verification code sent' };
-    if (!emailSent) {
-      response.code = code;
-      response.message = 'SMTP not configured. Code included in response.';
-    }
-    res.json(response);
-  } catch (err) {
-    console.error('Send email code error:', err.message);
-    res.status(500).json({ error: 'Failed to send verification code' });
-  }
-});
-
-app.post('/api/auth/verify-email-code', async (req, res) => {
-  const { email, code } = req.body;
-  if (!email || !code) return res.status(400).json({ error: 'Email and code are required' });
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Email verification not available' });
-
-  const entry = otpStore.get(email.toLowerCase());
-  if (!entry) return res.status(400).json({ error: 'No code requested for this email. Please request a new code.' });
-  if (Date.now() > entry.expiresAt) {
-    otpStore.delete(email.toLowerCase());
-    return res.status(400).json({ error: 'Code expired. Please request a new code.' });
-  }
-  if (entry.code !== code) return res.status(400).json({ error: 'Invalid code' });
-
-  otpStore.delete(email.toLowerCase());
-
-  try {
-    const user = await admin.auth().getUserByEmail(email);
-    const customToken = await admin.auth().createCustomToken(user.uid);
-    console.log(`✅ Email MFA verified for ${email}`);
-    res.json({ success: true, customToken });
-  } catch (err) {
-    console.error('Verify email code error:', err.message);
-    res.status(500).json({ error: 'Verification failed' });
-  }
 });
 
 app.get('/{*path}', (req, res) => {

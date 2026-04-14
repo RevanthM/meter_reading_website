@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff, Smartphone, CheckCircle } from 'lucide-react';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const {
     user, isAuthorized, login, error, clearError, loading,
     mfaRequired, mfaPhoneHint, sendMfaCode, verifyMfaCode,
-    sendEmailCode, verifyEmailCode,
+    sendEmailLink, completeEmailLinkSignIn,
   } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -18,9 +18,8 @@ const Login: React.FC = () => {
   const [mfaSent, setMfaSent] = useState(false);
   const [mfaSending, setMfaSending] = useState(false);
   const [useEmailMfa, setUseEmailMfa] = useState(false);
-  const [emailCodeSent, setEmailCodeSent] = useState(false);
+  const [emailLinkSent, setEmailLinkSent] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
-  const [fallbackCode, setFallbackCode] = useState<string | null>(null);
   const recaptchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -28,6 +27,14 @@ const Login: React.FC = () => {
       navigate('/', { replace: true });
     }
   }, [user, isAuthorized, loading, navigate]);
+
+  useEffect(() => {
+    completeEmailLinkSignIn().then(completed => {
+      if (completed) {
+        navigate('/', { replace: true });
+      }
+    });
+  }, [completeEmailLinkSignIn, navigate]);
 
   useEffect(() => {
     if (mfaRequired && !mfaSent && !useEmailMfa && recaptchaRef.current) {
@@ -54,33 +61,16 @@ const Login: React.FC = () => {
     }
   };
 
-  const handleSendEmailCode = async () => {
+  const handleSendEmailLink = async () => {
     setEmailSending(true);
-    setFallbackCode(null);
     clearError();
     try {
-      const result = await sendEmailCode();
-      setEmailCodeSent(true);
-      if (result.code) {
-        setFallbackCode(result.code);
-      }
+      await sendEmailLink();
+      setEmailLinkSent(true);
     } catch {
       // error set by context
     } finally {
       setEmailSending(false);
-    }
-  };
-
-  const handleEmailMfaSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!mfaCode || mfaCode.length < 6) return;
-    setSubmitting(true);
-    try {
-      await verifyEmailCode(mfaCode);
-    } catch {
-      // error set by context
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -133,9 +123,9 @@ const Login: React.FC = () => {
             </div>
             <h1>Email Verification</h1>
             <p>
-              {!emailCodeSent
-                ? 'We\'ll send a verification code to your email'
-                : 'Enter the code sent to your email'}
+              {!emailLinkSent
+                ? 'We\'ll send a sign-in link to your email'
+                : 'Check your email and click the sign-in link'}
             </p>
           </div>
 
@@ -147,17 +137,11 @@ const Login: React.FC = () => {
             </div>
           )}
 
-          {fallbackCode && (
-            <div className="login-error" style={{ background: '#eff6ff', borderColor: '#3b82f6', color: '#1e40af' }}>
-              <span>Your code: <strong style={{ letterSpacing: '3px', fontSize: '18px' }}>{fallbackCode}</strong></span>
-            </div>
-          )}
-
-          {!emailCodeSent ? (
+          {!emailLinkSent ? (
             <div className="login-form">
               <button
                 className="login-submit"
-                onClick={handleSendEmailCode}
+                onClick={handleSendEmailLink}
                 disabled={emailSending}
               >
                 {emailSending ? (
@@ -166,53 +150,37 @@ const Login: React.FC = () => {
                     Sending...
                   </>
                 ) : (
-                  'Send Code to Email'
+                  'Send Sign-in Link to Email'
                 )}
               </button>
             </div>
           ) : (
-            <form onSubmit={handleEmailMfaSubmit} className="login-form">
-              <div className="form-group">
-                <label htmlFor="email-mfa-code">Verification Code</label>
-                <div className="input-wrapper">
-                  <Lock size={18} className="input-icon" />
-                  <input
-                    id="email-mfa-code"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    value={mfaCode}
-                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="123456"
-                    required
-                    autoFocus
-                    maxLength={6}
-                  />
-                </div>
+            <div className="login-form">
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <CheckCircle size={48} color="#10b981" style={{ margin: '0 auto 12px' }} />
+                <p style={{ color: '#1e293b', fontWeight: 500, margin: '0 0 8px' }}>
+                  Email sent!
+                </p>
+                <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>
+                  Check your inbox and click the sign-in link. You can close this tab.
+                </p>
               </div>
-
               <button
-                type="submit"
                 className="login-submit"
-                disabled={submitting || mfaCode.length < 6}
+                onClick={handleSendEmailLink}
+                disabled={emailSending}
+                style={{ background: '#64748b' }}
               >
-                {submitting ? (
-                  <>
-                    <Loader2 size={18} className="spin" />
-                    Verifying...
-                  </>
-                ) : (
-                  'Verify'
-                )}
+                {emailSending ? 'Sending...' : 'Resend Link'}
               </button>
-            </form>
+            </div>
           )}
 
           <div className="login-footer">
             <p>
               <button
                 type="button"
-                onClick={() => { setUseEmailMfa(false); setEmailCodeSent(false); setMfaCode(''); setFallbackCode(null); clearError(); }}
+                onClick={() => { setUseEmailMfa(false); setEmailLinkSent(false); setMfaCode(''); clearError(); }}
                 style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
               >
                 Use SMS verification instead

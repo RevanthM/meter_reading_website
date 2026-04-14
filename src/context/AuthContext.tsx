@@ -1,7 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
-  signInWithCustomToken,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
   signOut,
   onAuthStateChanged,
   multiFactor,
@@ -25,8 +27,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   sendMfaCode: (recaptchaContainer: HTMLElement) => Promise<void>;
   verifyMfaCode: (code: string) => Promise<void>;
-  sendEmailCode: () => Promise<{ code?: string }>;
-  verifyEmailCode: (code: string) => Promise<void>;
+  sendEmailLink: () => Promise<void>;
+  completeEmailLinkSignIn: () => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
   isAuthorized: boolean;
@@ -147,43 +149,48 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [mfaResolver, mfaVerificationId]);
 
-  const sendEmailCode = useCallback(async () => {
+  const sendEmailLink = useCallback(async () => {
     if (!mfaEmail) throw new Error('No email available');
     setError(null);
 
-    const res = await fetch('/api/auth/send-email-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: mfaEmail }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to send email code');
-    return data;
+    const actionCodeSettings = {
+      url: window.location.origin + '/login?emailLink=1',
+      handleCodeInApp: true,
+    };
+
+    try {
+      await sendSignInLinkToEmail(auth, mfaEmail, actionCodeSettings);
+      window.localStorage.setItem('emailForSignIn', mfaEmail);
+    } catch (err: any) {
+      setError(err.message || 'Failed to send sign-in link');
+      throw err;
+    }
   }, [mfaEmail]);
 
-  const verifyEmailCode = useCallback(async (code: string) => {
-    if (!mfaEmail) throw new Error('No email available');
-    setError(null);
+  const completeEmailLinkSignIn = useCallback(async () => {
+    if (!isSignInWithEmailLink(auth, window.location.href)) return false;
 
-    const res = await fetch('/api/auth/verify-email-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: mfaEmail, code }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'Verification failed');
-      throw new Error(data.error);
+    const email = window.localStorage.getItem('emailForSignIn');
+    if (!email) {
+      setError('Could not determine email. Please try again.');
+      return false;
     }
 
-    const result = await signInWithCustomToken(auth, data.customToken);
-    setIsAuthorized(true);
-    setUser(result.user);
-    setMfaRequired(false);
-    setMfaResolver(null);
-    setMfaVerificationId(null);
-    setMfaEmail(null);
-  }, [mfaEmail]);
+    try {
+      const result = await signInWithEmailLink(auth, email, window.location.href);
+      window.localStorage.removeItem('emailForSignIn');
+      setIsAuthorized(true);
+      setUser(result.user);
+      setMfaRequired(false);
+      setMfaResolver(null);
+      setMfaVerificationId(null);
+      setMfaEmail(null);
+      return true;
+    } catch (err: any) {
+      setError(err.message || 'Email link sign-in failed');
+      return false;
+    }
+  }, []);
 
   const logout = useCallback(async () => {
     try {
@@ -212,8 +219,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       login,
       sendMfaCode,
       verifyMfaCode,
-      sendEmailCode,
-      verifyEmailCode,
+      sendEmailLink,
+      completeEmailLinkSignIn,
       logout,
       clearError,
       isAuthorized,
