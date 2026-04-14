@@ -8,7 +8,6 @@ import ReadingsList from './components/ReadingsList';
 import ReadingDetail from './components/ReadingDetail';
 import ActivityLog from './components/ActivityLog';
 import UploadsTable from './components/UploadsTable';
-import MyUploads from './components/MyUploads';
 import MFASettings from './components/MFASettings';
 import Navbar from './components/Navbar';
 import './App.css';
@@ -49,11 +48,6 @@ function AppContent() {
         <Route path="/uploads" element={
           <ProtectedRoute>
             <UploadsTable />
-          </ProtectedRoute>
-        } />
-        <Route path="/my-uploads" element={
-          <ProtectedRoute>
-            <MyUploads />
           </ProtectedRoute>
         } />
         <Route path="/mfa" element={

@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   Clock,
   Upload,
-  User,
   Shield,
   LogOut,
 } from 'lucide-react';
@@ -12,8 +11,7 @@ import {
 const navItems = [
   { path: '/', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
   { path: '/activity', label: 'Activity Log', icon: <Clock size={18} /> },
-  { path: '/uploads', label: 'All Uploads', icon: <Upload size={18} /> },
-  { path: '/my-uploads', label: 'My Uploads', icon: <User size={18} /> },
+  { path: '/uploads', label: 'Uploads', icon: <Upload size={18} /> },
   { path: '/mfa', label: 'MFA Settings', icon: <Shield size={18} /> },
 ];
 
