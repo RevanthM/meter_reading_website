@@ -26,6 +26,9 @@ dist-ssr
 .env
 .env.local
 
+# Firebase service account key
+firebase-service-account.json
+
 # Python
 __pycache__/
 *.py[cod]

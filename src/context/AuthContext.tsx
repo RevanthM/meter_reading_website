@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut,
   onAuthStateChanged,
   multiFactor,
@@ -20,9 +21,12 @@ interface AuthContextType {
   mfaRequired: boolean;
   mfaResolver: MultiFactorResolver | null;
   mfaPhoneHint: string | null;
+  mfaEmail: string | null;
   login: (email: string, password: string) => Promise<void>;
   sendMfaCode: (recaptchaContainer: HTMLElement) => Promise<void>;
   verifyMfaCode: (code: string) => Promise<void>;
+  sendEmailCode: () => Promise<{ code?: string }>;
+  verifyEmailCode: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
   isAuthorized: boolean;
@@ -39,6 +43,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
   const [mfaPhoneHint, setMfaPhoneHint] = useState<string | null>(null);
   const [mfaVerificationId, setMfaVerificationId] = useState<string | null>(null);
+  const [mfaEmail, setMfaEmail] = useState<string | null>(null);
 
   const checkAuthorization = useCallback(async (_currentUser: User) => {
     setIsAuthorized(true);
@@ -64,6 +69,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setError(null);
     setMfaRequired(false);
     setMfaResolver(null);
+    setMfaEmail(email);
 
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
@@ -141,6 +147,44 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [mfaResolver, mfaVerificationId]);
 
+  const sendEmailCode = useCallback(async () => {
+    if (!mfaEmail) throw new Error('No email available');
+    setError(null);
+
+    const res = await fetch('/api/auth/send-email-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: mfaEmail }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to send email code');
+    return data;
+  }, [mfaEmail]);
+
+  const verifyEmailCode = useCallback(async (code: string) => {
+    if (!mfaEmail) throw new Error('No email available');
+    setError(null);
+
+    const res = await fetch('/api/auth/verify-email-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: mfaEmail, code }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error || 'Verification failed');
+      throw new Error(data.error);
+    }
+
+    const result = await signInWithCustomToken(auth, data.customToken);
+    setIsAuthorized(true);
+    setUser(result.user);
+    setMfaRequired(false);
+    setMfaResolver(null);
+    setMfaVerificationId(null);
+    setMfaEmail(null);
+  }, [mfaEmail]);
+
   const logout = useCallback(async () => {
     try {
       await signOut(auth);
@@ -164,9 +208,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       mfaRequired,
       mfaResolver,
       mfaPhoneHint,
+      mfaEmail,
       login,
       sendMfaCode,
       verifyMfaCode,
+      sendEmailCode,
+      verifyEmailCode,
       logout,
       clearError,
       isAuthorized,
