@@ -135,5 +135,7 @@ export const calculateCounts = (readings: MeterReading[]): DashboardCounts => {
     incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,
     incorrectLabeledCount: readings.filter(r => r.status === 'incorrect_labeled').length,
     incorrectTrainingCount: readings.filter(r => r.status === 'incorrect_training').length,
+    noDialsCount: readings.filter(r => r.status === 'no_dials').length,
+    notSureCount: readings.filter(r => r.status === 'not_sure').length,
   };
 };

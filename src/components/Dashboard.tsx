@@ -17,7 +17,9 @@ import {
   Monitor,
   Layers,
   ChevronDown,
-  Briefcase
+  Briefcase,
+  CircleSlash,
+  HelpCircle
 } from 'lucide-react';
 import type { ReadingStatus, WorkType } from '../types';
 import { workTypeLabels } from '../types';
@@ -65,8 +67,7 @@ const Dashboard: React.FC = () => {
     navigate(`/readings/${status}`);
   };
 
-  const totalReadings = counts.correctCount + counts.incorrectNewCount + 
-    counts.incorrectAnalyzedCount + counts.incorrectLabeledCount + counts.incorrectTrainingCount;
+  const totalReadings = counts.totalPictures;
 
   const sourceOptions: { value: DataSource; label: string; icon: React.ReactNode }[] = [
     { value: 'all', label: 'All Sources', icon: <Layers size={14} /> },
@@ -224,6 +225,26 @@ const Dashboard: React.FC = () => {
           </div>
         </section>
 
+        <section className="stats-section">
+          <h2 className="section-title">Other</h2>
+          <div className="stats-grid incorrect">
+            <StatCard
+              title="No Dials Detected"
+              count={counts.noDialsCount}
+              icon={<CircleSlash size={24} />}
+              color="#6b7280"
+              onClick={() => handleCardClick('no_dials')}
+            />
+            <StatCard
+              title="Not Sure"
+              count={counts.notSureCount}
+              icon={<HelpCircle size={24} />}
+              color="#d97706"
+              onClick={() => handleCardClick('not_sure')}
+            />
+          </div>
+        </section>
+
         {totalReadings > 0 && (
           <section className="quick-stats">
             <div className="quick-stat-bar">
@@ -242,6 +263,14 @@ const Dashboard: React.FC = () => {
               <div className="bar-segment training" style={{ 
                 width: `${(counts.incorrectTrainingCount / totalReadings) * 100}%` 
               }} />
+              <div className="bar-segment" style={{ 
+                width: `${(counts.noDialsCount / totalReadings) * 100}%`,
+                backgroundColor: '#6b7280'
+              }} />
+              <div className="bar-segment" style={{ 
+                width: `${(counts.notSureCount / totalReadings) * 100}%`,
+                backgroundColor: '#d97706'
+              }} />
             </div>
             <div className="bar-legend">
               <span className="legend-item"><span className="dot correct"></span> Correct</span>
@@ -249,6 +278,8 @@ const Dashboard: React.FC = () => {
               <span className="legend-item"><span className="dot analyzed"></span> Analyzed</span>
               <span className="legend-item"><span className="dot labeled"></span> Labeled</span>
               <span className="legend-item"><span className="dot training"></span> Training</span>
+              <span className="legend-item"><span className="dot" style={{backgroundColor: '#6b7280'}}></span> No Dials</span>
+              <span className="legend-item"><span className="dot" style={{backgroundColor: '#d97706'}}></span> Not Sure</span>
             </div>
           </section>
         )}

@@ -36,6 +36,8 @@ const STATUS_FOLDER_MAP = {
   incorrect_analyzed: 'incorrect_analyzed',
   incorrect_labeled: 'incorrect_labeled',
   incorrect_training: 'incorrect_training',
+  no_dials: 'no_dials',
+  not_sure: 'not_sure',
 };
 
 function getFolderForStatus(sourceType, status, workType = null) {
@@ -46,6 +48,44 @@ function getFolderForStatus(sourceType, status, workType = null) {
     return `${workType}/${prefix}${suffix}/`;
   }
   return `${prefix}${suffix}/`;
+}
+
+// Build the full list of folder prefixes to scan for a given source/workType
+function getAllFolderPrefixes(source, workType) {
+  const prefixes = [];
+  const sources = source === 'all' ? ['field', 'simulator'] : [source];
+  
+  for (const src of sources) {
+    for (const status of ALL_STATUSES) {
+      const folder = getFolderForStatus(src, status, workType);
+      prefixes.push({ folder, status, sourceType: src });
+    }
+  }
+  
+  // For workType '1000', also scan under the 1000/ prefix (newer upload format)
+  if (workType === '1000') {
+    for (const src of sources) {
+      for (const status of ALL_STATUSES) {
+        const srcPrefix = src === 'field' ? 'f_' : 's_';
+        const suffix = STATUS_FOLDER_MAP[status] || 'incorrect';
+        const folder = `1000/${srcPrefix}${suffix}/`;
+        prefixes.push({ folder, status, sourceType: src });
+      }
+    }
+    // Also scan unprefixed correct/ and incorrect/ at root
+    if (source === 'all' || source === 'field') {
+      prefixes.push({ folder: 'correct/', status: 'correct', sourceType: 'field' });
+      prefixes.push({ folder: 'incorrect/', status: 'incorrect_new', sourceType: 'field' });
+    }
+  }
+  
+  // Deduplicate by folder path
+  const seen = new Set();
+  return prefixes.filter(p => {
+    if (seen.has(p.folder)) return false;
+    seen.add(p.folder);
+    return true;
+  });
 }
 
 const s3Client = new S3Client({
@@ -203,7 +243,7 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType, workType 
   }
 }
 
-const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'];
+const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training', 'no_dials', 'not_sure'];
 
 async function getAllReadings(source = 'all', workType = '1000') {
   const cacheKey = getCacheKey(source, workType);
@@ -215,31 +255,29 @@ async function getAllReadings(source = 'all', workType = '1000') {
 
   console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
   
-  const folderJobs = [];
-
-  if (source === 'all' || source === 'field') {
-    for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('field', status, workType);
-      folderJobs.push(getReadingsFromFolder(folder, status, 'field', workType));
-    }
-  }
+  const allPrefixes = getAllFolderPrefixes(source, workType);
   
-  if (source === 'all' || source === 'simulator') {
-    for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('simulator', status, workType);
-      folderJobs.push(getReadingsFromFolder(folder, status, 'simulator', workType));
-    }
-  }
+  const folderJobs = allPrefixes.map(({ folder, status, sourceType }) =>
+    getReadingsFromFolder(folder, status, sourceType, workType)
+  );
 
   const results = await Promise.all(folderJobs);
   const readings = results.flat();
   
-  readings.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
+  // Deduplicate by session ID (same session may appear in root and 1000/ prefix)
+  const seen = new Set();
+  const unique = readings.filter(r => {
+    if (seen.has(r.id)) return false;
+    seen.add(r.id);
+    return true;
+  });
   
-  console.log(`✅ Total readings: ${readings.length}\n`);
+  unique.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
   
-  setCache(cacheKey, readings);
-  return readings;
+  console.log(`✅ Total readings: ${unique.length}\n`);
+  
+  setCache(cacheKey, unique);
+  return unique;
 }
 
 // Lightweight counts: just count session folders without parsing metadata
@@ -253,25 +291,16 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
 
   console.log(`\n📊 Counting sessions (source: ${source}, workType: ${workType})`);
 
-  const countJobs = [];
-  const statusLabels = [];
+  const allPrefixes = getAllFolderPrefixes(source, workType);
 
-  const sources = source === 'all' ? ['field', 'simulator'] : [source];
-
-  for (const src of sources) {
-    for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus(src, status, workType);
-      statusLabels.push(status);
-      countJobs.push(
-        s3Client.send(new ListObjectsV2Command({
-          Bucket: BUCKET_NAME,
-          Prefix: folder,
-          Delimiter: '/',
-        })).then(r => (r.CommonPrefixes || []).length)
-          .catch(() => 0)
-      );
-    }
-  }
+  const countJobs = allPrefixes.map(({ folder }) =>
+    s3Client.send(new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      Prefix: folder,
+      Delimiter: '/',
+    })).then(r => (r.CommonPrefixes || []).length)
+      .catch(() => 0)
+  );
 
   const results = await Promise.all(countJobs);
 
@@ -282,6 +311,8 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
     incorrectAnalyzedCount: 0,
     incorrectLabeledCount: 0,
     incorrectTrainingCount: 0,
+    noDialsCount: 0,
+    notSureCount: 0,
   };
 
   const statusToKey = {
@@ -290,11 +321,15 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
     incorrect_analyzed: 'incorrectAnalyzedCount',
     incorrect_labeled: 'incorrectLabeledCount',
     incorrect_training: 'incorrectTrainingCount',
+    no_dials: 'noDialsCount',
+    not_sure: 'notSureCount',
   };
 
   results.forEach((count, i) => {
-    const status = statusLabels[i];
-    counts[statusToKey[status]] += count;
+    const status = allPrefixes[i].status;
+    if (statusToKey[status]) {
+      counts[statusToKey[status]] += count;
+    }
     counts.totalPictures += count;
   });
 
