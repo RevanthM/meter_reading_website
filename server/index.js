@@ -599,6 +599,75 @@ app.get('/api/uploads', async (req, res) => {
   }
 });
 
+// --- User name-to-email mappings (persisted to S3) ---
+const USER_MAPPINGS_KEY = 'user-mappings.json';
+let userMappings = {};
+let userMappingsLoaded = false;
+
+async function loadUserMappings() {
+  if (userMappingsLoaded) return;
+  try {
+    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: USER_MAPPINGS_KEY });
+    const response = await s3Client.send(command);
+    const json = await streamToString(response.Body);
+    userMappings = JSON.parse(json);
+    console.log(`👤 Loaded user mappings for ${Object.keys(userMappings).length} users`);
+  } catch (err) {
+    if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+      console.log('👤 No existing user mappings found, starting fresh');
+    } else {
+      console.error('Failed to load user mappings:', err.message);
+    }
+    userMappings = {};
+  }
+  userMappingsLoaded = true;
+}
+
+async function saveUserMappings() {
+  try {
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: USER_MAPPINGS_KEY,
+      Body: JSON.stringify(userMappings, null, 2),
+      ContentType: 'application/json',
+    }));
+  } catch (err) {
+    console.error('Failed to save user mappings:', err.message);
+  }
+}
+
+app.get('/api/user-mappings', async (req, res) => {
+  const email = req.query.email;
+  if (!email) return res.status(400).json({ error: 'Email query param required' });
+  await loadUserMappings();
+  res.json({ email, names: userMappings[email] || [] });
+});
+
+app.post('/api/user-mappings', async (req, res) => {
+  const { email, name } = req.body;
+  if (!email || !name) return res.status(400).json({ error: 'Email and name are required' });
+  await loadUserMappings();
+  if (!userMappings[email]) userMappings[email] = [];
+  const trimmed = name.trim();
+  if (!userMappings[email].includes(trimmed)) {
+    userMappings[email].push(trimmed);
+    await saveUserMappings();
+  }
+  res.json({ email, names: userMappings[email] });
+});
+
+app.delete('/api/user-mappings', async (req, res) => {
+  const { email, name } = req.body;
+  if (!email || !name) return res.status(400).json({ error: 'Email and name are required' });
+  await loadUserMappings();
+  if (userMappings[email]) {
+    userMappings[email] = userMappings[email].filter(n => n !== name);
+    if (userMappings[email].length === 0) delete userMappings[email];
+    await saveUserMappings();
+  }
+  res.json({ email, names: userMappings[email] || [] });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -654,5 +723,6 @@ app.listen(PORT, async () => {
   console.log(`🌎 Region: ${REGION}`);
   console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
   await loadActivityLog();
+  await loadUserMappings();
   console.log('');
 });

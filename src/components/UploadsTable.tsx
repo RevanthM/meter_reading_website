@@ -67,10 +67,17 @@ const UploadsTable: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [searchQuery, setSearchQuery] = useState('');
+  const [linkedNames, setLinkedNames] = useState<string[]>([]);
 
   useEffect(() => {
     loadUploads();
-  }, []);
+    if (userEmail) {
+      fetch(`/api/user-mappings?email=${encodeURIComponent(userEmail)}`)
+        .then(r => r.ok ? r.json() : { names: [] })
+        .then(data => setLinkedNames(data.names || []))
+        .catch(() => {});
+    }
+  }, [userEmail]);
 
   const loadUploads = async () => {
     setLoading(true);
@@ -93,9 +100,13 @@ const UploadsTable: React.FC = () => {
     let result = uploads;
 
     if (ownerFilter === 'mine' && userEmail) {
-      result = result.filter(u =>
-        u.userEmail?.toLowerCase().includes(userEmail.toLowerCase())
-      );
+      const emailLower = userEmail.toLowerCase();
+      const namesLower = linkedNames.map(n => n.toLowerCase());
+      result = result.filter(u => {
+        const val = u.userEmail?.toLowerCase() || '';
+        if (val.includes(emailLower)) return true;
+        return namesLower.some(name => val === name);
+      });
     }
 
     if (sourceFilter !== 'all') {
@@ -120,7 +131,7 @@ const UploadsTable: React.FC = () => {
     });
 
     return result;
-  }, [uploads, ownerFilter, sourceFilter, statusFilter, sortBy, searchQuery, userEmail]);
+  }, [uploads, ownerFilter, sourceFilter, statusFilter, sortBy, searchQuery, userEmail, linkedNames]);
 
   const activeFilterCount = [
     ownerFilter !== 'all',
@@ -130,14 +141,21 @@ const UploadsTable: React.FC = () => {
   ].filter(Boolean).length;
 
   const stats = useMemo(() => {
-    const base = ownerFilter === 'mine' && userEmail
-      ? uploads.filter(u => u.userEmail?.toLowerCase().includes(userEmail.toLowerCase()))
-      : uploads;
+    let base = uploads;
+    if (ownerFilter === 'mine' && userEmail) {
+      const emailLower = userEmail.toLowerCase();
+      const namesLower = linkedNames.map(n => n.toLowerCase());
+      base = uploads.filter(u => {
+        const val = u.userEmail?.toLowerCase() || '';
+        if (val.includes(emailLower)) return true;
+        return namesLower.some(name => val === name);
+      });
+    }
     const correct = base.filter(u => u.status === 'correct').length;
     const incorrect = base.filter(u => u.status.startsWith('incorrect')).length;
     const accuracy = base.length > 0 ? ((correct / base.length) * 100).toFixed(1) : '0';
     return { total: base.length, correct, incorrect, accuracy };
-  }, [uploads, ownerFilter, userEmail]);
+  }, [uploads, ownerFilter, userEmail, linkedNames]);
 
   const clearAllFilters = () => {
     setOwnerFilter('all');

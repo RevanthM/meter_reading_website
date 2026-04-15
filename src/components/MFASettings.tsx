@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useAuth,
@@ -19,10 +19,14 @@ import {
   CheckCircle,
   Trash2,
   Gauge,
+  Link,
+  Plus,
+  X,
+  Smartphone,
 } from 'lucide-react';
 
 const MFASettings: React.FC = () => {
-  const { user } = useAuth();
+  const { user, userEmail } = useAuth();
   const navigate = useNavigate();
 
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -32,6 +36,52 @@ const MFASettings: React.FC = () => {
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const [linkedNames, setLinkedNames] = useState<string[]>([]);
+  const [newName, setNewName] = useState('');
+  const [linkingName, setLinkingName] = useState(false);
+
+  useEffect(() => {
+    if (userEmail) {
+      fetch(`/api/user-mappings?email=${encodeURIComponent(userEmail)}`)
+        .then(r => r.ok ? r.json() : { names: [] })
+        .then(data => setLinkedNames(data.names || []))
+        .catch(() => {});
+    }
+  }, [userEmail]);
+
+  const handleLinkName = async () => {
+    if (!userEmail || !newName.trim()) return;
+    setLinkingName(true);
+    try {
+      const res = await fetch('/api/user-mappings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: userEmail, name: newName.trim() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLinkedNames(data.names);
+        setNewName('');
+      }
+    } catch { /* ignore */ }
+    setLinkingName(false);
+  };
+
+  const handleUnlinkName = async (name: string) => {
+    if (!userEmail) return;
+    try {
+      const res = await fetch('/api/user-mappings', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: userEmail, name }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLinkedNames(data.names);
+      }
+    } catch { /* ignore */ }
+  };
 
   const recaptchaRef = useRef<HTMLDivElement>(null);
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
@@ -129,8 +179,8 @@ const MFASettings: React.FC = () => {
           <div className="page-title">
             <Gauge size={28} strokeWidth={1.5} />
             <div>
-              <h1>MFA Settings</h1>
-              <p>Manage multi-factor authentication</p>
+              <h1>Settings</h1>
+              <p>Account and security settings</p>
             </div>
           </div>
         </div>
@@ -271,6 +321,64 @@ const MFASettings: React.FC = () => {
             </div>
           </div>
         )}
+
+        <div className="mfa-section">
+          <h3><Smartphone size={18} /> Link iOS App Name</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 'var(--spacing-md)' }}>
+            Link your iOS app display name to see your mobile uploads under &quot;My Uploads&quot;.
+          </p>
+          {linkedNames.length > 0 && (
+            <div className="enrolled-factors" style={{ marginBottom: 'var(--spacing-md)' }}>
+              {linkedNames.map((name) => (
+                <div key={name} className="factor-item">
+                  <div className="factor-info">
+                    <Link size={18} />
+                    <div>
+                      <span className="factor-name">{name}</span>
+                      <span className="factor-enrolled">iOS app name</span>
+                    </div>
+                  </div>
+                  <button className="factor-remove" onClick={() => handleUnlinkName(name)} title="Remove">
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mfa-enroll-form">
+            <div className="form-group">
+              <label htmlFor="ios-name">iOS App Name</label>
+              <div className="input-wrapper">
+                <Smartphone size={18} className="input-icon" />
+                <input
+                  id="ios-name"
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Enter the name you use in the iOS app"
+                  onKeyDown={(e) => e.key === 'Enter' && handleLinkName()}
+                />
+              </div>
+            </div>
+            <button
+              className="mfa-submit"
+              onClick={handleLinkName}
+              disabled={linkingName || !newName.trim()}
+            >
+              {linkingName ? (
+                <>
+                  <Loader2 size={18} className="spin" />
+                  Linking...
+                </>
+              ) : (
+                <>
+                  <Plus size={18} />
+                  Link Name
+                </>
+              )}
+            </button>
+          </div>
+        </div>
 
         <div ref={recaptchaRef} id="recaptcha-container" />
       </div>
