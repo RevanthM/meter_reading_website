@@ -4,7 +4,9 @@ export type ReadingStatus =
   | 'incorrect_new'
   | 'incorrect_analyzed'
   | 'incorrect_labeled'
-  | 'incorrect_training';
+  | 'incorrect_training'
+  | 'not_sure'
+  | 'no_dials';
 
 // Reading type - simulator or field
 export type ReadingType = 'simulator' | 'field';
@@ -56,6 +58,8 @@ export type DashboardCounts = {
   incorrectAnalyzedCount: number;
   incorrectLabeledCount: number;
   incorrectTrainingCount: number;
+  notSureCount: number;
+  noDialsCount: number;
 };
 
 // Status labels for display
@@ -65,6 +69,8 @@ export const statusLabels: Record<ReadingStatus, string> = {
   incorrect_analyzed: 'Incorrect - Analyzed',
   incorrect_labeled: 'Incorrect - Labeled',
   incorrect_training: 'Incorrect - Added to Training Dataset',
+  not_sure: 'Not Sure',
+  no_dials: 'No Dials Detected',
 };
 
 // Status colors for display
@@ -74,4 +80,6 @@ export const statusColors: Record<ReadingStatus, string> = {
   incorrect_analyzed: '#f59e0b',
   incorrect_labeled: '#8b5cf6',
   incorrect_training: '#06b6d4',
+  not_sure: '#6b7280',
+  no_dials: '#9ca3af',
 };

@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import archiver from 'archiver';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,19 +54,28 @@ const STATUS_FOLDER_MAP = {
   incorrect_analyzed: 'incorrect_analyzed',
   incorrect_labeled: 'incorrect_labeled',
   incorrect_training: 'incorrect_training',
+  not_sure: 'not_sure',
+  no_dials: 'no_dials',
 };
 
-// Get folder prefix for a status, source type, and work type
-function getFolderForStatus(sourceType, status, workType = null) {
+// Return ALL folder prefixes to scan for a given status, source type, and work type.
+// For work type '1000' we scan both the legacy root-level folders AND the 1000/ prefixed
+// folders, because the iOS app switched to using the work-type prefix at some point.
+function getFoldersForStatus(sourceType, status, workType = '1000') {
   const prefix = sourceType === 'field' ? 'f_' : 's_';
   const suffix = STATUS_FOLDER_MAP[status] || 'incorrect';
-  
-  // Work type '1000' (Meter Reading) uses legacy folder structure at root
-  // Other work types use {workType}/{prefix}{suffix}/ structure
-  if (workType && workType !== '1000') {
-    return `${workType}/${prefix}${suffix}/`;
+
+  const folders = [];
+
+  // Current format: {workType}/{prefix}{suffix}/
+  folders.push(`${workType}/${prefix}${suffix}/`);
+
+  // For work type 1000, also scan legacy root-level folders
+  if (workType === '1000') {
+    folders.push(`${prefix}${suffix}/`);
   }
-  return `${prefix}${suffix}/`;
+
+  return folders;
 }
 
 const s3Client = new S3Client({
@@ -169,6 +179,9 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       dialCount: metadata.dial_count,
       dialDetails: metadata.dial_details,
       conditionCode: metadata.condition_code,
+      userName: metadata.user_name || undefined,
+      imageSource: metadata.image_source || undefined,
+      appVersion: metadata.app_version || undefined,
       comments: '',
       images,
       createdAt: metadata.timestamp,
@@ -207,12 +220,13 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType, workType 
   return readings;
 }
 
-// All status folders to scan
-const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'];
+// All status folders to scan (includes not_sure and no_dials from the iOS app)
+const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training', 'not_sure', 'no_dials'];
 
 // Get all readings based on source and work type filter
 async function getAllReadings(source = 'all', workType = '1000') {
   let readings = [];
+  const seenSessions = new Set();
   
   console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
   
@@ -221,9 +235,16 @@ async function getAllReadings(source = 'all', workType = '1000') {
     console.log('📦 Loading FIELD data...');
     
     for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('field', status, workType);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'field', workType);
-      readings = readings.concat(statusReadings);
+      const folders = getFoldersForStatus('field', status, workType);
+      for (const folder of folders) {
+        const statusReadings = await getReadingsFromFolder(folder, status, 'field', workType);
+        for (const r of statusReadings) {
+          if (!seenSessions.has(r.id)) {
+            seenSessions.add(r.id);
+            readings.push(r);
+          }
+        }
+      }
     }
   }
   
@@ -232,9 +253,16 @@ async function getAllReadings(source = 'all', workType = '1000') {
     console.log('📦 Loading SIMULATOR data...');
     
     for (const status of ALL_STATUSES) {
-      const folder = getFolderForStatus('simulator', status, workType);
-      const statusReadings = await getReadingsFromFolder(folder, status, 'simulator', workType);
-      readings = readings.concat(statusReadings);
+      const folders = getFoldersForStatus('simulator', status, workType);
+      for (const folder of folders) {
+        const statusReadings = await getReadingsFromFolder(folder, status, 'simulator', workType);
+        for (const r of statusReadings) {
+          if (!seenSessions.has(r.id)) {
+            seenSessions.add(r.id);
+            readings.push(r);
+          }
+        }
+      }
     }
   }
   
@@ -284,6 +312,8 @@ app.get('/api/counts', async (req, res) => {
       incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,
       incorrectLabeledCount: readings.filter(r => r.status === 'incorrect_labeled').length,
       incorrectTrainingCount: readings.filter(r => r.status === 'incorrect_training').length,
+      notSureCount: readings.filter(r => r.status === 'not_sure').length,
+      noDialsCount: readings.filter(r => r.status === 'no_dials').length,
     };
     
     console.log('📊 Counts:', counts);
@@ -315,15 +345,18 @@ app.get('/api/readings/:id', async (req, res) => {
 });
 
 // Move a session folder from one status folder to another
-async function moveSessionFolder(sessionId, sourceType, currentStatus, targetStatus) {
-  const sourceFolder = getFolderForStatus(sourceType, currentStatus);
-  const targetFolder = getFolderForStatus(sourceType, targetStatus);
+async function moveSessionFolder(sessionId, sourceType, currentStatus, targetStatus, workType = '1000') {
+  const sourceFolders = getFoldersForStatus(sourceType, currentStatus, workType);
+  const targetFolders = getFoldersForStatus(sourceType, targetStatus, workType);
+  // Use the work-type-prefixed folder as the target (current format)
+  const targetFolder = targetFolders[0];
   
-  // Find the session folder - it could have a prefix like f_ or just the session ID
-  const possiblePrefixes = [
-    `${sourceFolder}${sessionId}/`,
-    `${sourceFolder}${sourceType === 'field' ? 'f_' : 's_'}${sessionId}/`,
-  ];
+  // Find the session folder - search across all possible source folders
+  const possiblePrefixes = [];
+  for (const sf of sourceFolders) {
+    possiblePrefixes.push(`${sf}${sessionId}/`);
+    possiblePrefixes.push(`${sf}${sourceType === 'field' ? 'f_' : 's_'}${sessionId}/`);
+  }
   
   let sourcePrefix = null;
   
@@ -422,6 +455,107 @@ app.post('/api/readings/bulk-move', async (req, res) => {
   } catch (error) {
     console.error('Error in bulk move:', error);
     res.status(500).json({ error: 'Failed to move readings' });
+  }
+});
+
+// Download dataset as zip
+// Streams images from S3 into a zip archive organized by session.
+// Query params: source (all|field|simulator), workType, status (optional filter)
+app.get('/api/download-dataset', async (req, res) => {
+  try {
+    const source = req.query.source || 'all';
+    const workType = req.query.workType || '1000';
+    const statusFilter = req.query.status; // optional: only download a specific status
+
+    console.log(`\n📥 Dataset download requested (source: ${source}, workType: ${workType}, status: ${statusFilter || 'all'})`);
+
+    const readings = await getAllReadings(source, workType);
+    const filtered = statusFilter
+      ? readings.filter(r => r.status === statusFilter)
+      : readings;
+
+    if (filtered.length === 0) {
+      return res.status(404).json({ error: 'No readings found for the given filters' });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `meter-dataset-${workType}-${timestamp}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    const archive = archiver('zip', { zlib: { level: 5 } });
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Archive failed' });
+    });
+    archive.pipe(res);
+
+    let fileCount = 0;
+    for (const reading of filtered) {
+      const sessionDir = `${reading.status}/${reading.id}`;
+
+      for (const image of reading.images) {
+        try {
+          const s3Key = image.id; // image.id is the full S3 key
+          const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key });
+          const response = await s3Client.send(command);
+          archive.append(response.Body, { name: `${sessionDir}/${image.fileName}` });
+          fileCount++;
+        } catch (err) {
+          console.warn(`  Skipping ${image.id}: ${err.message}`);
+        }
+      }
+
+      // Also include metadata.json for each session
+      try {
+        const sessionPrefix = reading.images[0]?.id?.replace(/[^/]+$/, '') || '';
+        if (sessionPrefix) {
+          const metaCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: `${sessionPrefix}metadata.json` });
+          const metaResponse = await s3Client.send(metaCommand);
+          archive.append(metaResponse.Body, { name: `${sessionDir}/metadata.json` });
+          fileCount++;
+        }
+      } catch {
+        // metadata.json might not exist for some sessions
+      }
+    }
+
+    await archive.finalize();
+    console.log(`✅ Dataset download complete: ${fileCount} files, ${filtered.length} sessions\n`);
+  } catch (error) {
+    console.error('Error creating dataset download:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to create dataset download' });
+    }
+  }
+});
+
+// Get dataset info (file count and size estimate) without downloading
+app.get('/api/dataset-info', async (req, res) => {
+  try {
+    const source = req.query.source || 'all';
+    const workType = req.query.workType || '1000';
+    const statusFilter = req.query.status;
+
+    const readings = await getAllReadings(source, workType);
+    const filtered = statusFilter
+      ? readings.filter(r => r.status === statusFilter)
+      : readings;
+
+    const statusBreakdown = {};
+    for (const r of filtered) {
+      statusBreakdown[r.status] = (statusBreakdown[r.status] || 0) + 1;
+    }
+
+    res.json({
+      sessionCount: filtered.length,
+      imageCount: filtered.reduce((sum, r) => sum + r.images.length, 0),
+      statusBreakdown,
+    });
+  } catch (error) {
+    console.error('Error getting dataset info:', error);
+    res.status(500).json({ error: 'Failed to get dataset info' });
   }
 });
 

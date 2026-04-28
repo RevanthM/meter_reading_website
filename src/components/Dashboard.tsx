@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useReadings, type DataSource } from '../context/ReadingsContext';
+import { fetchDatasetInfo, getDatasetDownloadUrl, type DatasetInfo } from '../services/api';
 import { 
   Camera, 
   CheckCircle, 
@@ -17,10 +19,13 @@ import {
   Monitor,
   Layers,
   ChevronDown,
-  Briefcase
+  Briefcase,
+  Download,
+  Package,
+  Image as ImageIcon
 } from 'lucide-react';
 import type { ReadingStatus, WorkType } from '../types';
-import { workTypeLabels } from '../types';
+import { workTypeLabels, statusLabels } from '../types';
 
 interface StatCardProps {
   title: string;
@@ -60,13 +65,42 @@ const StatCard: React.FC<StatCardProps> = ({
 const Dashboard: React.FC = () => {
   const { counts, loading, error, isUsingRealData, refreshData, dataSource, setDataSource, workType, setWorkType } = useReadings();
   const navigate = useNavigate();
+  const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
+  const [datasetLoading, setDatasetLoading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
+  const [selectedDownloadStatus, setSelectedDownloadStatus] = useState<string>('all');
+
+  useEffect(() => {
+    if (!isUsingRealData) return;
+    setDatasetLoading(true);
+    fetchDatasetInfo(dataSource, workType)
+      .then(setDatasetInfo)
+      .catch(() => setDatasetInfo(null))
+      .finally(() => setDatasetLoading(false));
+  }, [dataSource, workType, isUsingRealData]);
+
+  const handleDownload = () => {
+    const status = selectedDownloadStatus === 'all' ? undefined : selectedDownloadStatus;
+    const url = getDatasetDownloadUrl(dataSource, workType, status);
+    setDownloadStatus('Preparing download...');
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    setTimeout(() => setDownloadStatus(null), 3000);
+  };
 
   const handleCardClick = (status: ReadingStatus | 'all') => {
     navigate(`/readings/${status}`);
   };
 
   const totalReadings = counts.correctCount + counts.incorrectNewCount + 
-    counts.incorrectAnalyzedCount + counts.incorrectLabeledCount + counts.incorrectTrainingCount;
+    counts.incorrectAnalyzedCount + counts.incorrectLabeledCount + counts.incorrectTrainingCount +
+    counts.notSureCount + counts.noDialsCount;
 
   const sourceOptions: { value: DataSource; label: string; icon: React.ReactNode }[] = [
     { value: 'all', label: 'All Sources', icon: <Layers size={14} /> },
@@ -249,6 +283,77 @@ const Dashboard: React.FC = () => {
               <span className="legend-item"><span className="dot analyzed"></span> Analyzed</span>
               <span className="legend-item"><span className="dot labeled"></span> Labeled</span>
               <span className="legend-item"><span className="dot training"></span> Training</span>
+            </div>
+          </section>
+        )}
+
+        {isUsingRealData && (
+          <section className="stats-section download-section">
+            <h2 className="section-title">Download Training Dataset</h2>
+            <div className="download-card">
+              <div className="download-info">
+                <div className="download-icon-wrap">
+                  <Package size={32} />
+                </div>
+                <div className="download-details">
+                  <h3>Training Dataset</h3>
+                  <p className="download-desc">
+                    Download all images and metadata as a zip file, organized by status and session.
+                  </p>
+                  {datasetLoading ? (
+                    <div className="dataset-stats">
+                      <Loader2 size={14} className="spin" />
+                      <span>Loading dataset info...</span>
+                    </div>
+                  ) : datasetInfo ? (
+                    <div className="dataset-stats">
+                      <span className="dataset-stat">
+                        <Package size={14} />
+                        {datasetInfo.sessionCount} sessions
+                      </span>
+                      <span className="dataset-stat">
+                        <ImageIcon size={14} />
+                        {datasetInfo.imageCount} images
+                      </span>
+                    </div>
+                  ) : null}
+                  {datasetInfo && Object.keys(datasetInfo.statusBreakdown).length > 0 && (
+                    <div className="dataset-breakdown">
+                      {Object.entries(datasetInfo.statusBreakdown).map(([status, count]) => (
+                        <span key={status} className="breakdown-item">
+                          {statusLabels[status as ReadingStatus] || status}: {count}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="download-actions">
+                <div className="download-filter">
+                  <label>Filter by status:</label>
+                  <select
+                    value={selectedDownloadStatus}
+                    onChange={(e) => setSelectedDownloadStatus(e.target.value)}
+                    className="download-select"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="correct">Correct</option>
+                    <option value="incorrect_new">Incorrect - New</option>
+                    <option value="incorrect_analyzed">Incorrect - Analyzed</option>
+                    <option value="incorrect_labeled">Incorrect - Labeled</option>
+                    <option value="incorrect_training">Incorrect - Training</option>
+                    <option value="not_sure">Not Sure</option>
+                    <option value="no_dials">No Dials</option>
+                  </select>
+                </div>
+                <button className="download-button" onClick={handleDownload}>
+                  <Download size={20} />
+                  <span>Download Dataset</span>
+                </button>
+                {downloadStatus && (
+                  <p className="download-status">{downloadStatus}</p>
+                )}
+              </div>
             </div>
           </section>
         )}

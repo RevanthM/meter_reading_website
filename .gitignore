@@ -44,3 +44,6 @@ eggs/
 .elasticbeanstalk/*
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
+
+# Build artifacts
+deploy.zip

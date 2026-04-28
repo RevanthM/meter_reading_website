@@ -76,6 +76,8 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       incorrectAnalyzedCount: readings.filter(r => r.status === 'incorrect_analyzed').length,
       incorrectLabeledCount: readings.filter(r => r.status === 'incorrect_labeled').length,
       incorrectTrainingCount: readings.filter(r => r.status === 'incorrect_training').length,
+      notSureCount: readings.filter(r => r.status === 'not_sure').length,
+      noDialsCount: readings.filter(r => r.status === 'no_dials').length,
     };
   }, [filteredReadings]);
 

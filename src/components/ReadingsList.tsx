@@ -3,10 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import type { ReadingStatus } from '../types';
 import { statusLabels, statusColors } from '../types';
+import type { S3MeterReading } from '../services/api';
 import { 
   ArrowLeft, 
   Eye, 
-  MapPin, 
   Calendar,
   Monitor,
   Radio,
@@ -15,7 +15,8 @@ import {
   Square,
   ArrowRightCircle,
   Loader2,
-  X
+  X,
+  User
 } from 'lucide-react';
 
 const ReadingsList: React.FC = () => {
@@ -178,7 +179,7 @@ const ReadingsList: React.FC = () => {
                   </button>
                 </th>
                 <th>Date of Reading</th>
-                <th>Location</th>
+                <th>Captured By</th>
                 <th>Type</th>
                 <th>Status</th>
                 <th>Meter Value</th>
@@ -207,8 +208,8 @@ const ReadingsList: React.FC = () => {
                   </td>
                   <td>
                     <div className="cell-with-icon">
-                      <MapPin size={16} className="cell-icon" />
-                      <span>{reading.location}</span>
+                      <User size={16} className="cell-icon" />
+                      <span>{(reading as S3MeterReading).userName || '—'}</span>
                     </div>
                   </td>
                   <td>

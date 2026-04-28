@@ -18,6 +18,9 @@ export interface S3MeterReading extends MeterReading {
   bucket?: string;
   workType?: WorkType;
   conditionCode?: string;
+  userName?: string;
+  imageSource?: string;
+  appVersion?: string;
 }
 
 export interface WorkTypeInfo {
@@ -90,6 +93,42 @@ export async function fetchReadingById(id: string): Promise<S3MeterReading | nul
     console.error('Failed to fetch reading:', error);
     throw error;
   }
+}
+
+export interface DatasetInfo {
+  sessionCount: number;
+  imageCount: number;
+  statusBreakdown: Record<string, number>;
+}
+
+export async function fetchDatasetInfo(source?: DataSource, workType?: WorkType, status?: string): Promise<DatasetInfo> {
+  try {
+    const params = new URLSearchParams();
+    if (source && source !== 'all') params.set('source', source);
+    if (workType) params.set('workType', workType);
+    if (status) params.set('status', status);
+
+    const url = params.toString()
+      ? `${API_BASE_URL}/dataset-info?${params}`
+      : `${API_BASE_URL}/dataset-info`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to fetch dataset info:', error);
+    throw error;
+  }
+}
+
+export function getDatasetDownloadUrl(source?: DataSource, workType?: WorkType, status?: string): string {
+  const params = new URLSearchParams();
+  if (source && source !== 'all') params.set('source', source);
+  if (workType) params.set('workType', workType);
+  if (status) params.set('status', status);
+
+  return params.toString()
+    ? `${API_BASE_URL}/download-dataset?${params}`
+    : `${API_BASE_URL}/download-dataset`;
 }
 
 export async function checkHealth(): Promise<{ status: string; buckets: string[] }> {

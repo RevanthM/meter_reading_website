@@ -6,10 +6,8 @@ import { statusLabels, statusColors } from '../types';
 import type { S3MeterReading } from '../services/api';
 import { 
   ArrowLeft, 
-  MapPin, 
   Calendar,
   Monitor,
-  Radio,
   Save,
   ImageIcon,
   FileText,
@@ -20,7 +18,10 @@ import {
   Target,
   Clock,
   RotateCw,
-  Loader2
+  Loader2,
+  User,
+  Camera,
+  Smartphone
 } from 'lucide-react';
 
 const ReadingDetail: React.FC = () => {
@@ -163,20 +164,30 @@ const ReadingDetail: React.FC = () => {
                 </span>
                 <span className="value">{formatDate(reading.dateOfReading)}</span>
               </div>
+              {reading.userName && (
+                <div className="metadata-item">
+                  <span className="label">
+                    <User size={16} /> Captured By
+                  </span>
+                  <span className="value">{reading.userName}</span>
+                </div>
+              )}
               <div className="metadata-item">
                 <span className="label">
-                  <MapPin size={16} /> Location
-                </span>
-                <span className="value">{reading.location}</span>
-              </div>
-              <div className="metadata-item">
-                <span className="label">
-                  {reading.type === 'simulator' ? <Monitor size={16} /> : <Radio size={16} />} Type
+                  {reading.type === 'simulator' ? <Monitor size={16} /> : <Camera size={16} />} Source
                 </span>
                 <span className={`type-badge ${reading.type}`}>
-                  {reading.type === 'simulator' ? 'Simulator' : 'Field'}
+                  {reading.imageSource || (reading.type === 'simulator' ? 'Simulator' : 'Field')}
                 </span>
               </div>
+              {reading.appVersion && (
+                <div className="metadata-item">
+                  <span className="label">
+                    <Smartphone size={16} /> App Version
+                  </span>
+                  <span className="value">{reading.appVersion}</span>
+                </div>
+              )}
               <div className="metadata-item">
                 <span className="label">ML Prediction</span>
                 <span className="value meter-value-large">{reading.meterValue}</span>
