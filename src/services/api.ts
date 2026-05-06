@@ -45,6 +45,12 @@ export interface S3MeterReading extends MeterReading {
   imageSource?: string;
   uploadMode?: string;
   feedbackType?: string;
+  /** Reviewer flagged this session for the training dataset (`reviewer_recommend_training` in metadata). */
+  reviewerRecommendTraining?: boolean;
+  /** iOS sets `is_human_reviewed` in metadata when a capture has been human-reviewed. */
+  isHumanReviewed?: boolean;
+  /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
+  portalMetadataUpdatedBy?: string;
 }
 
 export interface WorkTypeInfo {
@@ -254,6 +260,8 @@ export type SessionMetadataPatch = {
   is_correct?: boolean;
   condition_code?: string | null;
   portal_review_notes?: string;
+  /** When true, labelers can filter the list for reviewer-recommended sessions. */
+  reviewer_recommend_training?: boolean;
   confidence?: number;
   processing_time_ms?: number;
 };
@@ -316,7 +324,7 @@ export type ListExportDateOpts = {
 
 /**
  * ZIP sessions matching the readings list (work type, source, list route, optional day or from/to range).
- * Same folder layout as incorrect bulk export (images + metadata per session).
+ * Flat root: raw full-frame images + dataset.json (Roboflow-friendly; no per-session folders or metadata.json).
  */
 export async function downloadListRetrainZip(
   source: DataSource | undefined,
@@ -352,7 +360,7 @@ export async function downloadListRetrainZip(
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition');
   const match = cd?.match(/filename="([^"]+)"/);
-  const filename = match?.[1] || `sessions-${listStatus}-${workType}.zip`;
+  const filename = match?.[1] || `sessions-flat-${listStatus}-${workType}.zip`;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -363,7 +371,7 @@ export async function downloadListRetrainZip(
   URL.revokeObjectURL(url);
 }
 
-/** ZIP of all incorrect_* sessions (backward compatible; same as list export with incorrect-queues). */
+/** Flat ZIP of incorrect-queue sessions (same as list export with listStatus=incorrect-queues). */
 export async function downloadIncorrectRetrainZip(
   source: DataSource | undefined,
   workType: WorkType,
@@ -371,7 +379,7 @@ export async function downloadIncorrectRetrainZip(
   return downloadListRetrainZip(source, workType, 'incorrect-queues');
 }
 
-/** ZIP this session only (same folder layout as bulk incorrect export) for labeling / training. */
+/** Flat ZIP for one session (raw photos + dataset.json at root) for Roboflow / labeling. */
 export async function downloadSessionRetrainZip(sessionId: string, workType: WorkType): Promise<void> {
   const params = new URLSearchParams({ sessionId, workType });
   const res = await fetch(`${API_BASE_URL}/export/session-retrain-zip?${params.toString()}`);
@@ -386,7 +394,7 @@ export async function downloadSessionRetrainZip(sessionId: string, workType: Wor
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition');
   const match = cd?.match(/filename="([^"]+)"/);
-  const filename = match?.[1] || `session-${sessionId}.zip`;
+  const filename = match?.[1] || `session-flat-${sessionId}.zip`;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -470,6 +478,16 @@ export async function copySessionsToTrainingDataset(
 }
 
 /** ZIP all objects under a training-dataset prefix (includes dataset.json and sessions/*). */
+export interface WeightsSessionPromotionSummary {
+  enabled: boolean;
+  sessionCountConsidered: number;
+  moved: number;
+  skippedAlready: number;
+  skippedNotInPipeline: number;
+  notFound: number;
+  moveFailed: number;
+}
+
 export interface UploadTrainingWeightsResponse {
   ok: boolean;
   weights: {
@@ -481,17 +499,24 @@ export interface UploadTrainingWeightsResponse {
     originalFileName: string;
     contentType: string;
   };
+  sessionPromotion?: WeightsSessionPromotionSummary;
 }
 
 export async function uploadTrainingDatasetWeights(
   folderPrefix: string,
   file: File,
+  userEmail?: string | null,
 ): Promise<UploadTrainingWeightsResponse> {
   const fd = new FormData();
   fd.set('folderPrefix', folderPrefix);
   fd.set('file', file, file.name);
+  const headers: Record<string, string> = {};
+  if (userEmail && String(userEmail).trim()) {
+    headers['x-user-email'] = String(userEmail).trim();
+  }
   const response = await fetch(`${API_BASE_URL}/training-datasets/weights`, {
     method: 'POST',
+    headers,
     body: fd,
   });
   const text = await response.text();

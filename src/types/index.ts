@@ -25,7 +25,7 @@ export const labelerPipelineStatusLabels: Record<
   'incorrect_new' | 'incorrect_analyzed' | 'incorrect_labeled' | 'incorrect_training',
   string
 > = {
-  incorrect_new: 'New (in queue)',
+  incorrect_new: 'Awaiting review',
   incorrect_analyzed: 'Analyzed',
   incorrect_labeled: 'Labeled',
   incorrect_training: 'Added to training dataset',
@@ -95,7 +95,7 @@ export type DashboardCounts = {
 // Status labels for display
 export const statusLabels: Record<ReadingStatus, string> = {
   correct: 'Correct',
-  incorrect_new: 'Incorrect - New',
+  incorrect_new: 'Awaiting review',
   incorrect_analyzed: 'Incorrect - Analyzed',
   incorrect_labeled: 'Incorrect - Labeled',
   incorrect_training: 'Incorrect - Added to Training Dataset',

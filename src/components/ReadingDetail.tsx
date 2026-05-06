@@ -35,6 +35,7 @@ import {
   ChevronRight,
   ClipboardList,
   ArrowDown,
+  UserCheck,
 } from 'lucide-react';
 import {
   fetchReadingById,
@@ -263,7 +264,8 @@ const ReadingDetail: React.FC = () => {
   }, [reading?.id, readingQueueIds]);
 
   const reviewerCorrectionsRef = useRef<HTMLDivElement | null>(null);
-  const [incorrectOutcomeIntroOpen, setIncorrectOutcomeIntroOpen] = useState(false);
+  /** After choosing Incorrect from a non-incorrect outcome, scroll once the inline corrections block exists. */
+  const scrollToCorrectionsAfterIncorrectSelect = useRef(false);
 
   const [mlPrediction, setMlPrediction] = useState('');
   const [userCorrection, setUserCorrection] = useState('');
@@ -300,6 +302,7 @@ const ReadingDetail: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [sessionZipExporting, setSessionZipExporting] = useState(false);
+  const [recommendTraining, setRecommendTraining] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -332,6 +335,7 @@ const ReadingDetail: React.FC = () => {
     setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
     setUserCorrection(reading.expectedValue != null ? String(reading.expectedValue) : '');
     setLocalDialRows(baselineDialRowsForReading(reading).map((d) => ({ ...d })));
+    setRecommendTraining(reading.reviewerRecommendTraining === true);
   }, [
     reading?.id,
     reading?.status,
@@ -340,6 +344,7 @@ const ReadingDetail: React.FC = () => {
     reading?.expectedValue,
     reading?.comments,
     reading?.dialDetails,
+    reading?.reviewerRecommendTraining,
   ]);
 
   const isDirty = useMemo(() => {
@@ -353,12 +358,14 @@ const ReadingDetail: React.FC = () => {
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
+    const baseRecommend = r.reviewerRecommendTraining === true;
     return (
       userCorrection !== baseExpected ||
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
-      selectedStatus !== r.status
+      selectedStatus !== r.status ||
+      recommendTraining !== baseRecommend
     );
   }, [
     isLabelerMode,
@@ -369,6 +376,7 @@ const ReadingDetail: React.FC = () => {
     localDialRows,
     comments,
     selectedStatus,
+    recommendTraining,
   ]);
 
   const performSaveAction = useCallback(async (): Promise<boolean> => {
@@ -423,12 +431,14 @@ const ReadingDetail: React.FC = () => {
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
+    const baseRecommend = r.reviewerRecommendTraining === true;
 
     const metaDirty =
       userCorrection !== baseExpected ||
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
-      comments !== baseComments;
+      comments !== baseComments ||
+      recommendTraining !== baseRecommend;
 
     setIsSaving(true);
     try {
@@ -438,6 +448,9 @@ const ReadingDetail: React.FC = () => {
           user_correction: userCorrection,
           portal_review_notes: comments,
         };
+        if (recommendTraining !== baseRecommend) {
+          patch.reviewer_recommend_training = recommendTraining;
+        }
         const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
         if (localDialRows.length > 0) {
           patch.dial_details = localDialRows.map((row) => ({
@@ -496,6 +509,7 @@ const ReadingDetail: React.FC = () => {
     updateReadingStatus,
     updateReadingComments,
     refreshData,
+    recommendTraining,
   ]);
 
   const handleSave = useCallback(() => {
@@ -548,12 +562,7 @@ const ReadingDetail: React.FC = () => {
   /** Reviewer incorrect flow: corrections + queue nav live in the main column (no modal). */
   const inlineIncorrectReview = incorrectContext && !isLabelerMode;
 
-  useEffect(() => {
-    if (!incorrectContext) setIncorrectOutcomeIntroOpen(false);
-  }, [incorrectContext]);
-
   const scrollToReviewerCorrections = useCallback(() => {
-    setIncorrectOutcomeIntroOpen(false);
     requestAnimationFrame(() => {
       const el = reviewerCorrectionsRef.current;
       if (!el) return;
@@ -561,6 +570,12 @@ const ReadingDetail: React.FC = () => {
       el.focus();
     });
   }, []);
+
+  useEffect(() => {
+    if (!inlineIncorrectReview || !scrollToCorrectionsAfterIncorrectSelect.current) return;
+    scrollToCorrectionsAfterIncorrectSelect.current = false;
+    scrollToReviewerCorrections();
+  }, [inlineIncorrectReview, scrollToReviewerCorrections]);
 
   useEffect(() => {
     if (!inlineIncorrectReview) return;
@@ -686,7 +701,7 @@ const ReadingDetail: React.FC = () => {
               className="detail-download-zip-btn"
               onClick={handleDownloadSessionZip}
               disabled={sessionZipExporting}
-              title="Download this session as a ZIP: all meter images plus metadata.json (same format as dashboard bulk export)."
+              title="Download a flat ZIP: raw full-frame meter photos plus dataset.json at the root (Roboflow-friendly; no dial crops, no per-session folders)."
             >
               {sessionZipExporting ? (
                 <>
@@ -703,7 +718,7 @@ const ReadingDetail: React.FC = () => {
             <span className="detail-download-zip-caption">
               {sessionZipExporting
                 ? 'Packaging files from storage…'
-                : 'All images + metadata.json for training or labeling'}
+                : 'Flat ZIP: raw photos + dataset.json for Roboflow / training'}
             </span>
           </div>
         </div>
@@ -1173,7 +1188,7 @@ const ReadingDetail: React.FC = () => {
                         if (raw === REVIEWER_SELECT_INCORRECT) {
                           if (!statusIsIncorrect(selectedStatus)) {
                             setSelectedStatus('incorrect_new');
-                            setIncorrectOutcomeIntroOpen(true);
+                            scrollToCorrectionsAfterIncorrectSelect.current = true;
                           } else {
                             setSelectedStatus((prev) => (statusIsIncorrect(prev) ? prev : 'incorrect_new'));
                           }
@@ -1193,9 +1208,23 @@ const ReadingDetail: React.FC = () => {
                       <option value="not_sure">{statusLabels.not_sure}</option>
                     </select>
                     <p id="reading-detail-status-hint" className="reading-detail-field-hint">
-                      Save writes reviewer fixes to <code>metadata.json</code> first, then moves the folder if you
-                      changed status. Incorrect pipeline stages (analyzed, labeled, training) are adjusted in labeler
-                      mode.
+                      Save writes fixes to <code>metadata.json</code>, then moves the folder if the outcome changed.
+                      Pipeline stages after incorrect are set in <strong>labeler</strong> mode.
+                    </p>
+                  </div>
+
+                  <div className="reading-detail-recommend-training">
+                    <label className="reading-detail-recommend-training-label">
+                      <input
+                        type="checkbox"
+                        checked={recommendTraining}
+                        onChange={(e) => setRecommendTraining(e.target.checked)}
+                      />
+                      <span>Recommend for training dataset</span>
+                    </label>
+                    <p className="reading-detail-field-hint" id="reading-detail-recommend-hint">
+                      Optional flag for labelers (filter lists with <strong>Reviewer picks</strong>). Does not copy
+                      files by itself—use labeler mode to copy into a pipeline folder.
                     </p>
                   </div>
 
@@ -1217,7 +1246,7 @@ const ReadingDetail: React.FC = () => {
                     type="button"
                     className={`save-button ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
                     onClick={handleSave}
-                    disabled={isSaving}
+                    disabled={isSaving || !isDirty}
                     aria-busy={isSaving}
                   >
                     {isSaving ? (
@@ -1250,6 +1279,36 @@ const ReadingDetail: React.FC = () => {
                 {isLabelerMode ? <span className="reading-detail-readonly-tag"> read-only</span> : null}
               </h2>
               <div className="metadata-grid">
+                <div className="reading-detail-review-summary" role="region" aria-label="Human review status">
+                  <div className="reading-detail-review-summary-row">
+                    <span className="label">
+                      <UserCheck size={16} aria-hidden /> Human review
+                    </span>
+                    <span
+                      className={`reading-detail-review-summary-badge${reading.isHumanReviewed ? ' reading-detail-review-summary-badge--yes' : ''}`}
+                    >
+                      {reading.isHumanReviewed ? 'Reviewed' : 'Not yet'}
+                    </span>
+                  </div>
+                  <p className="reading-detail-review-summary-hint">
+                    {reading.isHumanReviewed
+                      ? 'The app marked this capture as human-reviewed.'
+                      : 'Placeholder: iOS will write is_human_reviewed in metadata when review tracking ships.'}
+                  </p>
+                  {reading.portalMetadataUpdatedBy ? (
+                    <p className="reading-detail-review-summary-portal">
+                      <strong>Portal metadata save:</strong>{' '}
+                      {reading.portalMetadataUpdatedBy === userEmail
+                        ? `${reading.portalMetadataUpdatedBy} (you)`
+                        : reading.portalMetadataUpdatedBy}
+                      <span className="reading-detail-review-summary-sub"> · from this website</span>
+                    </p>
+                  ) : null}
+                  <p className="reading-detail-review-summary-subtle">
+                    &quot;Who reviewed&quot; (you vs others) will come from the app next; we will show it here when that
+                    field exists.
+                  </p>
+                </div>
                 <div className="metadata-item">
                   <span className="label">
                     <Calendar size={16} aria-hidden /> Date of reading
@@ -1334,38 +1393,6 @@ const ReadingDetail: React.FC = () => {
           </aside>
         </div>
       </main>
-
-      {!isLabelerMode && incorrectOutcomeIntroOpen ? (
-        <div
-          className="reading-detail-outcome-intro-overlay"
-          role="presentation"
-          onClick={() => setIncorrectOutcomeIntroOpen(false)}
-        >
-          <div
-            className="reading-detail-outcome-intro-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="reading-detail-outcome-intro-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="reading-detail-outcome-intro-title">Marked incorrect</h2>
-            <p>
-              Update the <strong>model reading</strong>, <strong>whole-meter correction</strong>, and any{' '}
-              <strong>dial values</strong> if needed, then use <strong>Save changes</strong> in the sidebar (or{' '}
-              <strong>Save</strong> in the corrections block). The form is below the images—you can open it from the
-              bar under the header too.
-            </p>
-            <div className="reading-detail-outcome-intro-actions">
-              <button type="button" className="reading-detail-outcome-intro-primary" onClick={() => scrollToReviewerCorrections()}>
-                Go to corrections
-              </button>
-              <button type="button" className="reading-detail-outcome-intro-secondary" onClick={() => setIncorrectOutcomeIntroOpen(false)}>
-                Not now
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {/* Lightbox */}
       {selectedImage ? (

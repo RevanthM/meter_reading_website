@@ -12,6 +12,7 @@ import {
   type TrainingCopiedSessionPreview,
 } from '../services/api';
 import { useReadings } from '../context/ReadingsContext';
+import { useAuth } from '../context/AuthContext';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { folderPrefixToSegment } from '../utils/trainingPipeline';
 
@@ -27,7 +28,7 @@ function formatBytes(n: number | null | undefined): string {
 
 const ADD_IMAGE_TABS: { label: string; statusPath: string }[] = [
   { label: 'browse', statusPath: 'all' },
-  { label: 'new', statusPath: 'incorrect_new' },
+  { label: 'awaiting', statusPath: 'incorrect_new' },
   { label: 'wrong', statusPath: 'incorrect-queues' },
   { label: 'correct', statusPath: 'correct' },
   { label: 'analyzed', statusPath: 'incorrect_analyzed' },
@@ -40,6 +41,7 @@ const ADD_IMAGE_TABS: { label: string; statusPath: string }[] = [
 const TrainingPipelinePage: FC = () => {
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
+  const { userEmail } = useAuth();
   if (outletCtx?.workMode === 'reviewer') {
     return <Navigate to="/" replace />;
   }
@@ -137,11 +139,24 @@ const TrainingPipelinePage: FC = () => {
     setWeightsBusy(true);
     setWeightsMsg(null);
     try {
-      await uploadTrainingDatasetWeights(row.folderPrefix, weightsFile);
+      const res = await uploadTrainingDatasetWeights(row.folderPrefix, weightsFile, userEmail);
       setWeightsFile(null);
       if (weightsInputRef.current) weightsInputRef.current.value = '';
       await load();
-      setWeightsMsg('Saved to S3 as model/weights.pt and recorded in dataset.json.');
+      const p = res.sessionPromotion;
+      let extra = '';
+      if (p?.enabled === false) {
+        extra = ' Session auto-queue updates are disabled (TRAINING_WEIGHTS_AUTO_PROMOTE_SESSIONS).';
+      } else if (p && p.moved > 0) {
+        extra = ` Moved ${p.moved} session(s) to the "Added to training dataset" queue (${p.skippedAlready} already there${
+          p.skippedNotInPipeline ? `, ${p.skippedNotInPipeline} skipped — not on the incorrect pipeline` : ''
+        }${p.notFound ? `, ${p.notFound} not found in portal lists` : ''}${p.moveFailed ? `, ${p.moveFailed} move failed` : ''}).`;
+      } else if (p && p.sessionCountConsidered > 0) {
+        extra = ` No sessions moved (${p.skippedAlready} already in training queue${
+          p.skippedNotInPipeline ? `, ${p.skippedNotInPipeline} not on incorrect pipeline` : ''
+        }${p.notFound ? `, ${p.notFound} not found` : ''}).`;
+      }
+      setWeightsMsg(`Saved to S3 as model/weights.pt and recorded in dataset.json.${extra}`);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Upload failed.');
     } finally {
@@ -171,21 +186,45 @@ const TrainingPipelinePage: FC = () => {
   return (
     <div className="detail-page training-pipeline-page">
       <header className="page-header">
-        <div className="header-content">
-          <button type="button" className="back-button" onClick={() => navigate('/training')}>
-            <ArrowLeft size={20} />
-            <span>Training</span>
-          </button>
-          <div className="page-title">
-            <GraduationCap size={32} strokeWidth={1.5} />
-            <div>
-              <h1>{row?.displayName ?? 'pipeline'}</h1>
-              <p>
-                Copy rows into this folder, download a session ZIP for Roboflow, train, then attach <strong>weights.pt</strong>{' '}
-                here → same bucket <code>model/weights.pt</code> for the iOS app. Pipeline id: <code>{segment}</code>
-              </p>
+        <div className="header-content training-pipeline-header">
+          <div className="training-pipeline-header-lead">
+            <button type="button" className="back-button" onClick={() => navigate('/training')}>
+              <ArrowLeft size={20} />
+              <span>Training</span>
+            </button>
+            <div className="page-title">
+              <GraduationCap size={32} strokeWidth={1.5} />
+              <div>
+                <h1>{row?.displayName ?? 'pipeline'}</h1>
+                <p>
+                  Copy rows into this folder, download a session ZIP for Roboflow, train, then attach{' '}
+                  <strong>weights.pt</strong> here → same bucket <code>model/weights.pt</code> for the iOS app. Pipeline id:{' '}
+                  <code>{segment}</code>
+                </p>
+              </div>
             </div>
           </div>
+          {!loading && row ? (
+            <div className="training-pipeline-header-zip" aria-labelledby="training-pipeline-zip-title">
+              <h2 id="training-pipeline-zip-title" className="training-pipeline-header-zip-title">
+                Download ZIP
+              </h2>
+              <p className="training-pipeline-header-zip-lead">
+                Exports <strong>raw meter photos only</strong> (e.g. <code>original.jpg</code>, no <code>dial_*</code> crops)
+                plus <code>dataset.json</code> — all at the <strong>ZIP root with no subfolders</strong> (each image is{' '}
+                <code>&lt;sessionId&gt;_original.jpg</code>, etc.). <code>metadata.json</code> and <code>model/</code> are omitted.
+              </p>
+              <button
+                type="button"
+                className="training-pipeline-zip-btn training-pipeline-header-zip-btn"
+                onClick={() => void handleZip()}
+                disabled={zipBusy}
+              >
+                {zipBusy ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
+                {zipBusy ? 'ZIP…' : 'download zip'}
+              </button>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -198,24 +237,32 @@ const TrainingPipelinePage: FC = () => {
         {loadError ? <p className="training-hub-inline-error">{loadError}</p> : null}
         {!loading && row ? (
           <>
-            <section className="training-pipeline-weights training-pipeline-weights--top" aria-labelledby="pipeline-weights-title">
-              <h2 id="pipeline-weights-title" className="training-pipeline-add-title">
+            <p className="sr-only" id="pipeline-weights-desc">
+              Stored in this bucket at model/weights.pt under this pipeline. The training ZIP in the header skips this
+              file so exports stay small. After upload, sessions copied into this pipeline may be moved to the Added to
+              training dataset S3 queue when they were still on the incorrect pipeline (awaiting review to labeled);
+              already-correct captures are left alone. Set TRAINING_WEIGHTS_AUTO_PROMOTE_SESSIONS=0 on the server to
+              disable automatic moves.
+            </p>
+            <section
+              className="training-pipeline-bar training-pipeline-bar--weights"
+              aria-labelledby="pipeline-weights-title"
+              aria-describedby="pipeline-weights-desc"
+            >
+              <h2 id="pipeline-weights-title" className="training-pipeline-bar-title">
                 weights.pt (iOS)
               </h2>
-              <p className="training-pipeline-add-lead">
-                Stored in this bucket at <code>model/weights.pt</code> under this pipeline. The training ZIP below skips
-                this file so exports stay small.
-              </p>
               {row.weights?.uploadedAt ? (
-                <p className="training-pipeline-weights-meta">
-                  Current file:{' '}
+                <p className="training-pipeline-bar-meta">
                   <strong>{row.weights.originalFileName ?? 'weights.pt'}</strong> ·{' '}
-                  {formatBytes(row.weights.sizeBytes ?? undefined)} · uploaded {row.weights.uploadedAt}
+                  {formatBytes(row.weights.sizeBytes ?? undefined)} · {row.weights.uploadedAt}
                 </p>
               ) : (
-                <p className="training-pipeline-weights-meta">No weights uploaded yet.</p>
+                <p className="training-pipeline-bar-meta">
+                  None yet — file lives at <code>model/weights.pt</code> in this pipeline folder.
+                </p>
               )}
-              <div className="training-pipeline-weights-row">
+              <div className="training-pipeline-bar-controls">
                 <input
                   ref={weightsInputRef}
                   type="file"
@@ -247,16 +294,18 @@ const TrainingPipelinePage: FC = () => {
                   {weightsUrlBusy ? '…' : 'copy download link'}
                 </button>
               </div>
-              {weightsMsg ? <p className="training-pipeline-weights-toast">{weightsMsg}</p> : null}
             </section>
+            {weightsMsg ? <p className="training-pipeline-bar-toast">{weightsMsg}</p> : null}
 
-            <section className="training-pipeline-add training-pipeline-add--top">
-              <h2 className="training-pipeline-add-title">add images</h2>
-              <p className="training-pipeline-add-lead">
-                Pick a queue to open the readings list. The URL keeps this pipeline selected so you can use{' '}
-                <strong>copy into folder</strong> from the list toolbar.
+            <section className="training-pipeline-bar training-pipeline-bar--queues" aria-labelledby="pipeline-add-title">
+              <h2 id="pipeline-add-title" className="training-pipeline-bar-title">
+                add images
+              </h2>
+              <p className="training-pipeline-bar-hint">
+                Open a queue — the URL keeps this pipeline so you can use <strong>copy into folder</strong> from the
+                readings toolbar.
               </p>
-              <nav className="training-pipeline-tabs" aria-label="Reading folders">
+              <nav className="training-pipeline-tabs training-pipeline-tabs--bar" aria-label="Reading folders">
                 {ADD_IMAGE_TABS.map((t) => (
                   <Link
                     key={t.statusPath}
@@ -267,26 +316,6 @@ const TrainingPipelinePage: FC = () => {
                   </Link>
                 ))}
               </nav>
-            </section>
-
-            <section className="training-pipeline-actions" aria-labelledby="training-pipeline-zip-title">
-              <h2 id="training-pipeline-zip-title" className="training-pipeline-add-title">
-                download zip
-              </h2>
-              <p className="training-pipeline-add-lead">
-                Exports <strong>raw meter photos only</strong> (e.g. <code>original.jpg</code>, no <code>dial_*</code> crops)
-                plus <code>dataset.json</code> — all at the <strong>ZIP root with no subfolders</strong> (each image is{' '}
-                <code>&lt;sessionId&gt;_original.jpg</code>, etc.). <code>metadata.json</code> and <code>model/</code> are omitted.
-              </p>
-              <button
-                type="button"
-                className="training-pipeline-zip-btn"
-                onClick={() => void handleZip()}
-                disabled={zipBusy}
-              >
-                {zipBusy ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
-                {zipBusy ? 'ZIP…' : 'download zip'}
-              </button>
             </section>
 
             <section className="training-pipeline-copied" aria-labelledby="training-pipeline-copied-title">

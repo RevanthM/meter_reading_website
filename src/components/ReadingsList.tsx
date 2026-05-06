@@ -2,13 +2,7 @@ import { useState, useMemo, useCallback, useEffect, type CSSProperties, type FC 
 import { useParams, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import type { ReadingStatus, ReadingsListFilter } from '../types';
-import {
-  statusLabels,
-  statusColors,
-  INCORRECT_PIPELINE_STATUSES,
-  labelerPipelineStatusLabels,
-  isIncorrectPipelineStatus,
-} from '../types';
+import { statusLabels, statusColors, INCORRECT_PIPELINE_STATUSES, labelerPipelineStatusLabels } from '../types';
 import {
   ArrowLeft,
   Eye,
@@ -44,7 +38,7 @@ import {
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
 
-/** When browsing all statuses, surface the labeling queue (incorrect_new) first, then pipeline order, then correct. */
+/** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
   incorrect_new: 0,
   incorrect_analyzed: 1,
@@ -56,6 +50,34 @@ const LIST_PRIORITY: Record<string, number> = {
 };
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** List toolbar cohort (replaces pipeline-stage dropdown + legacy trainingPick). */
+const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'recommended'] as const;
+type ReadingsCohortId = (typeof READINGS_COHORT_IDS)[number];
+
+function isReadingsCohortId(s: string): s is ReadingsCohortId {
+  return (READINGS_COHORT_IDS as readonly string[]).includes(s);
+}
+
+const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
+  untrained: 'Untrained',
+  correct: 'Reviewed correct',
+  wrong: 'Reviewed wrong',
+  recommended: 'Reviewer recommended',
+};
+
+function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boolean {
+  switch (cohort) {
+    case 'untrained':
+      return r.status === 'incorrect_new';
+    case 'correct':
+      return r.status === 'correct';
+    case 'wrong':
+      return r.status === 'incorrect_analyzed' || r.status === 'incorrect_labeled' || r.status === 'incorrect_training';
+    case 'recommended':
+      return r.reviewerRecommendTraining === true;
+  }
+}
 
 function normalizeReadingAppVersion(r: S3MeterReading): string {
   const raw =
@@ -123,12 +145,13 @@ const ReadingsList: FC = () => {
 
   const capturedParam = useMemo(() => (searchParams.get('captured') || '').trim(), [searchParams]);
 
-  const stageRaw = (searchParams.get('stage') || '').trim() as ReadingStatus;
+  const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
+  const cohortFromUrl = isReadingsCohortId(cohortParamRaw) ? cohortParamRaw : null;
+  /** Legacy `?trainingPick=1` behaves like cohort=recommended. */
+  const trainingPickLegacy = searchParams.get('trainingPick') === '1';
+  const activeCohort: ReadingsCohortId | null = cohortFromUrl ?? (trainingPickLegacy ? 'recommended' : null);
 
   const listStatusKey = (status ?? 'all') as ReadingsListFilter;
-  const showPipelineStageFilter = listStatusKey === 'all' || listStatusKey === 'incorrect-queues';
-  const activePipelineStageFilter =
-    showPipelineStageFilter && isIncorrectPipelineStatus(stageRaw) ? stageRaw : null;
 
   const [capturedDraft, setCapturedDraft] = useState(capturedParam);
   useEffect(() => {
@@ -157,12 +180,12 @@ const ReadingsList: FC = () => {
     if (appVersionParam) {
       filtered = filtered.filter((r) => normalizeReadingAppVersion(r) === appVersionParam);
     }
-    if (activePipelineStageFilter) {
-      filtered = filtered.filter((r) => r.status === activePipelineStageFilter);
-    }
     if (capturedParam) {
       const q = capturedParam.toLowerCase();
       filtered = filtered.filter((r) => (r.userName || '').toLowerCase().includes(q));
+    }
+    if (activeCohort) {
+      filtered = filtered.filter((r) => matchesReadingsCohort(r, activeCohort));
     }
     const sortKey = filterKey === 'incorrect-queues' ? 'all' : filterKey;
     return sortReadingsForList(filtered, sortKey);
@@ -174,11 +197,28 @@ const ReadingsList: FC = () => {
     toFilter,
     presetWindow,
     appVersionParam,
-    activePipelineStageFilter,
     capturedParam,
+    activeCohort,
   ]);
 
   const clearListFilters = () => setSearchParams({}, { replace: true });
+
+  const setCohortParam = useCallback(
+    (next: ReadingsCohortId | null) => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.delete('trainingPick');
+          n.delete('stage');
+          if (!next) n.delete('cohort');
+          else n.set('cohort', next);
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   const clearDateRangeFilters = useCallback(() => {
     setSearchParams(
@@ -203,21 +243,6 @@ const ReadingsList: FC = () => {
           n.delete('from');
           n.delete('to');
           n.set('range', preset);
-          return n;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  const setPipelineStageParam = useCallback(
-    (stage: string) => {
-      setSearchParams(
-        (prev) => {
-          const n = new URLSearchParams(prev);
-          if (!stage) n.delete('stage');
-          else n.set('stage', stage);
           return n;
         },
         { replace: true },
@@ -525,17 +550,10 @@ const ReadingsList: FC = () => {
                     <span className="readings-date-filter">· {formatPresetLabel(rangePreset)}</span>
                   </>
                 ) : null}
-                {activePipelineStageFilter ? (
+                {activeCohort ? (
                   <>
                     {' '}
-                    <span className="readings-date-filter">
-                      · Pipeline:{' '}
-                      {
-                        labelerPipelineStatusLabels[
-                          activePipelineStageFilter as keyof typeof labelerPipelineStatusLabels
-                        ]
-                      }
-                    </span>
+                    <span className="readings-date-filter">· {READINGS_COHORT_LABELS[activeCohort]}</span>
                   </>
                 ) : null}
                 {capturedParam ? (
@@ -629,8 +647,9 @@ const ReadingsList: FC = () => {
               · app version <strong>{zipExportOpts.appVersion === 'unknown' ? 'unknown' : zipExportOpts.appVersion}</strong>
             </>
           ) : null}
-          ). Uses the full S3 slice for those filters, not only the rows on this page. Each session is one folder with
-          images and <code>metadata.json</code>.
+          ). Uses the full S3 slice for those filters, not only the rows on this page. ZIP is flat at the root: raw
+          full-frame images (no <code>dial_*</code> crops) plus <code>dataset.json</code> — suitable to upload to
+          Roboflow.
         </p>
         <button
           type="button"
@@ -647,6 +666,30 @@ const ReadingsList: FC = () => {
         <div className="readings-list-filter-toolbar-head">
           <SlidersHorizontal size={16} aria-hidden />
           <span>List filters</span>
+        </div>
+        <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort">
+          <span className="readings-list-filter-label">Show</span>
+          <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
+            <button
+              type="button"
+              className={`readings-list-filter-chip${!activeCohort ? ' active' : ''}`}
+              onClick={() => setCohortParam(null)}
+              aria-pressed={!activeCohort}
+            >
+              All
+            </button>
+            {READINGS_COHORT_IDS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`readings-list-filter-chip${activeCohort === id ? ' active' : ''}`}
+                onClick={() => setCohortParam(activeCohort === id ? null : id)}
+                aria-pressed={activeCohort === id}
+              >
+                {READINGS_COHORT_LABELS[id]}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="readings-list-filter-toolbar-row">
           <span className="readings-list-filter-label">When captured</span>
@@ -671,30 +714,6 @@ const ReadingsList: FC = () => {
               </button>
             ) : null}
           </div>
-        </div>
-        <div className="readings-list-filter-toolbar-row">
-          {showPipelineStageFilter ? (
-            <>
-              <span className="readings-list-filter-label">Incorrect queue</span>
-              <select
-                className="readings-list-filter-select"
-                value={activePipelineStageFilter ?? ''}
-                onChange={(e) => setPipelineStageParam(e.target.value)}
-                aria-label="Filter by incorrect pipeline stage"
-              >
-                <option value="">All pipeline stages</option>
-                {INCORRECT_PIPELINE_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {labelerPipelineStatusLabels[s as keyof typeof labelerPipelineStatusLabels]}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : (
-            <span className="readings-list-filter-hint">
-              Open “All readings” or “Incorrect queues” to filter by pipeline stage (for example New only).
-            </span>
-          )}
         </div>
         <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-grow">
           <span className="readings-list-filter-label">Captured by</span>
@@ -927,15 +946,22 @@ const ReadingsList: FC = () => {
                     </div>
                   </td>
                   <td>
-                    <span
-                      className="status-badge"
-                      style={{
-                        backgroundColor: `${statusColors[reading.status]}20`,
-                        color: statusColors[reading.status],
-                        borderColor: statusColors[reading.status],
-                      }}
-                    >
-                      {statusLabels[reading.status]}
+                    <span className="readings-status-cell">
+                      <span
+                        className="status-badge"
+                        style={{
+                          backgroundColor: `${statusColors[reading.status]}20`,
+                          color: statusColors[reading.status],
+                          borderColor: statusColors[reading.status],
+                        }}
+                      >
+                        {statusLabels[reading.status]}
+                      </span>
+                      {reading.reviewerRecommendTraining ? (
+                        <span className="readings-training-pick-badge" title="Reviewer recommended for training">
+                          Pick
+                        </span>
+                      ) : null}
                     </span>
                   </td>
                   <td>
@@ -991,7 +1017,7 @@ const ReadingsList: FC = () => {
                 chartRangeWindow ||
                 appVersionParam ||
                 rangePreset ||
-                activePipelineStageFilter ||
+                activeCohort ||
                 capturedParam
                   ? 'No readings match this status and the active filters. Try clearing filters or changing work type / source in the toolbar.'
                   : 'No readings found with this status.'}

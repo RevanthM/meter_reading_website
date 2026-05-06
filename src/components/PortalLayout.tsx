@@ -3,11 +3,8 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   LayoutDashboard,
-  ClipboardList,
   ListTree,
   CheckCircle2,
-  Activity,
-  BarChart3,
   Cpu,
   History,
   Shield,
@@ -16,50 +13,50 @@ import {
   Menu,
   X,
   Gauge,
-  Upload,
   Users,
-  CircleHelp,
   ChevronDown,
   Inbox,
   GraduationCap,
   PanelLeft,
   PanelLeftClose,
+  Sparkles,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { getStoredPortalWorkMode, setStoredPortalWorkMode } from '../utils/portalWorkMode';
+import { statusLabels } from '../types';
 
 type NavLeaf = {
   path: string;
   label: string;
   icon: ReactNode;
   requiresFirebase?: boolean;
+  /** Short second line under the label (sidebar). */
+  description?: string;
+  /** Extra context on hover (full status name, etc.). */
+  hint?: string;
+  /** Navigate target (defaults to `path`). Use for links that need query params. */
+  to?: string;
+  /** When set, item is active only if the current search string matches these params (path must still match). */
+  activeWhenSearch?: Record<string, string>;
 };
 
-/** Extra queues under **more** for reviewer (short folder-style names). */
-const STATUS_QUEUES: NavLeaf[] = [
-  { path: '/readings/incorrect_analyzed', label: 'analyzed', icon: <Activity size={17} /> },
-  { path: '/readings/incorrect_labeled', label: 'labeled', icon: <ClipboardList size={17} /> },
-  { path: '/readings/incorrect_training', label: 'train', icon: <BarChart3 size={17} /> },
-  { path: '/readings/no_dials', label: 'nodials', icon: <Gauge size={17} /> },
-  { path: '/readings/not_sure', label: 'unsure', icon: <CircleHelp size={17} /> },
-];
-
-function leafActive(pathname: string, path: string): boolean {
-  if (path === '/') return pathname === '/';
+function navLeafActive(pathname: string, search: string, item: NavLeaf): boolean {
+  if (item.path === '/') return pathname === '/';
   if (pathname.startsWith('/reading/')) return false;
-  return pathname === path;
+  if (pathname !== item.path) return false;
+  if (!item.activeWhenSearch) return true;
+  const sp = new URLSearchParams(search);
+  for (const [k, v] of Object.entries(item.activeWhenSearch)) {
+    if (sp.get(k) !== v) return false;
+  }
+  return true;
 }
 
-function anyLeafActive(pathname: string, leaves: NavLeaf[]): boolean {
-  return leaves.some((l) => leafActive(pathname, l.path));
+function anyNavLeafActive(pathname: string, search: string, leaves: NavLeaf[]): boolean {
+  return leaves.some((l) => navLeafActive(pathname, search, l));
 }
 
-function pathIsReadings(pathname: string): boolean {
-  return pathname.startsWith('/readings') || pathname.startsWith('/reading/');
-}
-
-const STORAGE_MORE = 'portal_nav_more_open';
 const STORAGE_ACCOUNT = 'portal_nav_account_open';
 const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
@@ -82,15 +79,6 @@ const PortalLayout: FC = () => {
 
   const [workMode, setWorkMode] = useState<PortalWorkMode>(() => getStoredPortalWorkMode());
 
-  const [moreOpen, setMoreOpen] = useState(() => {
-    try {
-      const v = localStorage.getItem(STORAGE_MORE);
-      if (v === '0' || v === '1') return v === '1';
-    } catch {
-      /* ignore */
-    }
-    return false;
-  });
   const [accountOpen, setAccountOpen] = useState(() => {
     try {
       const v = localStorage.getItem(STORAGE_ACCOUNT);
@@ -107,67 +95,94 @@ const PortalLayout: FC = () => {
     setStoredPortalWorkMode(next);
   }, []);
 
-  const { mainLinks, moreLinks, modeHint } = useMemo(() => {
+  const { mainLinks, moreLinks, modeHint } = useMemo((): {
+    mainLinks: NavLeaf[];
+    moreLinks: NavLeaf[];
+    modeHint: string;
+  } => {
     const dash: NavLeaf = { path: '/', label: 'Home', icon: <LayoutDashboard size={17} /> };
 
     if (workMode === 'reviewer') {
       return {
-        modeHint: 'Review photos and move sessions between queues.',
+        modeHint: 'Awaiting review = not human-reviewed yet (app flag coming). Other lists = reviewed outcomes. Logo = dashboard.',
         mainLinks: [
-          dash,
+          {
+            ...dash,
+            label: 'Dashboard',
+            description: 'Charts & KPIs',
+            hint: 'Session counts, trends, exports',
+          },
           {
             path: '/readings/incorrect_new',
-            label: 'new',
+            label: 'Awaiting review',
+            description: 'New captures, not reviewed',
+            hint: 'Same folder as today; iOS will set is_human_reviewed when ready',
             icon: <Inbox size={17} strokeWidth={2} />,
           },
           {
             path: '/readings/incorrect-queues',
-            label: 'wrong',
+            label: 'Wrong (reviewed)',
+            description: 'Incorrect pipeline',
+            hint: 'Analyzed → labeled → training and related wrong queues',
             icon: <ListTree size={17} />,
           },
           {
             path: '/readings/correct',
-            label: 'correct',
+            label: 'Correct',
+            description: 'Reviewed · good read',
+            hint: statusLabels.correct,
             icon: <CheckCircle2 size={17} />,
           },
         ],
         moreLinks: [
-          { path: '/uploads', label: 'uploads', icon: <Upload size={17} /> },
-          { path: '/usage', label: 'usage', icon: <Users size={17} /> },
-          { path: '/models', label: 'models', icon: <Cpu size={17} /> },
+          {
+            path: '/usage',
+            label: 'Usage',
+            description: 'Sessions by day',
+            icon: <Users size={17} />,
+          },
+          {
+            path: '/models',
+            label: 'Models',
+            description: 'App / version mix',
+            icon: <Cpu size={17} />,
+          },
         ],
       };
     }
 
     return {
-      modeHint: 'Sidebar: Training only. Open lists from a pipeline (add images). Logo → dashboard.',
+      modeHint: 'Training hub = all pipelines. Reviewer recommended opens the list with picks only. Logo = overview.',
       mainLinks: [
-        dash,
         {
-          path: '/readings/incorrect_labeled',
-          label: 'labeled',
-          icon: <ClipboardList size={17} />,
+          ...dash,
+          label: 'Overview',
+          description: 'Dashboard · KPIs',
+          hint: 'Charts and counts',
         },
         {
-          path: '/readings/incorrect_training',
-          label: 'train',
-          icon: <BarChart3 size={17} />,
+          path: '/readings/all',
+          to: '/readings/all?cohort=recommended',
+          label: 'Reviewer recommended',
+          description: 'Flagged for training',
+          hint: 'Sessions where reviewer_recommend_training is true',
+          icon: <Sparkles size={17} strokeWidth={2} />,
+          activeWhenSearch: { cohort: 'recommended' },
         },
-        {
-          path: '/readings/incorrect_new',
-          label: 'new',
-          icon: <Inbox size={17} strokeWidth={2} />,
-        },
-        { path: '/uploads', label: 'uploads', icon: <Upload size={17} /> },
       ],
       moreLinks: [
         {
-          path: '/readings/incorrect-queues',
-          label: 'wrong',
-          icon: <ListTree size={17} />,
+          path: '/models',
+          label: 'Model data',
+          description: 'App versions & mix',
+          icon: <Cpu size={17} />,
         },
-        { path: '/usage', label: 'usage', icon: <Users size={17} /> },
-        { path: '/models', label: 'models', icon: <Cpu size={17} /> },
+        {
+          path: '/usage',
+          label: 'Usage',
+          description: 'Sessions by day',
+          icon: <Users size={17} />,
+        },
       ],
     };
   }, [workMode]);
@@ -175,35 +190,18 @@ const PortalLayout: FC = () => {
   const accountLinks = useMemo(
     () =>
       [
-        { path: '/activity', label: 'log', icon: <History size={17} /> },
-        { path: '/mfa', label: 'sign-in', icon: <Shield size={17} />, requiresFirebase: true },
+        { path: '/activity', label: 'Activity log', icon: <History size={17} /> },
+        { path: '/mfa', label: 'Sign-in & MFA', icon: <Shield size={17} />, requiresFirebase: true },
       ].filter((l) => !(l.requiresFirebase && !user)) as NavLeaf[],
     [user],
   );
 
-  const moreHasQueues = workMode === 'reviewer';
-  const moreHasActive =
-    anyLeafActive(pathname, moreLinks) ||
-    (moreHasQueues && anyLeafActive(pathname, STATUS_QUEUES)) ||
-    (moreHasQueues && pathIsReadings(pathname) && !anyLeafActive(pathname, mainLinks));
-  const accountHasActive = anyLeafActive(pathname, accountLinks);
+  const accountHasActive = anyNavLeafActive(pathname, location.search, accountLinks);
   const trainingNavActive = pathname.startsWith('/training');
-
-  useEffect(() => {
-    if (moreHasActive) setMoreOpen(true);
-  }, [moreHasActive, pathname]);
 
   useEffect(() => {
     if (accountHasActive) setAccountOpen(true);
   }, [accountHasActive, pathname]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_MORE, moreOpen ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [moreOpen]);
 
   useEffect(() => {
     try {
@@ -245,27 +243,28 @@ const PortalLayout: FC = () => {
   );
 
   const renderLeaf = (item: NavLeaf) => {
-    const active = leafActive(pathname, item.path);
+    const active = navLeafActive(pathname, location.search, item);
+    const dest = item.to ?? item.path;
     return (
-      <li key={item.path}>
+      <li key={dest}>
         <button
           type="button"
           className={`portal-nav-leaf${active ? ' portal-nav-leaf--active' : ''}`}
-          onClick={() => goNav(item.path)}
+          onClick={() => goNav(dest)}
           aria-current={active ? 'page' : undefined}
+          title={item.hint}
         >
           <span className="portal-nav-leaf-icon" aria-hidden>
             {item.icon}
           </span>
           <span className="portal-nav-leaf-body">
             <span className="portal-nav-leaf-label">{item.label}</span>
+            {item.description ? <span className="portal-nav-leaf-desc">{item.description}</span> : null}
           </span>
         </button>
       </li>
     );
   };
-
-  const mainAfterDash = mainLinks.filter((l) => l.path !== '/');
 
   return (
     <div
@@ -284,7 +283,7 @@ const PortalLayout: FC = () => {
 
       <aside className="portal-sidebar" aria-label="Main navigation">
         <div className="portal-sidebar-header">
-          <button type="button" className="portal-sidebar-brand" onClick={() => goNav('/')} aria-label="Go to home page">
+          <button type="button" className="portal-sidebar-brand" onClick={() => goNav('/')} aria-label="Go to dashboard">
             <div className="portal-sidebar-logo" aria-hidden>
               <Gauge size={21} strokeWidth={1.85} />
             </div>
@@ -311,102 +310,89 @@ const PortalLayout: FC = () => {
           </div>
 
           {workMode === 'labeler' ? (
-            <div className="portal-nav-block">
-              <button
-                type="button"
-                className={`portal-nav-primary${trainingNavActive ? ' portal-nav-primary--active' : ''}`}
-                onClick={() => goNav('/training')}
-                aria-current={trainingNavActive ? 'page' : undefined}
-              >
-                <GraduationCap size={18} strokeWidth={2} aria-hidden />
-                <span>Training</span>
-              </button>
-            </div>
-          ) : (
             <>
               <div className="portal-nav-block">
                 <button
                   type="button"
-                  className={`portal-nav-primary${pathname === '/' ? ' portal-nav-primary--active' : ''}`}
-                  onClick={() => goNav('/')}
-                  aria-current={pathname === '/' ? 'page' : undefined}
+                  className={`portal-nav-primary${trainingNavActive ? ' portal-nav-primary--active' : ''}`}
+                  onClick={() => goNav('/training')}
+                  aria-current={trainingNavActive ? 'page' : undefined}
                 >
-                  <LayoutDashboard size={18} strokeWidth={2} aria-hidden />
-                  <span>Home</span>
+                  <span className="portal-nav-primary-row">
+                    <GraduationCap size={18} strokeWidth={2} aria-hidden />
+                    <span className="portal-nav-primary-label">Training</span>
+                  </span>
+                  <span className="portal-nav-primary-note">All pipelines · copy · ZIP · weights</span>
                 </button>
               </div>
 
-              <div className="portal-nav-divider" role="presentation" />
-
-              <ul className="portal-nav-nested portal-nav-nested--tight">{mainAfterDash.map((item) => renderLeaf(item))}</ul>
-
-              <div className={`portal-nav-disclosure${moreHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
-                <button
-                  type="button"
-                  id="portal-disclosure-more"
-                  className="portal-nav-disclosure-trigger"
-                  aria-expanded={moreOpen}
-                  aria-controls="portal-disclosure-more-panel"
-                  onClick={() => setMoreOpen((o) => !o)}
-                >
-                  <span className="portal-nav-disclosure-title">
-                    <span className="portal-nav-disclosure-heading">more</span>
-                    <span className="portal-nav-disclosure-hint">extra folders</span>
-                  </span>
-                  <ChevronDown
-                    size={16}
-                    className={`portal-nav-disclosure-chevron${moreOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                    aria-hidden
-                  />
-                </button>
-                {moreOpen ? (
-                  <div id="portal-disclosure-more-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-more">
-                    <ul className="portal-nav-nested portal-nav-nested--tight">{moreLinks.map((item) => renderLeaf(item))}</ul>
-                    {moreHasQueues ? (
-                      <>
-                        <div className="portal-nav-sublabel">by-status</div>
-                        <ul className="portal-nav-nested">{STATUS_QUEUES.map((item) => renderLeaf(item))}</ul>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
+              <div className="portal-nav-section">
+                <div className="portal-nav-section-head">
+                  <span className="portal-nav-section-title">Training</span>
+                  <span className="portal-nav-section-sub">Overview &amp; reviewer picks</span>
+                </div>
+                <ul className="portal-nav-nested portal-nav-nested--sections">
+                  {mainLinks.map((item) => renderLeaf(item))}
+                </ul>
               </div>
-            </>
-          )}
 
-          {workMode !== 'labeler' ? (
-            <>
-              <div className="portal-nav-spacer" aria-hidden />
-
-              <div className={`portal-nav-disclosure portal-nav-disclosure--footer${accountHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
-                <button
-                  type="button"
-                  id="portal-disclosure-account"
-                  className="portal-nav-disclosure-trigger"
-                  aria-expanded={accountOpen}
-                  aria-controls="portal-disclosure-account-panel"
-                  onClick={() => setAccountOpen((o) => !o)}
-                >
-                  <span className="portal-nav-disclosure-title">
-                    <span className="portal-nav-disclosure-heading">account</span>
-                    <span className="portal-nav-disclosure-hint">log · sign-in</span>
-                  </span>
-                  <ChevronDown
-                    size={16}
-                    className={`portal-nav-disclosure-chevron${accountOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                    aria-hidden
-                  />
-                </button>
-                {accountOpen ? (
-                  <div id="portal-disclosure-account-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-account">
-                    <ul className="portal-nav-nested">{accountLinks.map((item) => renderLeaf(item))}</ul>
-                  </div>
-                ) : null}
+              <div className="portal-nav-section">
+                <div className="portal-nav-section-head">
+                  <span className="portal-nav-section-title">Data</span>
+                  <span className="portal-nav-section-sub">Models &amp; usage</span>
+                </div>
+                <ul className="portal-nav-nested portal-nav-nested--sections">
+                  {moreLinks.map((item) => renderLeaf(item))}
+                </ul>
               </div>
             </>
           ) : (
-            <div className="portal-nav-spacer" aria-hidden />
+            <>
+              <div className="portal-nav-section">
+                <div className="portal-nav-section-head">
+                  <span className="portal-nav-section-title">Review</span>
+                  <span className="portal-nav-section-sub">See new captures, then reviewed outcomes</span>
+                </div>
+                <ul className="portal-nav-nested portal-nav-nested--sections">{mainLinks.map((item) => renderLeaf(item))}</ul>
+              </div>
+
+              <div className="portal-nav-section">
+                <div className="portal-nav-section-head">
+                  <span className="portal-nav-section-title">Tools</span>
+                  <span className="portal-nav-section-sub">Usage &amp; models</span>
+                </div>
+                <ul className="portal-nav-nested portal-nav-nested--sections">{moreLinks.map((item) => renderLeaf(item))}</ul>
+              </div>
+            </>
           )}
+
+          <div className="portal-nav-spacer" aria-hidden />
+
+          <div className={`portal-nav-disclosure portal-nav-disclosure--footer${accountHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
+            <button
+              type="button"
+              id="portal-disclosure-account"
+              className="portal-nav-disclosure-trigger"
+              aria-expanded={accountOpen}
+              aria-controls="portal-disclosure-account-panel"
+              onClick={() => setAccountOpen((o) => !o)}
+            >
+              <span className="portal-nav-disclosure-title">
+                <span className="portal-nav-disclosure-heading">Account</span>
+                <span className="portal-nav-disclosure-hint">Activity log · MFA</span>
+              </span>
+              <ChevronDown
+                size={16}
+                className={`portal-nav-disclosure-chevron${accountOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
+                aria-hidden
+              />
+            </button>
+            {accountOpen ? (
+              <div id="portal-disclosure-account-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-account">
+                <ul className="portal-nav-nested">{accountLinks.map((item) => renderLeaf(item))}</ul>
+              </div>
+            ) : null}
+          </div>
         </nav>
 
         <div className="portal-sidebar-footer">

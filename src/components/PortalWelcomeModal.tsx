@@ -7,7 +7,10 @@ const WELCOME_NEVER_KEY = 'meter_portal_welcome_never_v1';
 
 const GLOSSARY: { status: ReadingStatus; hint: string }[] = [
   { status: 'correct', hint: 'The capture is treated as a good reading for this session (agreement / accepted outcome).' },
-  { status: 'incorrect_new', hint: 'Flagged incorrect from the field app; new in the review queue — next step is triage or analysis.' },
+  {
+    status: 'incorrect_new',
+    hint: 'List for captures not yet human-reviewed (iOS will set is_human_reviewed). Same storage folder as today until the app ships the flag.',
+  },
   { status: 'incorrect_analyzed', hint: 'Someone has reviewed diagnostics (e.g. model vs user); use this to track deeper review.' },
   { status: 'incorrect_labeled', hint: 'Ground truth or labels are applied so the session can be used as training input.' },
   { status: 'incorrect_training', hint: 'Marked as included in or ready for the training dataset pipeline.' },
@@ -79,7 +82,7 @@ const PortalWelcomeModal: React.FC = () => {
             <ul className="portal-welcome-list">
               <li>Lists meter sessions from cloud storage by <strong>work type</strong> and <strong>source</strong> (field vs simulator).</li>
               <li>Lets you open a session, inspect images and metadata, and <strong>change status</strong> — which moves the session folder in storage to match your workflow.</li>
-              <li><strong>Reviewer</strong> mode focuses on opening sessions and moving queues. <strong>Labeler</strong> mode adds <strong>Training</strong>: pipelines in S3, copy selected rows into a pipeline folder, then download a dataset ZIP; you can also zip a single session from the reading detail page (images + <code>metadata.json</code>).</li>
+              <li><strong>Reviewer</strong> mode: queues, outcomes, and corrections per session; optionally <strong>Recommend for training</strong> (saved in metadata). <strong>Labeler</strong> mode adds <strong>Training</strong> (pipelines, copy into folders, ZIP) and can filter lists with <strong>Reviewer picks only</strong>.</li>
               <li>The <strong>Models</strong> page summarizes app/model versions and session mix for comparing generations over time.</li>
               <li><strong>Usage</strong> shows sessions, image counts, and distinct users per day from the same S3 metadata (until Dynamo backs it).</li>
             </ul>

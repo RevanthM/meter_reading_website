@@ -326,6 +326,13 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       feedbackType: metadata.feedback_type || '',
       /** iOS `AppConfig.appVersion` — use to compare on-device model generations. */
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
+      reviewerRecommendTraining: metadata.reviewer_recommend_training === true,
+      /** iOS will set when human review is recorded (`is_human_reviewed` in metadata.json). */
+      isHumanReviewed: metadata.is_human_reviewed === true,
+      portalMetadataUpdatedBy:
+        typeof metadata.portal_metadata_updated_by === 'string' && metadata.portal_metadata_updated_by.trim() !== ''
+          ? String(metadata.portal_metadata_updated_by).trim().slice(0, 320)
+          : undefined,
       comments:
         metadata.portal_review_notes != null && metadata.portal_review_notes !== ''
           ? String(metadata.portal_review_notes)
@@ -806,6 +813,7 @@ const METADATA_PATCHABLE = new Set([
   'is_correct',
   'condition_code',
   'portal_review_notes',
+  'reviewer_recommend_training',
   'confidence',
   'processing_time_ms',
 ]);
@@ -935,6 +943,13 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         return res.status(400).json({ error: 'portal_review_notes too long (max 8000)' });
       }
       meta.portal_review_notes = patch.portal_review_notes;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'reviewer_recommend_training')) {
+      if (typeof patch.reviewer_recommend_training !== 'boolean') {
+        return res.status(400).json({ error: 'reviewer_recommend_training must be boolean' });
+      }
+      meta.reviewer_recommend_training = patch.reviewer_recommend_training;
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'confidence')) {
@@ -1190,6 +1205,120 @@ async function listTrainingDatasetSessionPrefixes(folderPrefix, maxPrefixes) {
     token = out.NextContinuationToken;
   }
   return prefixes;
+}
+
+/** Incorrect-queue statuses we advance when `weights.pt` is uploaded (not correct / no_dials / not_sure). */
+const WEIGHTS_PROMOTE_FROM_STATUSES = new Set(['incorrect_new', 'incorrect_analyzed', 'incorrect_labeled']);
+
+function trainingWeightsAutoPromoteSessionsEnabled() {
+  const v = String(process.env.TRAINING_WEIGHTS_AUTO_PROMOTE_SESSIONS ?? '1').trim().toLowerCase();
+  return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off';
+}
+
+async function collectTrainingDatasetSessionIdsForWeightsPromotion(folderPrefix, manifest) {
+  const ids = new Set();
+  for (const id of Array.isArray(manifest.copiedSessionIds) ? manifest.copiedSessionIds : []) {
+    if (typeof id === 'string' && id.trim()) ids.add(id.trim());
+  }
+  try {
+    const prefixes = await listTrainingDatasetSessionPrefixes(folderPrefix, 500);
+    for (const pref of prefixes) {
+      const parts = String(pref || '')
+        .replace(/\/$/, '')
+        .split('/')
+        .filter(Boolean);
+      const sid = parts[parts.length - 1];
+      if (sid) ids.add(sid);
+    }
+  } catch (e) {
+    console.warn('collectTrainingDatasetSessionIdsForWeightsPromotion list:', e.message);
+  }
+  return [...ids];
+}
+
+/**
+ * After weights upload: move live S3 sessions that were copied into this pipeline to `incorrect_training`
+ * so labeler lists show them as trained / added-to-training (same queue as manual "train" stage).
+ */
+async function promoteSessionsToIncorrectTrainingAfterWeights(folderPrefix, manifest) {
+  const empty = {
+    enabled: true,
+    sessionCountConsidered: 0,
+    moved: 0,
+    skippedAlready: 0,
+    skippedNotInPipeline: 0,
+    notFound: 0,
+    moveFailed: 0,
+    movedSessions: [],
+  };
+  if (!trainingWeightsAutoPromoteSessionsEnabled()) {
+    return { ...empty, enabled: false, movedSessions: [] };
+  }
+
+  const sessionIds = await collectTrainingDatasetSessionIdsForWeightsPromotion(folderPrefix, manifest);
+  if (sessionIds.length === 0) {
+    return { ...empty, sessionCountConsidered: 0, movedSessions: [] };
+  }
+
+  const want = new Set(sessionIds);
+  const idToReading = new Map();
+  for (const wt of WORK_TYPES) {
+    const list = await getAllReadings('all', wt);
+    for (const r of list) {
+      if (want.has(r.id) && !idToReading.has(r.id)) idToReading.set(r.id, r);
+    }
+    if (idToReading.size === want.size) break;
+  }
+
+  let moved = 0;
+  let skippedAlready = 0;
+  let skippedNotInPipeline = 0;
+  let notFound = 0;
+  let moveFailed = 0;
+  /** @type {{ sessionId: string, fromStatus: string, sourceType: string }[]} */
+  const movedSessions = [];
+
+  const CHUNK = 5;
+  for (let i = 0; i < sessionIds.length; i += CHUNK) {
+    const chunk = sessionIds.slice(i, i + CHUNK);
+    const outcomes = await Promise.all(
+      chunk.map(async (sessionId) => {
+        const reading = idToReading.get(sessionId);
+        if (!reading?.s3SessionPrefix) return { code: 'not_found' };
+        if (reading.status === 'incorrect_training') return { code: 'skipped_already' };
+        if (!WEIGHTS_PROMOTE_FROM_STATUSES.has(reading.status)) return { code: 'skipped_not_pipeline' };
+        const fromStatus = reading.status;
+        const sourceType = reading.type;
+        const ok = await moveSessionByS3Prefix(reading.s3SessionPrefix, reading.type, 'incorrect_training');
+        if (ok) return { code: 'moved', sessionId, fromStatus, sourceType };
+        return { code: 'move_failed' };
+      }),
+    );
+    for (const o of outcomes) {
+      if (o.code === 'moved') {
+        moved += 1;
+        movedSessions.push({
+          sessionId: o.sessionId,
+          fromStatus: o.fromStatus,
+          sourceType: o.sourceType,
+        });
+      } else if (o.code === 'skipped_already') skippedAlready += 1;
+      else if (o.code === 'skipped_not_pipeline') skippedNotInPipeline += 1;
+      else if (o.code === 'not_found') notFound += 1;
+      else if (o.code === 'move_failed') moveFailed += 1;
+    }
+  }
+
+  return {
+    enabled: true,
+    sessionCountConsidered: sessionIds.length,
+    moved,
+    skippedAlready,
+    skippedNotInPipeline,
+    notFound,
+    moveFailed,
+    movedSessions,
+  };
 }
 
 /**
@@ -1854,11 +1983,44 @@ app.post('/api/training-datasets/weights', weightsUploadMiddleware, async (req, 
       originalFileName: String(req.file.originalname || 'weights.pt').trim() || 'weights.pt',
       contentType,
     };
+
+    const sessionPromotion = await promoteSessionsToIncorrectTrainingAfterWeights(folderPrefix, manifest);
+    const { movedSessions, ...sessionPromotionForManifest } = sessionPromotion;
+    manifest.lastWeightsSessionPromotion = {
+      at: uploadedAt,
+      targetStatus: 'incorrect_training',
+      ...sessionPromotionForManifest,
+    };
+
     await writeTrainingDatasetManifest(folderPrefix, manifest);
+
+    if (sessionPromotion.enabled && sessionPromotion.moved > 0) {
+      invalidateCache();
+    }
+
+    const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
+    if (movedSessions.length > 0) {
+      await loadActivityLog();
+      const ts = new Date().toISOString();
+      for (const m of movedSessions) {
+        activityLog.unshift({
+          id: `${Date.now()}-${m.sessionId}-weights-promote`,
+          timestamp: ts,
+          userEmail: userEmail || 'unknown',
+          action: 'status_change',
+          sessionId: m.sessionId,
+          fromStatus: m.fromStatus,
+          toStatus: 'incorrect_training',
+          sourceType: m.sourceType,
+        });
+      }
+      await saveActivityLog();
+    }
 
     res.status(201).json({
       ok: true,
       weights: manifest.weights,
+      sessionPromotion: sessionPromotionForManifest,
     });
   } catch (e) {
     console.error('training-datasets weights POST:', e);
@@ -1973,69 +2135,79 @@ function filterReadingsForZipExport(readings, listStatus, dateIso, fromIso, toIs
   return sessions;
 }
 
-/** One folder in the zip per session: images + metadata.json (same layout as bulk incorrect export). */
-async function appendReadingSessionToArchive(archive, r) {
-  const safeId = String(r.id).replace(/[^a-zA-Z0-9._-]/g, '_');
-  const addedKeys = new Set();
-  const usedZipNames = new Set();
-
-  const uniqueZipPath = (baseName) => {
-    let name = `${safeId}/${baseName}`;
-    if (!usedZipNames.has(name)) {
-      usedZipNames.add(name);
-      return name;
+/** Allocate unique flat ZIP entry names (no subfolders). */
+function createFlatZipNameAllocator() {
+  const used = new Set();
+  return (wanted) => {
+    let name = wanted;
+    let n = 0;
+    while (used.has(name)) {
+      n += 1;
+      const dot = wanted.lastIndexOf('.');
+      if (dot > 0) {
+        name = `${wanted.slice(0, dot)}_${n}${wanted.slice(dot)}`;
+      } else {
+        name = `${wanted}_${n}`;
+      }
     }
-    const dot = baseName.lastIndexOf('.');
-    const stem = dot > 0 ? baseName.slice(0, dot) : baseName;
-    const ext = dot > 0 ? baseName.slice(dot) : '';
-    let n = 1;
-    while (usedZipNames.has(`${safeId}/${stem}_${n}${ext}`)) n += 1;
-    name = `${safeId}/${stem}_${n}${ext}`;
-    usedZipNames.add(name);
+    used.add(name);
     return name;
   };
+}
 
+/**
+ * Append raw full-frame meter images only (excludes dial_* crops) at ZIP root as `{sessionId}_{file}`.
+ * Same rule as training-dataset flat export / Roboflow-friendly layout.
+ */
+async function appendReadingSessionFlatRawImages(archive, r, allocFlatZipName) {
+  const safeId = String(r.id).replace(/[^a-zA-Z0-9._-]/g, '_') || 'session';
+  const addedKeys = new Set();
   for (const img of r.images || []) {
     const key = img.id;
     const fname = img.fileName || (key && key.split('/').pop()) || 'image.jpg';
-    if (!key || addedKeys.has(key)) continue;
+    if (!key || addedKeys.has(key) || !isTrainingDatasetRawImageKey(key)) continue;
     addedKeys.add(key);
     try {
       const obj = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
       if (obj.Body) {
         const buf = await streamToBuffer(obj.Body);
         if (buf && buf.length) {
-          archive.append(buf, { name: uniqueZipPath(fname) });
+          const stem = `${safeId}_${sanitizeTrainingZipFlatSegment(fname)}`;
+          const flatName = allocFlatZipName(stem);
+          archive.append(buf, { name: flatName });
         }
       }
     } catch (e) {
-      console.warn(`export zip skip image ${key}:`, e.message);
-    }
-  }
-
-  let metaKey = r.s3SessionPrefix ? `${r.s3SessionPrefix}metadata.json` : null;
-  if (!metaKey && r.images?.[0]?.id) {
-    const k = r.images[0].id;
-    const ix = k.lastIndexOf('/');
-    if (ix > 0) metaKey = `${k.slice(0, ix + 1)}metadata.json`;
-  }
-  if (metaKey && !addedKeys.has(metaKey)) {
-    try {
-      const obj = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
-      if (obj.Body) {
-        const buf = await streamToBuffer(obj.Body);
-        if (buf && buf.length) {
-          archive.append(buf, { name: uniqueZipPath('metadata.json') });
-        }
-      }
-    } catch (e) {
-      console.warn(`export zip skip metadata ${metaKey}:`, e.message);
+      console.warn(`flat retrain zip skip image ${key}:`, e.message);
     }
   }
 }
 
+function countFlatRawImagesInReading(r) {
+  let n = 0;
+  const seen = new Set();
+  for (const img of r.images || []) {
+    const key = img.id;
+    if (!key || seen.has(key) || !isTrainingDatasetRawImageKey(key)) continue;
+    seen.add(key);
+    n += 1;
+  }
+  return n;
+}
+
+function buildFlatRetrainDatasetManifest(fields) {
+  return {
+    schemaVersion: 1,
+    exportKind: 'flat-retrain-zip',
+    createdAt: new Date().toISOString(),
+    note:
+      'Flat ZIP for Roboflow / external training: raw full-frame images only (no dial_* crops, no per-session folders, no session metadata.json). Entry names are sessionId_filename.',
+    ...fields,
+  };
+}
+
 /**
- * ZIP a single session (images + metadata) for labeling / training tools.
+ * ZIP a single session: flat root, raw full-frame images only + dataset.json (Roboflow-friendly; no dial_* crops, no metadata.json).
  * Query: sessionId (required), workType (optional hint for faster lookup).
  */
 app.get('/api/export/session-retrain-zip', async (req, res) => {
@@ -2051,11 +2223,21 @@ app.get('/api/export/session-retrain-zip', async (req, res) => {
       return res.status(404).json({ error: 'Reading not found', sessionId });
     }
 
+    const rawCount = countFlatRawImagesInReading(reading);
+    if (rawCount === 0) {
+      return res.status(404).json({
+        error:
+          'No raw full-frame images to export for this session (only dial crops or empty). Need files such as original.jpg at session root.',
+        sessionId,
+      });
+    }
+
     const safeFile = String(reading.id).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const filename = `session-${safeFile}-${Date.now()}.zip`;
+    const filename = `session-flat-${safeFile}-${Date.now()}.zip`;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('X-Export-Session-Count', '1');
+    res.setHeader('X-Export-Raw-Image-Count', String(rawCount));
 
     const archive = archiver('zip', { zlib: { level: 6 } });
     archive.on('warning', (err) => console.warn('archiver warning:', err.message));
@@ -2065,7 +2247,15 @@ app.get('/api/export/session-retrain-zip', async (req, res) => {
     });
     archive.pipe(res);
 
-    await appendReadingSessionToArchive(archive, reading);
+    const allocFlatZipName = createFlatZipNameAllocator();
+    await appendReadingSessionFlatRawImages(archive, reading, allocFlatZipName);
+    const manifest = buildFlatRetrainDatasetManifest({
+      sessionId: reading.id,
+      workType: reading.workType || workTypeHint || undefined,
+      sessionCount: 1,
+      imageCount: rawCount,
+    });
+    archive.append(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), { name: 'dataset.json' });
     await archive.finalize();
   } catch (e) {
     console.error('session-retrain-zip:', e);
@@ -2076,8 +2266,8 @@ app.get('/api/export/session-retrain-zip', async (req, res) => {
 });
 
 /**
- * ZIP sessions matching a readings list view: workType, source, list status (and optional single-day filter).
- * One folder per session: images + metadata.json (same layout as incorrect bulk export).
+ * ZIP sessions matching a readings list view: flat root, raw full-frame images only + dataset.json (Roboflow-friendly).
+ * Excludes dial_* crops and session metadata.json. Filenames: sessionId_file.jpg at ZIP root.
  * Query: workType, source, listStatus (required), date (optional single day), from & to (optional inclusive range; ignored if date set).
  */
 app.get('/api/export/list-retrain-zip', async (req, res) => {
@@ -2125,6 +2315,24 @@ app.get('/api/export/list-retrain-zip', async (req, res) => {
     const truncated = sessions.slice(0, EXPORT_INCORRECT_MAX_SESSIONS);
     const truncatedFlag = sessions.length > truncated.length;
 
+    let totalRawImages = 0;
+    for (const r of truncated) {
+      totalRawImages += countFlatRawImagesInReading(r);
+    }
+    if (totalRawImages === 0) {
+      return res.status(404).json({
+        error:
+          'No raw full-frame images to export for this filter (sessions may only contain dial crops). Need captures such as original.jpg.',
+        workType,
+        source,
+        listStatus,
+        date: dateIso,
+        from: fromIso,
+        to: toIso,
+        appVersion: appVersionFilter,
+      });
+    }
+
     const safeSlug = String(listStatus).replace(/[^a-zA-Z0-9_-]/g, '_');
     let datePart = '';
     if (dateIso) datePart = `-${dateIso}`;
@@ -2137,11 +2345,12 @@ app.get('/api/export/list-retrain-zip', async (req, res) => {
     if (appVersionFilter) {
       appPart = `-${String(appVersionFilter).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     }
-    const filename = `sessions-${safeSlug}${datePart}${appPart}-${workType}-${source}-${Date.now()}.zip`;
+    const filename = `sessions-flat-${safeSlug}${datePart}${appPart}-${workType}-${source}-${Date.now()}.zip`;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('X-Export-Session-Count', String(truncated.length));
     res.setHeader('X-Export-Total-Found', String(sessions.length));
+    res.setHeader('X-Export-Raw-Image-Count', String(totalRawImages));
     if (truncatedFlag) res.setHeader('X-Export-Truncated', 'true');
 
     const archive = archiver('zip', { zlib: { level: 6 } });
@@ -2152,9 +2361,21 @@ app.get('/api/export/list-retrain-zip', async (req, res) => {
     });
     archive.pipe(res);
 
+    const allocFlatZipName = createFlatZipNameAllocator();
     for (const r of truncated) {
-      await appendReadingSessionToArchive(archive, r);
+      await appendReadingSessionFlatRawImages(archive, r, allocFlatZipName);
     }
+    const manifest = buildFlatRetrainDatasetManifest({
+      listStatus,
+      workType,
+      source,
+      sessionCount: truncated.length,
+      imageCount: totalRawImages,
+      ...(dateIso ? { date: dateIso } : {}),
+      ...(fromIso && toIso ? { from: fromIso, to: toIso } : {}),
+      ...(appVersionFilter ? { appVersion: appVersionFilter } : {}),
+    });
+    archive.append(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), { name: 'dataset.json' });
 
     await archive.finalize();
   } catch (e) {
@@ -2166,8 +2387,8 @@ app.get('/api/export/list-retrain-zip', async (req, res) => {
 });
 
 /**
- * ZIP all sessions in any incorrect_* queue (same slice as dashboard: workType + source).
- * Kept for backward compatibility; same output as list-retrain-zip?listStatus=incorrect-queues.
+ * Flat ZIP: all sessions in any incorrect_* queue (same slice as dashboard: workType + source).
+ * Same shape as list-retrain-zip?listStatus=incorrect-queues (raw photos + dataset.json at root).
  */
 app.get('/api/export/incorrect-retrain-zip', async (req, res) => {
   try {
@@ -2190,11 +2411,25 @@ app.get('/api/export/incorrect-retrain-zip', async (req, res) => {
     const truncated = sessions.slice(0, EXPORT_INCORRECT_MAX_SESSIONS);
     const truncatedFlag = sessions.length > truncated.length;
 
-    const filename = `incorrect-retrain-${workType}-${source}-${Date.now()}.zip`;
+    let totalRawImages = 0;
+    for (const r of truncated) {
+      totalRawImages += countFlatRawImagesInReading(r);
+    }
+    if (totalRawImages === 0) {
+      return res.status(404).json({
+        error:
+          'No raw full-frame images to export (sessions may only contain dial crops). Need captures such as original.jpg.',
+        workType,
+        source,
+      });
+    }
+
+    const filename = `incorrect-flat-${workType}-${source}-${Date.now()}.zip`;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('X-Export-Session-Count', String(truncated.length));
     res.setHeader('X-Export-Total-Found', String(sessions.length));
+    res.setHeader('X-Export-Raw-Image-Count', String(totalRawImages));
     if (truncatedFlag) res.setHeader('X-Export-Truncated', 'true');
 
     const archive = archiver('zip', { zlib: { level: 6 } });
@@ -2205,9 +2440,18 @@ app.get('/api/export/incorrect-retrain-zip', async (req, res) => {
     });
     archive.pipe(res);
 
+    const allocFlatZipName = createFlatZipNameAllocator();
     for (const r of truncated) {
-      await appendReadingSessionToArchive(archive, r);
+      await appendReadingSessionFlatRawImages(archive, r, allocFlatZipName);
     }
+    const manifest = buildFlatRetrainDatasetManifest({
+      listStatus: 'incorrect-queues',
+      workType,
+      source,
+      sessionCount: truncated.length,
+      imageCount: totalRawImages,
+    });
+    archive.append(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), { name: 'dataset.json' });
 
     await archive.finalize();
   } catch (e) {

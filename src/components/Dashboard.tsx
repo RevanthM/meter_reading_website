@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useReadings, type DataSource } from '../context/ReadingsContext';
 import {
   Gauge,
@@ -17,6 +17,8 @@ import {
   Download,
   Cpu,
   ExternalLink,
+  ClipboardCheck,
+  Inbox,
 } from 'lucide-react';
 import type { DashboardCounts, ReadingStatus, WorkType } from '../types';
 import { statusColors, statusLabels, workTypeLabels } from '../types';
@@ -26,6 +28,7 @@ import {
   type ModelVersionStats,
   type S3MeterReading,
 } from '../services/api';
+import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 
 const STATUS_DONUT_ORDER: ReadingStatus[] = [
   'correct',
@@ -794,6 +797,8 @@ const Dashboard: FC = () => {
   const rangeCounts = useMemo(() => deriveCountsFromReadings(rangeReadings), [rangeReadings]);
 
   const navigate = useNavigate();
+  const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
+  const isReviewerMode = outletCtx?.workMode !== 'labeler';
 
   const todayDrillIso = new Date().toISOString().split('T')[0];
   const todayHintDisplay = new Date(`${todayDrillIso}T12:00:00`).toLocaleDateString(undefined, {
@@ -921,7 +926,7 @@ const Dashboard: FC = () => {
                 className="export-incorrect-btn"
                 onClick={handleDownloadIncorrectZip}
                 disabled={zipExporting || !isUsingRealData}
-                title="ZIP incorrect-queue sessions for this work type and source"
+                title="Flat ZIP of incorrect-queue sessions (raw photos + dataset.json at root; Roboflow-friendly)"
               >
                 {zipExporting ? <Loader2 size={17} className="spin" /> : <Download size={17} />}
                 <span>{zipExporting ? 'ZIP…' : 'Export ZIP'}</span>
@@ -962,6 +967,31 @@ const Dashboard: FC = () => {
         </div>
       )}
 
+      {isReviewerMode ? (
+        <div className="dashboard-reviewer-strip" role="region" aria-label="Reviewer quick start">
+          <div className="dashboard-reviewer-strip-icon" aria-hidden>
+            <ClipboardCheck size={22} strokeWidth={2} />
+          </div>
+          <div className="dashboard-reviewer-strip-body">
+            <strong>Reviewer</strong>
+            <span className="dashboard-reviewer-strip-dash">—</span>
+            <span>
+              Open <strong>Awaiting review</strong> for captures that are <strong>not human-reviewed</strong> yet (the app
+              will set <code>is_human_reviewed</code> soon). Everything else is <strong>reviewed outcomes</strong> (wrong
+              pipeline, correct, etc.). Optional: <strong>Recommend for training</strong> for labelers.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="dashboard-reviewer-strip-cta"
+            onClick={() => navigate(`/readings/incorrect_new${getChartRangeSearchSuffix(chartRange)}`)}
+          >
+            <Inbox size={18} aria-hidden />
+            Awaiting review
+          </button>
+        </div>
+      ) : null}
+
       <main className="dashboard-content dashboard-content--visual">
         <section className="dashboard-section dashboard-section--glance dashboard-section--action-first">
           <div className="dashboard-section-head dashboard-section-head--range-top">
@@ -983,9 +1013,9 @@ const Dashboard: FC = () => {
           </div>
           <div className="dashboard-kpi-grid">
             <KpiMiniCard
-              label="Review first (new)"
+              label="Awaiting review"
               value={rangeCounts.incorrectNewCount.toLocaleString()}
-              hint="First-pass human labels"
+              hint="Not human-reviewed yet (folder unchanged today)"
               onClick={() => handleCardClick('incorrect_new')}
               variant="danger"
             />
