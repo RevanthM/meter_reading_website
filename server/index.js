@@ -1080,6 +1080,119 @@ async function copySessionIntoTrainingDataset(sourcePrefix, datasetFolderPrefix,
 }
 
 /**
+ * Raw / full-frame images under a copied session (same idea as uncropped captures for training).
+ * Excludes `dial_*` model crops and non-images — aligns preview with "raw" frames, not dial strips.
+ */
+function isTrainingDatasetRawImageKey(key) {
+  const name = (key.split('/').pop() || '').toLowerCase();
+  if (!/\.(jpe?g|png)$/i.test(name)) return false;
+  if (name === 'metadata.json') return false;
+  if (name.startsWith('dial_')) return false;
+  return true;
+}
+
+function countTrainingDatasetRawImageKeys(keys) {
+  return keys.filter(isTrainingDatasetRawImageKey).length;
+}
+
+/** Training ZIP: raw meter photos (same rule as session previews) + pipeline `dataset.json` only — no dial crops, metadata, or model/. */
+function shouldIncludeKeyInRawTrainingZipExport(rel, key) {
+  if (!rel || rel.endsWith('/')) return false;
+  if (rel.startsWith('model/')) return false;
+  if (rel === 'dataset.json') return true;
+  return isTrainingDatasetRawImageKey(key);
+}
+
+/** Safe single-segment filename for flat ZIP (no subfolders). */
+function sanitizeTrainingZipFlatSegment(s) {
+  return String(s || 'item')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 120) || 'item';
+}
+
+/**
+ * Flat layout: everything at ZIP root — `dataset.json` plus `{sessionId}_{imageFile}` for each raw frame
+ * (no `sessions/.../` tree).
+ */
+function flatZipEntryNameForTrainingExport(rel) {
+  if (rel === 'dataset.json') return 'dataset.json';
+  const parts = rel.split('/').filter(Boolean);
+  if (parts.length >= 3 && parts[0] === 'sessions') {
+    const sessionFolder = sanitizeTrainingZipFlatSegment(parts[1]);
+    const leaf = sanitizeTrainingZipFlatSegment(parts[parts.length - 1]);
+    return `${sessionFolder}_${leaf}`;
+  }
+  return sanitizeTrainingZipFlatSegment(parts.join('_'));
+}
+
+/** Thumbnail: raw images only; prefer original.jpg, then other full-frame files (never dial_*). */
+function pickTrainingSessionPreviewImageKey(keys) {
+  const imgs = keys.filter(isTrainingDatasetRawImageKey);
+  if (imgs.length === 0) return null;
+  const score = (k) => {
+    const name = (k.split('/').pop() || '').toLowerCase();
+    if (name === 'original.jpg') return 0;
+    return 1;
+  };
+  imgs.sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+  return imgs[0];
+}
+
+/** Lowercased display names for duplicate pipeline name checks. */
+async function existingTrainingDatasetDisplayNamesLowerCase() {
+  const root = getTrainingDatasetsRootPrefix();
+  const out = await s3Client.send(
+    new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      Prefix: root,
+      Delimiter: '/',
+      MaxKeys: 500,
+    }),
+  );
+  const set = new Set();
+  for (const cp of out.CommonPrefixes || []) {
+    if (!cp.Prefix) continue;
+    try {
+      const m = await readTrainingDatasetManifest(cp.Prefix);
+      if (typeof m.displayName === 'string' && m.displayName.trim()) {
+        set.add(m.displayName.trim().toLowerCase());
+      }
+    } catch {
+      /* manifest missing — skip */
+    }
+  }
+  return set;
+}
+
+/** List `…/sessions/{id}/` prefixes under a training dataset (bounded). */
+async function listTrainingDatasetSessionPrefixes(folderPrefix, maxPrefixes) {
+  const norm = folderPrefix.endsWith('/') ? folderPrefix : `${folderPrefix}/`;
+  const base = `${norm}sessions/`;
+  const prefixes = [];
+  let token;
+  const cap = Math.min(300, Math.max(1, maxPrefixes || 120));
+  for (;;) {
+    const out = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET_NAME,
+        Prefix: base,
+        Delimiter: '/',
+        MaxKeys: 500,
+        ContinuationToken: token,
+      }),
+    );
+    for (const cp of out.CommonPrefixes || []) {
+      if (cp.Prefix && prefixes.length < cap) prefixes.push(cp.Prefix);
+    }
+    if (!out.IsTruncated || prefixes.length >= cap) break;
+    token = out.NextContinuationToken;
+  }
+  return prefixes;
+}
+
+/**
  * Move a session when the client provides the exact S3 prefix (METR/s_correct/session/, etc.).
  */
 async function moveSessionByS3Prefix(s3SessionPrefix, sourceType, targetStatus) {
@@ -1385,6 +1498,12 @@ app.post('/api/training-datasets', async (req, res) => {
     if (!displayName || displayName.length > 200) {
       return res.status(400).json({ error: 'Name is required and must be 200 characters or less.' });
     }
+    const existingNames = await existingTrainingDatasetDisplayNamesLowerCase();
+    if (existingNames.has(displayName.toLowerCase())) {
+      return res.status(409).json({
+        error: `A pipeline named "${displayName}" already exists. Choose a different name.`,
+      });
+    }
     const slug = sanitizeDatasetSlug(displayName);
     const timestamp = Date.now();
     const folderSegment = `${slug}_${timestamp}`;
@@ -1398,7 +1517,7 @@ app.post('/api/training-datasets', async (req, res) => {
       folderPrefix,
       slug,
       timestamp,
-      note: 'Portal copies sessions via POST /api/training-datasets/copy-sessions; ZIP via GET /api/export/training-dataset-zip (excludes model/weights.pt); weights via POST /api/training-datasets/weights.',
+      note: 'Portal copies sessions via POST /api/training-datasets/copy-sessions; ZIP via GET /api/export/training-dataset-zip (flat root: raw images as sessionId_file.jpg + dataset.json; no sessions/ subfolders; excludes dial_* crops, metadata.json, model/); weights via POST /api/training-datasets/weights.',
     };
     await s3Client.send(
       new PutObjectCommand({
@@ -1620,6 +1739,65 @@ app.post('/api/training-datasets/copy-sessions', async (req, res) => {
   } catch (e) {
     console.error('training-datasets copy-sessions:', e);
     res.status(500).json({ error: e.message || 'Copy failed' });
+  }
+});
+
+/**
+ * Thumbnail preview for sessions copied under `{folderPrefix}sessions/{sessionId}/`.
+ * Query: folderPrefix (URL-encoded, same as other training APIs).
+ */
+app.get('/api/training-datasets/copied-sessions-preview', async (req, res) => {
+  try {
+    const raw = typeof req.query.folderPrefix === 'string' ? req.query.folderPrefix.trim() : '';
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    const folderPrefix = normalizeTrainingDatasetFolderPrefix(decoded);
+    if (!folderPrefix) {
+      return res.status(400).json({
+        error: 'folderPrefix query must be a training dataset folder under the configured root (URL-encoded).',
+      });
+    }
+
+    try {
+      await readTrainingDatasetManifest(folderPrefix);
+    } catch {
+      return res.status(404).json({ error: 'dataset.json not found for this folder.' });
+    }
+
+    const sessionPrefixes = await listTrainingDatasetSessionPrefixes(folderPrefix, 120);
+    const sessions = [];
+    const CONC = 8;
+    for (let i = 0; i < sessionPrefixes.length; i += CONC) {
+      const chunk = sessionPrefixes.slice(i, i + CONC);
+      const part = await Promise.all(
+        chunk.map(async (pref) => {
+          const r2 = await s3Client.send(
+            new ListObjectsV2Command({ Bucket: BUCKET_NAME, Prefix: pref, MaxKeys: 120 }),
+          );
+          const keys = (r2.Contents || []).map((c) => c.Key).filter(Boolean);
+          const pick = pickTrainingSessionPreviewImageKey(keys);
+          const parts = pref.replace(/\/$/, '').split('/');
+          const sessionId = parts[parts.length - 1] || 'session';
+          let thumbUrl = null;
+          if (pick) {
+            thumbUrl = await getSignedImageUrl(pick);
+          }
+          const imageCount = countTrainingDatasetRawImageKeys(keys);
+          return { sessionId, thumbUrl, imageCount };
+        }),
+      );
+      sessions.push(...part);
+    }
+
+    sessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+    res.json({ folderPrefix, sessions });
+  } catch (e) {
+    console.error('training-datasets copied-sessions-preview:', e);
+    res.status(500).json({ error: e.message || 'Preview failed' });
   }
 });
 
@@ -2041,7 +2219,9 @@ app.get('/api/export/incorrect-retrain-zip', async (req, res) => {
 });
 
 /**
- * ZIP everything under a training-dataset folder (sessions/* + dataset.json), same bucket.
+ * ZIP raw meter images for a training-dataset folder (no dial_* crops) plus `dataset.json` at the root.
+ * Archive has **no subfolders**: images are `{sessionId}_{filename}` at top level (Roboflow-friendly flat folder).
+ * Excludes metadata.json, model/, and other objects.
  * Query: folderPrefix (full S3 prefix, URL-encoded). Caps total objects via TRAINING_DATASET_EXPORT_MAX_OBJECTS.
  */
 app.get('/api/export/training-dataset-zip', async (req, res) => {
@@ -2061,6 +2241,11 @@ app.get('/api/export/training-dataset-zip', async (req, res) => {
     }
 
     let keys = await collectAllObjectKeysUnderPrefix(folderPrefix);
+    const baseLen = folderPrefix.length;
+    keys = keys.filter((key) => {
+      const rel = key.startsWith(folderPrefix) ? key.slice(baseLen) : key;
+      return shouldIncludeKeyInRawTrainingZipExport(rel, key);
+    });
     let truncated = false;
     if (keys.length > TRAINING_DATASET_EXPORT_MAX_OBJECTS) {
       keys = keys.slice(0, TRAINING_DATASET_EXPORT_MAX_OBJECTS);
@@ -2068,7 +2253,10 @@ app.get('/api/export/training-dataset-zip', async (req, res) => {
     }
 
     if (keys.length === 0) {
-      return res.status(404).json({ error: 'No objects under this training dataset prefix yet.' });
+      return res.status(404).json({
+        error:
+          'No raw meter images to export under this pipeline (need copied sessions with full-frame photos such as original.jpg, and dataset.json). Dial-only copies are excluded.',
+      });
     }
 
     const slug = folderPrefix
@@ -2091,18 +2279,33 @@ app.get('/api/export/training-dataset-zip', async (req, res) => {
     });
     archive.pipe(res);
 
-    const baseLen = folderPrefix.length;
+    const usedFlatZipNames = new Set();
+    const allocFlatZipName = (wanted) => {
+      let name = wanted;
+      let n = 0;
+      while (usedFlatZipNames.has(name)) {
+        n += 1;
+        const dot = wanted.lastIndexOf('.');
+        if (dot > 0) {
+          name = `${wanted.slice(0, dot)}_${n}${wanted.slice(dot)}`;
+        } else {
+          name = `${wanted}_${n}`;
+        }
+      }
+      usedFlatZipNames.add(name);
+      return name;
+    };
+
     for (const key of keys) {
       const rel = key.startsWith(folderPrefix) ? key.slice(baseLen) : key;
       if (!rel || rel.endsWith('/')) continue;
-      /** Large binary for mobile inference — keep out of labeling ZIPs; iOS uses manifest + signed URL or direct S3. */
-      if (rel.startsWith('model/')) continue;
       try {
         const obj = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
         if (obj.Body) {
           const buf = await streamToBuffer(obj.Body);
           if (buf && buf.length) {
-            archive.append(buf, { name: rel });
+            const flatName = allocFlatZipName(flatZipEntryNameForTrainingExport(rel));
+            archive.append(buf, { name: flatName });
           }
         }
       } catch (e) {
@@ -2155,8 +2358,19 @@ app.post('/api/auth/verify-email-link', async (req, res) => {
   }
 });
 
-app.get('/{*path}', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+/**
+ * SPA fallback — must not return HTML for `/api/*` or the client shows "API returned HTML instead of JSON"
+ * (e.g. old Node process without a newer route, or typo). Unknown API routes get JSON 404 instead.
+ */
+app.get('/{*path}', (req, res, next) => {
+  if (req.path === '/api' || req.path.startsWith('/api/')) {
+    return res.status(404).json({
+      error: `No API route for ${req.method} ${req.path}. Restart the Node server after updating so new endpoints are registered.`,
+    });
+  }
+  res.sendFile(path.join(__dirname, '../dist/index.html'), (err) => {
+    if (err) next(err);
+  });
 });
 
 app.listen(PORT, async () => {

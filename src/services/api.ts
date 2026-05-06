@@ -9,7 +9,7 @@ function parseJsonBody<T>(text: string, httpStatus: number): T {
   const trimmed = text.trim();
   if (trimmed.startsWith('<') || trimmed.startsWith('<!')) {
     throw new Error(
-      'API returned HTML instead of JSON — the request never reached the Node server (or it returned a web page). Run `npm run server` on port 3001 and use `npm run dev` so `/api` is proxied from Vite.',
+      'API returned HTML instead of JSON — usually the SPA index.html (Vite without a running API on 3001, or an old `npm run server` that does not include this route). Fix: stop and run `npm run server` on port 3001 from the project root, then use `npm run dev` and open the app on http://localhost:5173 (not file://). After `git pull`, always restart the Node server.',
     );
   }
   try {
@@ -422,6 +422,34 @@ export interface CopySessionsToTrainingDatasetResult {
   ok: boolean;
   copied: Array<{ sessionId: string; objectCount: number; destinationPrefix: string }>;
   errors: Array<{ sessionId: string; error: string }>;
+}
+
+export interface TrainingCopiedSessionPreview {
+  sessionId: string;
+  thumbUrl: string | null;
+  /** Count of raw/full-frame images in the session copy (excludes `dial_*` crops). */
+  imageCount: number;
+}
+
+export interface TrainingCopiedSessionsPreviewResponse {
+  folderPrefix: string;
+  sessions: TrainingCopiedSessionPreview[];
+}
+
+export async function fetchCopiedSessionsPreview(
+  folderPrefix: string,
+): Promise<TrainingCopiedSessionsPreviewResponse> {
+  const params = new URLSearchParams();
+  params.set('folderPrefix', folderPrefix);
+  const response = await fetch(
+    `${API_BASE_URL}/training-datasets/copied-sessions-preview?${params.toString()}`,
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<TrainingCopiedSessionsPreviewResponse>(text, response.status);
 }
 
 export async function copySessionsToTrainingDataset(

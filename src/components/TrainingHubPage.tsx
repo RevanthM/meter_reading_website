@@ -58,6 +58,12 @@ const TrainingHubPage: FC = () => {
       setCreateError('Name your pipeline first.');
       return;
     }
+    const lower = trimmed.toLowerCase();
+    const dup = rows.some((r) => !r.manifestMissing && r.displayName.trim().toLowerCase() === lower);
+    if (dup) {
+      setCreateError(`A pipeline named "${trimmed}" already exists. Use a different name.`);
+      return;
+    }
     setCreateError(null);
     setCreating(true);
     try {

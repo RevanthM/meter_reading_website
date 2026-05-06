@@ -32,6 +32,7 @@ import {
   fetchTrainingDatasets,
   copySessionsToTrainingDataset,
   type ListExportDateOpts,
+  type CopySessionsToTrainingDatasetResult,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { folderPrefixToSegment } from '../utils/trainingPipeline';
@@ -97,6 +98,7 @@ const ReadingsList: FC = () => {
   const [trainingFoldersLoading, setTrainingFoldersLoading] = useState(false);
   const [trainingFolderPrefix, setTrainingFolderPrefix] = useState('');
   const [copyingToTraining, setCopyingToTraining] = useState(false);
+  const [copyToTrainingProgress, setCopyToTrainingProgress] = useState<{ done: number; total: number } | null>(null);
   const [trainingCopyMessage, setTrainingCopyMessage] = useState<string | null>(null);
 
   const pipelineSeg = (searchParams.get('pipeline') || '').trim();
@@ -441,6 +443,7 @@ const ReadingsList: FC = () => {
     if (selectedIds.size === 0) return;
     setTrainingCopyMessage(null);
     setCopyingToTraining(true);
+    setCopyToTrainingProgress(null);
     try {
       const picked = readings.filter((r) => selectedIds.has(r.id));
       const sessions = picked.map((r) => ({
@@ -448,23 +451,31 @@ const ReadingsList: FC = () => {
         s3SessionPrefix: r.s3SessionPrefix,
         workType,
       }));
-      const res = await copySessionsToTrainingDataset(trainingFolderPrefix, sessions);
-      const ok = res.copied.length;
-      const bad = res.errors.length;
+      const allCopied: CopySessionsToTrainingDatasetResult['copied'] = [];
+      const allErrors: CopySessionsToTrainingDatasetResult['errors'] = [];
+      const total = sessions.length;
+      setCopyToTrainingProgress({ done: 0, total });
+      for (let i = 0; i < sessions.length; i++) {
+        const res = await copySessionsToTrainingDataset(trainingFolderPrefix, [sessions[i]]);
+        allCopied.push(...res.copied);
+        allErrors.push(...res.errors);
+        setCopyToTrainingProgress({ done: i + 1, total });
+      }
+      const ok = allCopied.length;
+      const bad = allErrors.length;
       setTrainingCopyMessage(
         bad
-          ? `Copied ${ok} session(s). ${bad} failed — check the alert for details.`
-          : `Copied ${ok} session(s) into the pipeline. Download ZIP from Training when ready.`,
+          ? `Copied ${ok} of ${total} session(s). ${bad} failed — check the alert for details.`
+          : `Copied ${ok} session(s) into the pipeline. Open the pipeline on Training to see thumbnails, or download ZIP when ready.`,
       );
       if (bad) {
-        window.alert(
-          res.errors.map((e) => `${e.sessionId}: ${e.error}`).join('\n'),
-        );
+        window.alert(allErrors.map((e) => `${e.sessionId}: ${e.error}`).join('\n'));
       }
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Copy to training dataset failed.');
     } finally {
       setCopyingToTraining(false);
+      setCopyToTrainingProgress(null);
     }
   }, [
     isUsingRealData,
@@ -789,7 +800,7 @@ const ReadingsList: FC = () => {
             </div>
           ) : null}
           {showTrainingCopy ? (
-            <>
+            <div className="bulk-training-block">
               <div className="bulk-action-bar-training">
                 <FolderInput size={18} className="bulk-training-icon" aria-hidden />
                 <span className="bulk-training-label">exports folder (copy only; list does not move):</span>
@@ -818,16 +829,45 @@ const ReadingsList: FC = () => {
                 >
                   {copyingToTraining ? (
                     <>
-                      <Loader2 size={18} className="spin" />
-                      <span>Copying…</span>
+                      <Loader2 size={18} className="spin" aria-hidden />
+                      <span>
+                        {copyToTrainingProgress && copyToTrainingProgress.total > 0
+                          ? `${Math.round((copyToTrainingProgress.done / copyToTrainingProgress.total) * 100)}%`
+                          : 'Copying…'}
+                      </span>
                     </>
                   ) : (
                     <span>copy into folder</span>
                   )}
                 </button>
               </div>
+              {copyingToTraining && copyToTrainingProgress && copyToTrainingProgress.total > 0 ? (
+                <div
+                  className="bulk-training-copy-progress"
+                  role="progressbar"
+                  aria-valuenow={Math.round(
+                    (copyToTrainingProgress.done / copyToTrainingProgress.total) * 100,
+                  )}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Copy to training folder progress"
+                >
+                  <div
+                    className="bulk-training-copy-progress-fill"
+                    style={{
+                      width: `${Math.round((copyToTrainingProgress.done / copyToTrainingProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              ) : null}
+              {copyingToTraining && copyToTrainingProgress && copyToTrainingProgress.total > 0 ? (
+                <p className="bulk-training-copy-progress-label" aria-live="polite">
+                  {copyToTrainingProgress.done} / {copyToTrainingProgress.total} sessions copied to folder (
+                  {Math.round((copyToTrainingProgress.done / copyToTrainingProgress.total) * 100)}%)
+                </p>
+              ) : null}
               {trainingCopyMessage ? <p className="bulk-training-message">{trainingCopyMessage}</p> : null}
-            </>
+            </div>
           ) : null}
         </div>
       )}

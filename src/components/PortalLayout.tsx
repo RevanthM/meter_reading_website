@@ -21,7 +21,6 @@ import {
   CircleHelp,
   ChevronDown,
   Inbox,
-  FolderOpen,
   GraduationCap,
   PanelLeft,
   PanelLeftClose,
@@ -29,8 +28,6 @@ import {
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { getStoredPortalWorkMode, setStoredPortalWorkMode } from '../utils/portalWorkMode';
-import { fetchTrainingDatasets } from '../services/api';
-import { folderPrefixToSegment, pipelineDetailPath } from '../utils/trainingPipeline';
 
 type NavLeaf = {
   path: string;
@@ -64,7 +61,6 @@ function pathIsReadings(pathname: string): boolean {
 
 const STORAGE_MORE = 'portal_nav_more_open';
 const STORAGE_ACCOUNT = 'portal_nav_account_open';
-const STORAGE_TRAINING_NAV = 'portal_nav_training_open';
 const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
 const PortalLayout: FC = () => {
@@ -105,19 +101,6 @@ const PortalLayout: FC = () => {
     return false;
   });
 
-  const [trainingNavOpen, setTrainingNavOpen] = useState(() => {
-    try {
-      const v = localStorage.getItem(STORAGE_TRAINING_NAV);
-      if (v === '0' || v === '1') return v === '1';
-    } catch {
-      /* ignore */
-    }
-    return true;
-  });
-  const [labelerPipelines, setLabelerPipelines] = useState<
-    { segment: string; displayName: string; path: string }[]
-  >([]);
-
   const onWorkModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value as PortalWorkMode;
     setWorkMode(next);
@@ -157,7 +140,7 @@ const PortalLayout: FC = () => {
     }
 
     return {
-      modeHint: 'Training: pipelines. Lists: pick rows, copy in, ZIP out.',
+      modeHint: 'Sidebar: Training only. Open lists from a pipeline (add images). Logo → dashboard.',
       mainLinks: [
         dash,
         {
@@ -204,45 +187,7 @@ const PortalLayout: FC = () => {
     (moreHasQueues && anyLeafActive(pathname, STATUS_QUEUES)) ||
     (moreHasQueues && pathIsReadings(pathname) && !anyLeafActive(pathname, mainLinks));
   const accountHasActive = anyLeafActive(pathname, accountLinks);
-  const trainingNavHasActive = pathname.startsWith('/training');
-
-  useEffect(() => {
-    if (trainingNavHasActive) setTrainingNavOpen(true);
-  }, [trainingNavHasActive]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_TRAINING_NAV, trainingNavOpen ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [trainingNavOpen]);
-
-  useEffect(() => {
-    if (workMode !== 'labeler') {
-      setLabelerPipelines([]);
-      return;
-    }
-    let cancelled = false;
-    void fetchTrainingDatasets()
-      .then((d) => {
-        if (cancelled) return;
-        setLabelerPipelines(
-          d.datasets
-            .filter((x) => !x.manifestMissing)
-            .map((r) => {
-              const seg = folderPrefixToSegment(r.folderPrefix);
-              return { segment: seg, displayName: r.displayName, path: pipelineDetailPath(seg) };
-            }),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setLabelerPipelines([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workMode, pathname]);
+  const trainingNavActive = pathname.startsWith('/training');
 
   useEffect(() => {
     if (moreHasActive) setMoreOpen(true);
@@ -365,155 +310,103 @@ const PortalLayout: FC = () => {
             <p className="portal-role-hint">{modeHint}</p>
           </div>
 
-          <div className="portal-nav-block">
-            <button
-              type="button"
-              className={`portal-nav-primary${pathname === '/' ? ' portal-nav-primary--active' : ''}`}
-              onClick={() => goNav('/')}
-              aria-current={pathname === '/' ? 'page' : undefined}
-            >
-              <LayoutDashboard size={18} strokeWidth={2} aria-hidden />
-              <span>Home</span>
-            </button>
-          </div>
-
-          <div className="portal-nav-divider" role="presentation" />
-
           {workMode === 'labeler' ? (
-            <div
-              className={`portal-nav-disclosure${trainingNavHasActive ? ' portal-nav-disclosure--child-active' : ''}`}
-            >
+            <div className="portal-nav-block">
               <button
                 type="button"
-                id="portal-disclosure-training"
-                className="portal-nav-disclosure-trigger"
-                aria-expanded={trainingNavOpen}
-                aria-controls="portal-disclosure-training-panel"
-                onClick={() => setTrainingNavOpen((o) => !o)}
+                className={`portal-nav-primary${trainingNavActive ? ' portal-nav-primary--active' : ''}`}
+                onClick={() => goNav('/training')}
+                aria-current={trainingNavActive ? 'page' : undefined}
               >
-                <span className="portal-nav-disclosure-title">
-                  <span className="portal-nav-disclosure-heading">training</span>
-                  <span className="portal-nav-disclosure-hint">pipelines</span>
-                </span>
-                <ChevronDown
-                  size={16}
-                  className={`portal-nav-disclosure-chevron${trainingNavOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                  aria-hidden
-                />
+                <GraduationCap size={18} strokeWidth={2} aria-hidden />
+                <span>Training</span>
               </button>
-              {trainingNavOpen ? (
-                <div
-                  id="portal-disclosure-training-panel"
-                  className="portal-nav-disclosure-panel"
-                  role="region"
-                  aria-labelledby="portal-disclosure-training"
-                >
-                  <ul className="portal-nav-nested portal-nav-nested--tight">
-                    <li>
-                      <button
-                        type="button"
-                        className={`portal-nav-leaf${pathname === '/training' ? ' portal-nav-leaf--active' : ''}`}
-                        onClick={() => goNav('/training')}
-                        aria-current={pathname === '/training' ? 'page' : undefined}
-                      >
-                        <span className="portal-nav-leaf-icon" aria-hidden>
-                          <GraduationCap size={17} />
-                        </span>
-                        <span className="portal-nav-leaf-body">
-                          <span className="portal-nav-leaf-label">list</span>
-                        </span>
-                      </button>
-                    </li>
-                    {labelerPipelines.map((p) => {
-                      const active = pathname === p.path;
-                      const short =
-                        p.displayName.length > 26 ? `${p.displayName.slice(0, 25)}…` : p.displayName;
-                      return (
-                        <li key={p.path}>
-                          <button
-                            type="button"
-                            className={`portal-nav-leaf${active ? ' portal-nav-leaf--active' : ''}`}
-                            onClick={() => goNav(p.path)}
-                            aria-current={active ? 'page' : undefined}
-                            title={p.displayName}
-                          >
-                            <span className="portal-nav-leaf-icon" aria-hidden>
-                              <FolderOpen size={17} />
-                            </span>
-                            <span className="portal-nav-leaf-body">
-                              <span className="portal-nav-leaf-label">{short}</span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ) : null}
             </div>
-          ) : null}
+          ) : (
+            <>
+              <div className="portal-nav-block">
+                <button
+                  type="button"
+                  className={`portal-nav-primary${pathname === '/' ? ' portal-nav-primary--active' : ''}`}
+                  onClick={() => goNav('/')}
+                  aria-current={pathname === '/' ? 'page' : undefined}
+                >
+                  <LayoutDashboard size={18} strokeWidth={2} aria-hidden />
+                  <span>Home</span>
+                </button>
+              </div>
 
-          <ul className="portal-nav-nested portal-nav-nested--tight">{mainAfterDash.map((item) => renderLeaf(item))}</ul>
+              <div className="portal-nav-divider" role="presentation" />
 
-          <div className={`portal-nav-disclosure${moreHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
-            <button
-              type="button"
-              id="portal-disclosure-more"
-              className="portal-nav-disclosure-trigger"
-              aria-expanded={moreOpen}
-              aria-controls="portal-disclosure-more-panel"
-              onClick={() => setMoreOpen((o) => !o)}
-            >
-              <span className="portal-nav-disclosure-title">
-                <span className="portal-nav-disclosure-heading">more</span>
-                <span className="portal-nav-disclosure-hint">extra folders</span>
-              </span>
-              <ChevronDown
-                size={16}
-                className={`portal-nav-disclosure-chevron${moreOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                aria-hidden
-              />
-            </button>
-            {moreOpen ? (
-              <div id="portal-disclosure-more-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-more">
-                <ul className="portal-nav-nested portal-nav-nested--tight">{moreLinks.map((item) => renderLeaf(item))}</ul>
-                {moreHasQueues ? (
-                  <>
-                    <div className="portal-nav-sublabel">by-status</div>
-                    <ul className="portal-nav-nested">{STATUS_QUEUES.map((item) => renderLeaf(item))}</ul>
-                  </>
+              <ul className="portal-nav-nested portal-nav-nested--tight">{mainAfterDash.map((item) => renderLeaf(item))}</ul>
+
+              <div className={`portal-nav-disclosure${moreHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
+                <button
+                  type="button"
+                  id="portal-disclosure-more"
+                  className="portal-nav-disclosure-trigger"
+                  aria-expanded={moreOpen}
+                  aria-controls="portal-disclosure-more-panel"
+                  onClick={() => setMoreOpen((o) => !o)}
+                >
+                  <span className="portal-nav-disclosure-title">
+                    <span className="portal-nav-disclosure-heading">more</span>
+                    <span className="portal-nav-disclosure-hint">extra folders</span>
+                  </span>
+                  <ChevronDown
+                    size={16}
+                    className={`portal-nav-disclosure-chevron${moreOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
+                    aria-hidden
+                  />
+                </button>
+                {moreOpen ? (
+                  <div id="portal-disclosure-more-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-more">
+                    <ul className="portal-nav-nested portal-nav-nested--tight">{moreLinks.map((item) => renderLeaf(item))}</ul>
+                    {moreHasQueues ? (
+                      <>
+                        <div className="portal-nav-sublabel">by-status</div>
+                        <ul className="portal-nav-nested">{STATUS_QUEUES.map((item) => renderLeaf(item))}</ul>
+                      </>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
-            ) : null}
-          </div>
+            </>
+          )}
 
-          <div className="portal-nav-spacer" aria-hidden />
+          {workMode !== 'labeler' ? (
+            <>
+              <div className="portal-nav-spacer" aria-hidden />
 
-          <div className={`portal-nav-disclosure portal-nav-disclosure--footer${accountHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
-            <button
-              type="button"
-              id="portal-disclosure-account"
-              className="portal-nav-disclosure-trigger"
-              aria-expanded={accountOpen}
-              aria-controls="portal-disclosure-account-panel"
-              onClick={() => setAccountOpen((o) => !o)}
-            >
-              <span className="portal-nav-disclosure-title">
-                <span className="portal-nav-disclosure-heading">account</span>
-                <span className="portal-nav-disclosure-hint">log · sign-in</span>
-              </span>
-              <ChevronDown
-                size={16}
-                className={`portal-nav-disclosure-chevron${accountOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                aria-hidden
-              />
-            </button>
-            {accountOpen ? (
-              <div id="portal-disclosure-account-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-account">
-                <ul className="portal-nav-nested">{accountLinks.map((item) => renderLeaf(item))}</ul>
+              <div className={`portal-nav-disclosure portal-nav-disclosure--footer${accountHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
+                <button
+                  type="button"
+                  id="portal-disclosure-account"
+                  className="portal-nav-disclosure-trigger"
+                  aria-expanded={accountOpen}
+                  aria-controls="portal-disclosure-account-panel"
+                  onClick={() => setAccountOpen((o) => !o)}
+                >
+                  <span className="portal-nav-disclosure-title">
+                    <span className="portal-nav-disclosure-heading">account</span>
+                    <span className="portal-nav-disclosure-hint">log · sign-in</span>
+                  </span>
+                  <ChevronDown
+                    size={16}
+                    className={`portal-nav-disclosure-chevron${accountOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
+                    aria-hidden
+                  />
+                </button>
+                {accountOpen ? (
+                  <div id="portal-disclosure-account-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-account">
+                    <ul className="portal-nav-nested">{accountLinks.map((item) => renderLeaf(item))}</ul>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </>
+          ) : (
+            <div className="portal-nav-spacer" aria-hidden />
+          )}
         </nav>
 
         <div className="portal-sidebar-footer">
