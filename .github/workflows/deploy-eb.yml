@@ -1,0 +1,113 @@
+name: Deploy to Elastic Beanstalk
+
+# Triggers:
+#   - push to main    -> deploys to meter-reading-prod
+#   - push to reetika -> deploys to meter-reading-dev
+#   - manual dispatch -> pick the env from a dropdown
+on:
+  push:
+    branches:
+      - main
+      - reetika
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Elastic Beanstalk environment to deploy to"
+        required: true
+        default: meter-reading-dev
+        type: choice
+        options:
+          - meter-reading-dev
+          - meter-reading-prod
+
+permissions:
+  contents: read
+
+concurrency:
+  # Don't run two deploys to the same EB env in parallel.
+  group: eb-deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  EB_APPLICATION: meter-reading-app
+  NODE_VERSION: "20"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Resolve target environment
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.target_env }}"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            ENV="meter-reading-prod"
+          elif [ "${{ github.ref }}" = "refs/heads/reetika" ]; then
+            ENV="meter-reading-dev"
+          else
+            echo "Unsupported ref ${{ github.ref }}" >&2
+            exit 1
+          fi
+          echo "env_name=$ENV" >> "$GITHUB_OUTPUT"
+          echo "Deploying to $ENV"
+
+      - name: Create deploy bundle
+        run: |
+          # Mirror .ebignore: exclude node_modules, git, env files, IDE/OS junk,
+          # and the workflow folder itself (not needed at runtime).
+          zip -r deploy.zip . \
+            -x "node_modules/*" \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".elasticbeanstalk/*" \
+            -x ".env" \
+            -x ".env.*" \
+            -x "src/.env" \
+            -x "*.log" \
+            -x ".DS_Store" \
+            -x "coverage/*" \
+            -x ".vscode/*" \
+            -x ".idea/*" \
+            -x "deploy.zip"
+          ls -lh deploy.zip
+
+      - name: Deploy to Elastic Beanstalk
+        uses: einaregilsson/beanstalk-deploy@v22
+        with:
+          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region: ${{ env.AWS_REGION }}
+          application_name: ${{ env.EB_APPLICATION }}
+          environment_name: ${{ steps.target.outputs.env_name }}
+          version_label: ${{ github.sha }}-${{ github.run_number }}
+          version_description: "${{ github.event.head_commit.message || github.event.inputs.target_env }} (${{ github.actor }})"
+          deployment_package: deploy.zip
+          wait_for_environment_recovery: 300
+
+      - name: Summary
+        run: |
+          echo "## Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Environment:** ${{ steps.target.outputs.env_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version label:** ${{ github.sha }}-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Triggered by:** ${{ github.actor }} (${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
