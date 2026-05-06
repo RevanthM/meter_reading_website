@@ -24,6 +24,8 @@ Authoritative fields for display and future DynamoDB sync (mirror these columns 
 | `feedback_type` | `correct`, `incorrect`, `not_sure`, `no_dials` (folder suffix alignment) |
 | `ml_prediction` / `ml_raw_prediction` | Model output |
 | `user_correction` | Ground truth when user said incorrect |
+| `portal_review_notes` | Optional reviewer notes (portal); shown as **Comments** on the reading detail page |
+| `portal_metadata_updated_at` / `portal_metadata_updated_by` | Set when the portal PATCHes `metadata.json` |
 | `dial_count`, `confidence`, `processing_time_ms`, `dial_details` | Model diagnostics |
 | `app_version` | iOS `AppConfig.appVersion` — group sessions in **Models** analytics to compare generations |
 
@@ -66,6 +68,7 @@ Roboflow integration stays **server-side** (API key in env). The portal can push
 - **`GET /api/readings`** — Query `source`, `workType` (portal code `1000`…`5000`). Returns readings with **`s3SessionPrefix`** when known.
 - **`GET /api/readings/:id`** — Optional `?workType=1000` tries that portal scope first (faster, uses cache), then falls back across all portal work types until the `session_id` is found.
 - **`POST /api/readings/bulk-move`** — Body entries may include **`s3SessionPrefix`**. When present, the server moves objects under that prefix to the target status folder (correct layout for `METR/…` and `1000/…`). When omitted, legacy root-only move logic is used.
+- **`PATCH /api/readings/:id/metadata`** — JSON body `{ workType?, s3SessionPrefix?, patch }` merges **allowlisted** fields into `{prefix}metadata.json` (e.g. `ml_prediction`, `user_correction`, `dial_details`, `portal_review_notes`, `is_correct`). Required header **`x-portal-work-mode: reviewer`** (labeller mode must not call this). Optional **`x-user-email`** sets `portal_metadata_updated_by`.
 - **`GET /api/model-analytics`** — Query `source`, `workType`. Returns per-`app_version` aggregates (session counts, queue rates, mean confidence / latency / dial count) for the **Models** page.
 - **`GET /api/export/incorrect-retrain-zip`** — Query `source`, `workType`. Streams a **ZIP** of every session in any **`incorrect_*`** queue: one folder per `session_id` with `original.jpg`, `dial_*.jpg`, and `metadata.json`. Optional env **`EXPORT_INCORRECT_MAX_SESSIONS`** (default 3000) caps count per request.
 

@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   Gauge,
   Upload,
-  Clock,
   CheckCircle,
   XCircle,
   HelpCircle,
@@ -20,7 +19,16 @@ import {
   Eye,
   BarChart3,
   Download,
+  Calendar,
 } from 'lucide-react';
+import type { ReadingStatus } from '../types';
+import { statusLabels, INCORRECT_PIPELINE_STATUSES, labelerPipelineStatusLabels } from '../types';
+import {
+  formatPresetLabel,
+  getDateRangeFromPreset,
+  isDateRangePresetId,
+  type DateRangePresetId,
+} from '../utils/dateRangePresets';
 
 interface UploadEntry {
   id: string;
@@ -38,6 +46,8 @@ interface UploadEntry {
 type OwnerFilter = 'all' | 'mine';
 type SourceFilter = 'all' | 'field' | 'simulator';
 type StatusFilter = 'all' | 'correct' | 'incorrect' | 'not_sure' | 'no_dials';
+type PipelineFilter = 'all' | ReadingStatus;
+type DatePresetFilter = 'all' | DateRangePresetId;
 type SortOption = 'newest' | 'oldest';
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string; icon: React.ReactNode; color: string }[] = [
@@ -57,6 +67,24 @@ function matchesStatus(upload: UploadEntry, filter: StatusFilter): boolean {
   return upload.status.startsWith('incorrect');
 }
 
+function matchesPipeline(upload: UploadEntry, pipeline: PipelineFilter): boolean {
+  if (pipeline === 'all') return true;
+  return upload.status === pipeline;
+}
+
+function matchesDatePreset(upload: UploadEntry, preset: DatePresetFilter): boolean {
+  if (preset === 'all') return true;
+  if (!isDateRangePresetId(preset)) return true;
+  const { from, to } = getDateRangeFromPreset(preset);
+  const day = (upload.timestamp || '').split('T')[0];
+  return Boolean(day && day >= from && day <= to);
+}
+
+function uploadStatusLabel(status: string): string {
+  if (status in statusLabels) return statusLabels[status as ReadingStatus];
+  return status;
+}
+
 const UploadsTable: React.FC = () => {
   const navigate = useNavigate();
   const { userEmail } = useAuth();
@@ -67,6 +95,8 @@ const UploadsTable: React.FC = () => {
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>('all');
+  const [datePreset, setDatePreset] = useState<DatePresetFilter>('all');
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -106,6 +136,8 @@ const UploadsTable: React.FC = () => {
     }
 
     result = result.filter(u => matchesStatus(u, statusFilter));
+    result = result.filter((u) => matchesPipeline(u, pipelineFilter));
+    result = result.filter((u) => matchesDatePreset(u, datePreset));
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -123,12 +155,14 @@ const UploadsTable: React.FC = () => {
     });
 
     return result;
-  }, [uploads, ownerFilter, sourceFilter, statusFilter, sortBy, searchQuery, userEmail]);
+  }, [uploads, ownerFilter, sourceFilter, statusFilter, pipelineFilter, datePreset, sortBy, searchQuery, userEmail]);
 
   const activeFilterCount = [
     ownerFilter !== 'all',
     sourceFilter !== 'all',
     statusFilter !== 'all',
+    pipelineFilter !== 'all',
+    datePreset !== 'all',
     searchQuery.trim() !== '',
   ].filter(Boolean).length;
 
@@ -146,6 +180,8 @@ const UploadsTable: React.FC = () => {
     setOwnerFilter('all');
     setSourceFilter('all');
     setStatusFilter('all');
+    setPipelineFilter('all');
+    setDatePreset('all');
     setSearchQuery('');
     setSortBy('newest');
   };
@@ -266,12 +302,48 @@ const UploadsTable: React.FC = () => {
             <div className="filter-group">
               <select
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value as StatusFilter);
+                  setPipelineFilter('all');
+                }}
                 className="filter-select"
               >
                 {STATUS_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
+              </select>
+            </div>
+
+            {/* Incorrect pipeline stage (when status is Incorrect) */}
+            <div className="filter-group">
+              <select
+                value={pipelineFilter}
+                onChange={(e) => setPipelineFilter(e.target.value as PipelineFilter)}
+                className="filter-select"
+                disabled={statusFilter !== 'incorrect'}
+                title={statusFilter !== 'incorrect' ? 'Choose Incorrect in Status first' : 'Pipeline stage'}
+              >
+                <option value="all">All incorrect stages</option>
+                {INCORRECT_PIPELINE_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {labelerPipelineStatusLabels[s as keyof typeof labelerPipelineStatusLabels]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Captured when */}
+            <div className="filter-group">
+              <select
+                value={datePreset}
+                onChange={(e) => setDatePreset(e.target.value as DatePresetFilter)}
+                className="filter-select"
+              >
+                <option value="all">Any date</option>
+                <option value="today">{formatPresetLabel('today')}</option>
+                <option value="yesterday">{formatPresetLabel('yesterday')}</option>
+                <option value="last7">{formatPresetLabel('last7')}</option>
+                <option value="last30">{formatPresetLabel('last30')}</option>
               </select>
             </div>
 
@@ -340,12 +412,12 @@ const UploadsTable: React.FC = () => {
               <thead>
                 <tr>
                   <th>Session</th>
-                  <th>Date</th>
-                  <th>User</th>
                   <th>Source</th>
                   <th>Images</th>
                   <th>Prediction</th>
                   <th>Status</th>
+                  <th>Date captured</th>
+                  <th>Captured by</th>
                   <th></th>
                 </tr>
               </thead>
@@ -356,18 +428,6 @@ const UploadsTable: React.FC = () => {
                       <span className="cell-with-icon">
                         <Upload size={14} className="cell-icon" />
                         <code>{upload.sessionId.slice(0, 12)}...</code>
-                      </span>
-                    </td>
-                    <td>
-                      <span className="cell-with-icon">
-                        <Clock size={14} className="cell-icon" />
-                        {new Date(upload.timestamp).toLocaleDateString()}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="cell-with-icon">
-                        <User size={14} className="cell-icon" />
-                        {upload.userEmail || 'Unknown'}
                       </span>
                     </td>
                     <td>
@@ -385,9 +445,37 @@ const UploadsTable: React.FC = () => {
                       <span className="meter-value">{upload.prediction}</span>
                     </td>
                     <td>
-                      <span className={`upload-status ${upload.status === 'correct' ? 'correct' : upload.status === 'not_sure' ? 'not-sure' : 'incorrect'}`}>
-                        {upload.status === 'correct' ? <CheckCircle size={14} /> : upload.status === 'not_sure' ? <HelpCircle size={14} /> : <XCircle size={14} />}
-                        {upload.status === 'correct' ? 'Correct' : upload.status === 'not_sure' ? 'Not Sure' : upload.status === 'no_dials' ? 'No Dials' : 'Incorrect'}
+                      <span className={`upload-status ${upload.status === 'correct' ? 'correct' : upload.status === 'not_sure' ? 'not-sure' : upload.status === 'no_dials' ? 'no-dials' : 'incorrect'}`}>
+                        {upload.status === 'correct' ? (
+                          <CheckCircle size={14} />
+                        ) : upload.status === 'not_sure' ? (
+                          <HelpCircle size={14} />
+                        ) : upload.status === 'no_dials' ? (
+                          <XCircle size={14} />
+                        ) : (
+                          <XCircle size={14} />
+                        )}
+                        <span className="upload-status-label">{uploadStatusLabel(upload.status)}</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span className="cell-with-icon">
+                        <Calendar size={14} className="cell-icon" />
+                        {new Date(upload.timestamp).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="cell-with-icon uploads-col-captured">
+                        <User size={14} className="cell-icon" />
+                        <span className="uploads-col-captured-text" title={upload.userEmail || undefined}>
+                          {upload.userEmail?.trim() ? upload.userEmail : '—'}
+                        </span>
                       </span>
                     </td>
                     <td>

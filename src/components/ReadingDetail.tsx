@@ -1,9 +1,16 @@
 import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
+import { useAuth } from '../context/AuthContext';
 import type { WorkType, MeterImage } from '../types';
 import type { ReadingStatus } from '../types';
-import { statusLabels, statusColors } from '../types';
+import {
+  statusLabels,
+  statusColors,
+  INCORRECT_PIPELINE_STATUSES,
+  labelerPipelineStatusLabels,
+  isIncorrectPipelineStatus,
+} from '../types';
 import type { S3MeterReading } from '../services/api';
 import {
   ArrowLeft,
@@ -24,10 +31,29 @@ import {
   Loader2,
   Download,
   Maximize2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { fetchReadingById, downloadSessionRetrainZip } from '../services/api';
+import {
+  fetchReadingById,
+  downloadSessionRetrainZip,
+  patchSessionMetadata,
+  type SessionMetadataPatch,
+} from '../services/api';
+import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 
 const PORTAL_WORK_TYPES: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
+
+export type ReadingDetailLocationState = {
+  readingQueueIds?: string[];
+};
+
+function statusIsIncorrect(status: ReadingStatus): boolean {
+  return status.startsWith('incorrect');
+}
+
+/** Synthetic `<select>` value so any incorrect_* maps to one "Incorrect" row for reviewers. */
+const REVIEWER_SELECT_INCORRECT = '__incorrect__' as const;
 
 function isDialCropImage(image: MeterImage): boolean {
   return typeof image.metadata.dialIndex === 'number';
@@ -70,6 +96,8 @@ type ReadingDetailImageCardProps = {
   onActivate: (imageId: string) => void;
   strip?: boolean;
 };
+
+type DialDetailRow = NonNullable<S3MeterReading['dialDetails']>[number];
 
 const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   image,
@@ -155,8 +183,14 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
 const ReadingDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { getReadingById, updateReadingStatus, updateReadingComments, workType: contextWorkType } = useReadings();
+  const { getReadingById, updateReadingStatus, updateReadingComments, refreshData, workType: contextWorkType } =
+    useReadings();
+  const { userEmail } = useAuth();
+  const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
+  const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
+  const isLabelerMode = portalWorkMode === 'labeler';
 
   const workTypeForApi = useMemo((): WorkType => {
     const q = searchParams.get('workType');
@@ -171,12 +205,38 @@ const ReadingDetail: React.FC = () => {
 
   const reading = directReading || contextReading;
 
+  const readingQueueIds = useMemo(() => {
+    const st = location.state as ReadingDetailLocationState | null;
+    return Array.isArray(st?.readingQueueIds) && st.readingQueueIds.length > 0 ? st.readingQueueIds : undefined;
+  }, [location.state]);
+
+  const queueIndex = useMemo(() => {
+    if (!reading?.id || !readingQueueIds?.length) return -1;
+    const ix = readingQueueIds.indexOf(reading.id);
+    return ix;
+  }, [reading?.id, readingQueueIds]);
+
+  const [mlPrediction, setMlPrediction] = useState('');
+  const [userCorrection, setUserCorrection] = useState('');
+  const [localDialRows, setLocalDialRows] = useState<DialDetailRow[]>([]);
+
+  const effectiveReading = useMemo((): S3MeterReading | null => {
+    if (!reading) return null;
+    if (isLabelerMode) return reading;
+    return {
+      ...reading,
+      dialDetails: localDialRows.length > 0 ? localDialRows : reading.dialDetails,
+      expectedValue: userCorrection || undefined,
+      meterValue: mlPrediction,
+    };
+  }, [reading, isLabelerMode, localDialRows, userCorrection, mlPrediction]);
+
   const imagePartition = useMemo(
     () =>
-      reading
-        ? partitionMeterImages(reading.images)
+      effectiveReading
+        ? partitionMeterImages(effectiveReading.images)
         : { fullMeter: undefined as MeterImage | undefined, dialImages: [] as MeterImage[], otherImages: [] as MeterImage[] },
-    [reading],
+    [effectiveReading],
   );
 
   const handleImageActivate = useCallback((imageId: string) => {
@@ -217,11 +277,264 @@ const ReadingDetail: React.FC = () => {
   }, [id, workTypeForApi]);
 
   useEffect(() => {
-    if (reading) {
-      setComments(reading.comments);
-      setSelectedStatus(reading.status);
+    if (!reading) return;
+    setComments(reading.comments || '');
+    setSelectedStatus(reading.status);
+    setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
+    setUserCorrection(reading.expectedValue != null ? String(reading.expectedValue) : '');
+    if (reading.dialDetails && reading.dialDetails.length > 0) {
+      setLocalDialRows(reading.dialDetails.map((d) => ({ ...d })));
+    } else {
+      setLocalDialRows([]);
     }
-  }, [reading]);
+  }, [
+    reading?.id,
+    reading?.status,
+    reading?.s3SessionPrefix,
+    reading?.meterValue,
+    reading?.expectedValue,
+    reading?.comments,
+    reading?.dialDetails,
+  ]);
+
+  const isDirty = useMemo(() => {
+    const r = directReading || contextReading;
+    if (!r) return false;
+    if (isLabelerMode) {
+      return selectedStatus !== r.status;
+    }
+    const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
+    const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
+    const baseComments = r.comments || '';
+    const baseDialStr = JSON.stringify(r.dialDetails || []);
+    const newDialStr = JSON.stringify(localDialRows);
+    return (
+      userCorrection !== baseExpected ||
+      mlPrediction !== baseMeter ||
+      newDialStr !== baseDialStr ||
+      comments !== baseComments ||
+      selectedStatus !== r.status
+    );
+  }, [
+    isLabelerMode,
+    directReading,
+    contextReading,
+    userCorrection,
+    mlPrediction,
+    localDialRows,
+    comments,
+    selectedStatus,
+  ]);
+
+  const performSaveAction = useCallback(async (): Promise<boolean> => {
+    const r = directReading || contextReading;
+    if (!r?.s3SessionPrefix) {
+      alert(
+        isLabelerMode
+          ? 'Missing S3 session prefix; cannot move this session.'
+          : 'Missing S3 session prefix; cannot save metadata.',
+      );
+      return false;
+    }
+
+    if (isLabelerMode) {
+      if (selectedStatus === r.status) return true;
+      if (!isIncorrectPipelineStatus(r.status)) {
+        alert(
+          'This session is not in the labeling pipeline yet. Switch to reviewer mode to set Correct, Incorrect, No dials, or Not sure.',
+        );
+        return false;
+      }
+      if (!isIncorrectPipelineStatus(selectedStatus)) {
+        alert('Choose a pipeline stage (new → analyzed → labeled → added to training dataset).');
+        return false;
+      }
+
+      setIsSaving(true);
+      try {
+        await updateReadingStatus(r.id, selectedStatus, r);
+        const latest = await fetchReadingById(r.id, workTypeForApi);
+        if (latest) {
+          setDirectReading(latest);
+          updateReadingComments(latest.id, latest.comments || '');
+          setSelectedStatus(latest.status);
+        }
+        await refreshData();
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 2000);
+        return true;
+      } catch (error) {
+        console.error('Failed to save pipeline stage:', error);
+        alert(error instanceof Error ? error.message : 'Save failed.');
+        return false;
+      } finally {
+        setIsSaving(false);
+      }
+    }
+
+    const snapshotForMove = r;
+    const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
+    const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
+    const baseComments = r.comments || '';
+    const baseDialStr = JSON.stringify(r.dialDetails || []);
+    const newDialStr = JSON.stringify(localDialRows);
+
+    const metaDirty =
+      userCorrection !== baseExpected ||
+      mlPrediction !== baseMeter ||
+      newDialStr !== baseDialStr ||
+      comments !== baseComments;
+
+    setIsSaving(true);
+    try {
+      if (metaDirty) {
+        const patch: SessionMetadataPatch = {
+          ml_prediction: mlPrediction,
+          user_correction: userCorrection,
+          portal_review_notes: comments,
+        };
+        const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
+        if (localDialRows.length > 0) {
+          patch.dial_details = localDialRows.map((row) => ({
+            dial: Math.round(Number(row.dial)) || 1,
+            prediction: Number(row.prediction),
+            direction: String(row.direction || 'clockwise').slice(0, 40),
+            confidence: Math.min(1, Math.max(0, Number(row.confidence))),
+          }));
+        } else if (hadDialDetails) {
+          patch.dial_details = [];
+        }
+
+        const fresh = await patchSessionMetadata(
+          r.id,
+          workTypeForApi,
+          { s3SessionPrefix: r.s3SessionPrefix, patch },
+          userEmail || undefined,
+          'reviewer',
+        );
+        setDirectReading(fresh);
+      }
+
+      if (selectedStatus !== snapshotForMove.status) {
+        await updateReadingStatus(snapshotForMove.id, selectedStatus, snapshotForMove);
+      }
+
+      const latest = await fetchReadingById(r.id, workTypeForApi);
+      if (latest) {
+        setDirectReading(latest);
+        updateReadingComments(latest.id, latest.comments || '');
+        setSelectedStatus(latest.status);
+      }
+
+      await refreshData();
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 2000);
+      return true;
+    } catch (error) {
+      console.error('Failed to save:', error);
+      alert(error instanceof Error ? error.message : 'Save failed.');
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    isLabelerMode,
+    directReading,
+    contextReading,
+    userCorrection,
+    mlPrediction,
+    localDialRows,
+    comments,
+    selectedStatus,
+    workTypeForApi,
+    userEmail,
+    updateReadingStatus,
+    updateReadingComments,
+    refreshData,
+  ]);
+
+  const handleSave = useCallback(() => {
+    void performSaveAction();
+  }, [performSaveAction]);
+
+  const canQueuePrev = queueIndex > 0;
+  const canQueueNext = Boolean(
+    readingQueueIds?.length && queueIndex >= 0 && queueIndex < readingQueueIds.length - 1,
+  );
+
+  const navigateQueue = useCallback(
+    (delta: -1 | 1) => {
+      if (!readingQueueIds?.length || queueIndex < 0) return;
+      const nextIdx = queueIndex + delta;
+      if (nextIdx < 0 || nextIdx >= readingQueueIds.length) return;
+      const nextId = readingQueueIds[nextIdx];
+      const qs = searchParams.toString();
+      navigate(
+        {
+          pathname: `/reading/${encodeURIComponent(nextId)}`,
+          search: qs ? `?${qs}` : '',
+        },
+        { state: { readingQueueIds } },
+      );
+    },
+    [readingQueueIds, queueIndex, searchParams, navigate],
+  );
+
+  const saveAndGoNext = useCallback(async () => {
+    const ok = await performSaveAction();
+    if (ok && readingQueueIds?.length && queueIndex >= 0 && queueIndex < readingQueueIds.length - 1) {
+      const nextId = readingQueueIds[queueIndex + 1];
+      const qs = searchParams.toString();
+      navigate(
+        {
+          pathname: `/reading/${encodeURIComponent(nextId)}`,
+          search: qs ? `?${qs}` : '',
+        },
+        { state: { readingQueueIds } },
+      );
+    }
+  }, [performSaveAction, readingQueueIds, queueIndex, searchParams, navigate]);
+
+  const rNow = directReading || contextReading;
+  const incorrectContext = (() => {
+    if (!rNow) return false;
+    return statusIsIncorrect(selectedStatus) || statusIsIncorrect(rNow.status);
+  })();
+  /** Reviewer incorrect flow: corrections + queue nav live in the main column (no modal). */
+  const inlineIncorrectReview = incorrectContext && !isLabelerMode;
+
+  useEffect(() => {
+    if (!inlineIncorrectReview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isSaving) return;
+      const el = e.target as HTMLElement | null;
+      const inField = Boolean(el?.closest('input, textarea, select'));
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        void performSaveAction();
+        return;
+      }
+      if (inField && !e.metaKey && !e.ctrlKey) {
+        if (e.key === 'n' || e.key === 'N' || e.key === 'p' || e.key === 'P') return;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
+        if (canQueuePrev) {
+          e.preventDefault();
+          navigateQueue(-1);
+        }
+        return;
+      }
+      if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
+        if (canQueueNext) {
+          e.preventDefault();
+          navigateQueue(1);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [inlineIncorrectReview, isSaving, canQueuePrev, canQueueNext, navigateQueue, performSaveAction]);
 
   if (fetchLoading) {
     return (
@@ -275,23 +588,6 @@ const ReadingDetail: React.FC = () => {
     }
   };
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      // Update status (this also moves files in S3)
-      await updateReadingStatus(reading.id, selectedStatus);
-      // Update comments locally
-      updateReadingComments(reading.id, comments);
-      setIsSaved(true);
-      setTimeout(() => setIsSaved(false), 2000);
-    } catch (error) {
-      console.error('Failed to save:', error);
-      alert('Failed to update status. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -301,16 +597,6 @@ const ReadingDetail: React.FC = () => {
       minute: '2-digit'
     });
   };
-
-  const statusOptions: ReadingStatus[] = [
-    'correct',
-    'incorrect_new',
-    'incorrect_analyzed',
-    'incorrect_labeled',
-    'incorrect_training',
-    'no_dials',
-    'not_sure',
-  ];
 
   // Check if we have extended S3 metadata
   const hasS3Metadata = reading.confidence !== undefined || reading.dialDetails !== undefined;
@@ -367,6 +653,13 @@ const ReadingDetail: React.FC = () => {
       <main className="detail-content">
         <div className="reading-detail-layout">
           <div className="reading-detail-primary">
+            {isLabelerMode ? (
+              <p className="reading-detail-readonly-banner" role="status">
+                Inspect images here. Use the sidebar to move sessions between pipeline stages (new → analyzed → labeled
+                → training). Dial values, notes, and outcome (correct / incorrect / no dials / not sure) are edited in{' '}
+                <strong>reviewer</strong> mode.
+              </p>
+            ) : null}
             <section className="images-section">
               <div className="images-section-head">
                 <h2>
@@ -403,7 +696,7 @@ const ReadingDetail: React.FC = () => {
                     <ReadingDetailImageCard
                       key={image.id}
                       image={image}
-                      reading={reading}
+                      reading={effectiveReading!}
                       selectedImage={selectedImage}
                       onActivate={handleImageActivate}
                       strip
@@ -416,7 +709,7 @@ const ReadingDetail: React.FC = () => {
                     <ReadingDetailImageCard
                       key={image.id}
                       image={image}
-                      reading={reading}
+                      reading={effectiveReading!}
                       selectedImage={selectedImage}
                       onActivate={handleImageActivate}
                     />
@@ -432,7 +725,7 @@ const ReadingDetail: React.FC = () => {
                       <ReadingDetailImageCard
                         key={image.id}
                         image={image}
-                        reading={reading}
+                        reading={effectiveReading!}
                         selectedImage={selectedImage}
                         onActivate={handleImageActivate}
                       />
@@ -442,38 +735,201 @@ const ReadingDetail: React.FC = () => {
               ) : null}
             </section>
 
-            {hasS3Metadata && (
+            {(hasS3Metadata || !isLabelerMode) && (
               <section className="ml-metrics-section reading-detail-ml">
                 <h2>
-                  <Zap size={20} /> ML Metrics
+                  <Zap size={20} /> Reading check
                 </h2>
-                <div className="metrics-grid">
-                  {reading.confidence !== undefined && (
-                    <div className="metric-card">
-                      <Target size={24} />
-                      <div className="metric-value">{(reading.confidence * 100).toFixed(1)}%</div>
-                      <div className="metric-label">Confidence</div>
-                    </div>
-                  )}
-                  {reading.processingTimeMs !== undefined && (
-                    <div className="metric-card">
-                      <Clock size={24} />
-                      <div className="metric-value">{reading.processingTimeMs.toFixed(0)}ms</div>
-                      <div className="metric-label">Processing Time</div>
-                    </div>
-                  )}
-                  {reading.dialCount !== undefined && (
-                    <div className="metric-card">
-                      <Gauge size={24} />
-                      <div className="metric-value">{reading.dialCount}</div>
-                      <div className="metric-label">Dials Detected</div>
-                    </div>
-                  )}
-                </div>
+                {hasS3Metadata ? (
+                  <div className="metrics-grid">
+                    {reading.confidence !== undefined && (
+                      <div className="metric-card">
+                        <Target size={24} />
+                        <div className="metric-value">{(reading.confidence * 100).toFixed(1)}%</div>
+                        <div className="metric-label">Confidence</div>
+                      </div>
+                    )}
+                    {reading.processingTimeMs !== undefined && (
+                      <div className="metric-card">
+                        <Clock size={24} />
+                        <div className="metric-value">{reading.processingTimeMs.toFixed(0)}ms</div>
+                        <div className="metric-label">Processing Time</div>
+                      </div>
+                    )}
+                    {reading.dialCount !== undefined && (
+                      <div className="metric-card">
+                        <Gauge size={24} />
+                        <div className="metric-value">{reading.dialCount}</div>
+                        <div className="metric-label">Dials detected</div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
-                {reading.dialDetails && reading.dialDetails.length > 0 && (
+                {!isLabelerMode && incorrectContext ? (
+                  <div className="incorrect-review-inline">
+                    <div className="incorrect-review-inline-head">
+                      <h3 id="incorrect-review-inline-title">Incorrect reading — reviewer corrections</h3>
+                      <p className="incorrect-review-subid">
+                        {readingQueueIds?.length ? (
+                          <>
+                            {queueIndex >= 0 ? (
+                              <span>
+                                {queueIndex + 1} of {readingQueueIds.length} in this list
+                              </span>
+                            ) : null}
+                            {queueIndex >= 0 ? ' · ' : null}
+                          </>
+                        ) : null}
+                        <code>{reading.id}</code>
+                      </p>
+                    </div>
+
+                    <p className="reading-detail-reviewer-callout incorrect-review-callout" role="status">
+                      This session is <strong>incorrect</strong>. Update dial values if the model was wrong, check the
+                      whole-meter reading, then <strong>Save changes</strong> in the sidebar (or Save here). Use{' '}
+                      <strong>Next</strong> / <strong>Previous</strong> to move through the same list order as the
+                      readings table.
+                    </p>
+
+                    <div className="incorrect-review-body">
+                      <div className="reading-detail-metadata-fields">
+                        <label className="reading-detail-meta-field" htmlFor="rd-ml-pred-incorrect">
+                          <span>Reading from model</span>
+                          <input
+                            id="rd-ml-pred-incorrect"
+                            className="reading-detail-meta-input"
+                            value={mlPrediction}
+                            onChange={(e) => setMlPrediction(e.target.value)}
+                            autoComplete="off"
+                          />
+                        </label>
+                        <label className="reading-detail-meta-field" htmlFor="rd-user-corr-incorrect">
+                          <span>Correct reading (whole meter)</span>
+                          <input
+                            id="rd-user-corr-incorrect"
+                            className="reading-detail-meta-input"
+                            value={userCorrection}
+                            onChange={(e) => setUserCorrection(e.target.value)}
+                            placeholder="What the dials should read overall"
+                            autoComplete="off"
+                          />
+                        </label>
+                      </div>
+
+                      {localDialRows.length > 0 ? (
+                        <div className="incorrect-review-dials">
+                          <h4 className="reading-detail-dial-simple-title">Dial values</h4>
+                          <div className="incorrect-review-dial-grid">
+                            {localDialRows.map((dial, idx) => (
+                              <label key={`${dial.dial}-${idx}`} className="incorrect-review-dial-cell">
+                                <span className="incorrect-review-dial-label">Dial {dial.dial}</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  className="reading-detail-dial-input reading-detail-dial-input--value"
+                                  aria-label={`Correct value for dial ${dial.dial}`}
+                                  value={dial.prediction}
+                                  onChange={(e) => {
+                                    const v = parseFloat(e.target.value);
+                                    setLocalDialRows((rows) =>
+                                      rows.map((r, i) =>
+                                        i === idx ? { ...r, prediction: Number.isFinite(v) ? v : r.prediction } : r,
+                                      ),
+                                    );
+                                  }}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="reading-detail-field-hint reading-detail-field-hint--solo">
+                          No per-dial rows in this file—use <strong>Correct reading</strong> above.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="incorrect-review-footer">
+                      <button
+                        type="button"
+                        className="incorrect-review-nav-btn"
+                        disabled={!canQueuePrev || isSaving}
+                        onClick={() => navigateQueue(-1)}
+                      >
+                        <ChevronLeft size={18} aria-hidden /> Previous
+                      </button>
+                      <button
+                        type="button"
+                        className="incorrect-review-save-btn"
+                        disabled={isSaving}
+                        onClick={() => void performSaveAction()}
+                      >
+                        {isSaving ? <Loader2 size={18} className="spin" /> : <Save size={18} />}
+                        {isSaving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        className="incorrect-review-save-next-btn"
+                        disabled={isSaving || !canQueueNext}
+                        onClick={() => void saveAndGoNext()}
+                      >
+                        Save &amp; next
+                      </button>
+                      <button
+                        type="button"
+                        className="incorrect-review-nav-btn"
+                        disabled={!canQueueNext || isSaving}
+                        onClick={() => navigateQueue(1)}
+                      >
+                        Next <ChevronRight size={18} aria-hidden />
+                      </button>
+                    </div>
+                    <p className="incorrect-review-kbd-hint">
+                      <kbd>←</kbd> <kbd>P</kbd> previous · <kbd>→</kbd> <kbd>N</kbd> next ·{' '}
+                      <kbd>{typeof navigator !== 'undefined' && navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl'}</kbd>
+                      <kbd>Enter</kbd> save
+                    </p>
+                  </div>
+                ) : null}
+
+                {!isLabelerMode && !incorrectContext ? (
+                  <div className="reading-detail-metadata-editor">
+                    <h3 className="reading-detail-metadata-editor-title">Reviewer corrections</h3>
+                    <p className="reading-detail-field-hint">
+                      Includes sessions already marked <strong>correct</strong>: adjust values if needed, or change
+                      status—then <strong>Save changes</strong> updates <code>metadata.json</code> (and moves the
+                      session if you changed status).
+                    </p>
+                    <div className="reading-detail-metadata-fields">
+                      <label className="reading-detail-meta-field" htmlFor="rd-ml-pred-inline">
+                        <span>Reading from model</span>
+                        <input
+                          id="rd-ml-pred-inline"
+                          className="reading-detail-meta-input"
+                          value={mlPrediction}
+                          onChange={(e) => setMlPrediction(e.target.value)}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <label className="reading-detail-meta-field" htmlFor="rd-user-corr-inline">
+                        <span>Correct reading (whole meter)</span>
+                        <input
+                          id="rd-user-corr-inline"
+                          className="reading-detail-meta-input"
+                          value={userCorrection}
+                          onChange={(e) => setUserCorrection(e.target.value)}
+                          placeholder="What the dials should read overall"
+                          autoComplete="off"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+
+                {isLabelerMode && reading.dialDetails && reading.dialDetails.length > 0 ? (
                   <div className="dial-details">
-                    <h3>Dial Predictions</h3>
+                    <h3>Dial predictions</h3>
                     <table className="dial-table">
                       <thead>
                         <tr>
@@ -506,7 +962,7 @@ const ReadingDetail: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
-                )}
+                ) : null}
               </section>
             )}
           </div>
@@ -520,64 +976,164 @@ const ReadingDetail: React.FC = () => {
                 <FileText size={20} aria-hidden /> Status & Comments
               </h2>
 
-              <div className="status-control">
-                <label htmlFor="reading-detail-status">Change status</label>
-                <select
-                  id="reading-detail-status"
-                  value={selectedStatus}
-                  onChange={(e) => setSelectedStatus(e.target.value as ReadingStatus)}
-                  style={{
-                    borderColor: statusColors[selectedStatus],
-                    backgroundColor: `${statusColors[selectedStatus]}10`,
-                  }}
-                  aria-describedby="reading-detail-status-hint"
-                >
-                  {statusOptions.map((s) => (
-                    <option key={s} value={s}>
-                      {statusLabels[s]}
-                    </option>
-                  ))}
-                </select>
-                <p id="reading-detail-status-hint" className="reading-detail-field-hint">
-                  Updates queue in storage when you save.
-                </p>
-              </div>
+              {isLabelerMode ? (
+                <div className="reading-detail-viewonly">
+                  {isIncorrectPipelineStatus(reading.status) ? (
+                    <>
+                      <div className="status-control">
+                        <label htmlFor="reading-detail-labeler-pipeline">Pipeline stage</label>
+                        <select
+                          id="reading-detail-labeler-pipeline"
+                          value={selectedStatus}
+                          onChange={(e) => {
+                            setSelectedStatus(e.target.value as ReadingStatus);
+                          }}
+                          style={{
+                            borderColor: statusColors[selectedStatus],
+                            backgroundColor: `${statusColors[selectedStatus]}10`,
+                          }}
+                          aria-describedby="reading-detail-labeler-pipeline-hint"
+                        >
+                          {INCORRECT_PIPELINE_STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {labelerPipelineStatusLabels[s as keyof typeof labelerPipelineStatusLabels]}
+                            </option>
+                          ))}
+                        </select>
+                        <p id="reading-detail-labeler-pipeline-hint" className="reading-detail-field-hint">
+                          Moves the session folder between incorrect queues. Outcomes (correct / incorrect / no dials /
+                          not sure) are set in reviewer mode.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className={`save-button ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
+                        onClick={handleSave}
+                        disabled={isSaving || !isDirty}
+                        aria-busy={isSaving}
+                      >
+                        {isSaving ? (
+                          <>
+                            <Loader2 size={18} className="spin" aria-hidden />
+                            <span>Saving…</span>
+                          </>
+                        ) : isSaved ? (
+                          <>
+                            <Check size={18} aria-hidden />
+                            <span>Saved</span>
+                          </>
+                        ) : (
+                          <>
+                            <Save size={18} aria-hidden />
+                            <span>Save pipeline stage</span>
+                          </>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="reading-detail-viewonly-folder">
+                        <span className="reading-detail-viewonly-label">folder</span>{' '}
+                        <span
+                          className="reading-detail-status-pill"
+                          style={{
+                            borderColor: statusColors[reading.status],
+                            color: statusColors[reading.status],
+                            backgroundColor: `${statusColors[reading.status]}14`,
+                          }}
+                        >
+                          {statusLabels[reading.status]}
+                        </span>
+                      </p>
+                      <p className="reading-detail-field-hint">
+                        Pipeline moves apply only to sessions already in an incorrect queue. Switch the sidebar to{' '}
+                        <strong>reviewer</strong> to set correct, incorrect, no dials, or not sure.
+                      </p>
+                    </>
+                  )}
+                  {reading.comments ? (
+                    <div className="reading-detail-comments-readonly">
+                      <span className="reading-detail-viewonly-label">note</span>
+                      <p>{reading.comments}</p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <div className="status-control">
+                    <label htmlFor="reading-detail-status">Outcome</label>
+                    <select
+                      id="reading-detail-status"
+                      value={statusIsIncorrect(selectedStatus) ? REVIEWER_SELECT_INCORRECT : selectedStatus}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === REVIEWER_SELECT_INCORRECT) {
+                          setSelectedStatus((prev) => {
+                            if (statusIsIncorrect(prev)) return prev;
+                            return 'incorrect_new';
+                          });
+                        } else {
+                          setSelectedStatus(raw as ReadingStatus);
+                        }
+                      }}
+                      style={{
+                        borderColor: statusColors[selectedStatus],
+                        backgroundColor: `${statusColors[selectedStatus]}10`,
+                      }}
+                      aria-describedby="reading-detail-status-hint"
+                    >
+                      <option value="correct">{statusLabels.correct}</option>
+                      <option value={REVIEWER_SELECT_INCORRECT}>Incorrect</option>
+                      <option value="no_dials">{statusLabels.no_dials}</option>
+                      <option value="not_sure">{statusLabels.not_sure}</option>
+                    </select>
+                    <p id="reading-detail-status-hint" className="reading-detail-field-hint">
+                      Save writes reviewer fixes to <code>metadata.json</code> first, then moves the folder if you
+                      changed status. Incorrect pipeline stages (analyzed, labeled, training) are adjusted in labeler
+                      mode.
+                    </p>
+                  </div>
 
-              <div className="comments-control">
-                <label htmlFor="reading-detail-comments">Comments</label>
-                <textarea
-                  id="reading-detail-comments"
-                  value={comments}
-                  onChange={(e) => setComments(e.target.value)}
-                  placeholder="Add your comments here…"
-                  rows={4}
-                />
-              </div>
+                  <div className="comments-control">
+                    <label htmlFor="reading-detail-comments">Comments</label>
+                    <textarea
+                      id="reading-detail-comments"
+                      value={comments}
+                      onChange={(e) => setComments(e.target.value)}
+                      placeholder="Add your comments here…"
+                      rows={4}
+                    />
+                    <p id="reading-detail-comments-hint" className="reading-detail-field-hint">
+                      Saved to S3 as <code>portal_review_notes</code> when you save.
+                    </p>
+                  </div>
 
-              <button
-                type="button"
-                className={`save-button ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
-                onClick={handleSave}
-                disabled={isSaving}
-                aria-busy={isSaving}
-              >
-                {isSaving ? (
-                  <>
-                    <Loader2 size={18} className="spin" aria-hidden />
-                    <span>Moving in S3…</span>
-                  </>
-                ) : isSaved ? (
-                  <>
-                    <Check size={18} aria-hidden />
-                    <span>Saved</span>
-                  </>
-                ) : (
-                  <>
-                    <Save size={18} aria-hidden />
-                    <span>Save changes</span>
-                  </>
-                )}
-              </button>
+                  <button
+                    type="button"
+                    className={`save-button ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    aria-busy={isSaving}
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 size={18} className="spin" aria-hidden />
+                        <span>Saving to S3…</span>
+                      </>
+                    ) : isSaved ? (
+                      <>
+                        <Check size={18} aria-hidden />
+                        <span>Saved</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save size={18} aria-hidden />
+                        <span>Save changes</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </section>
 
             <section
@@ -586,6 +1142,7 @@ const ReadingDetail: React.FC = () => {
             >
               <h2 id="reading-detail-metadata-heading">
                 <Info size={20} aria-hidden /> Reading information
+                {isLabelerMode ? <span className="reading-detail-readonly-tag"> read-only</span> : null}
               </h2>
               <div className="metadata-grid">
                 <div className="metadata-item">
@@ -611,20 +1168,22 @@ const ReadingDetail: React.FC = () => {
                 </div>
                 <div className="metadata-item">
                   <span className="label">ML prediction</span>
-                  <span className="value meter-value-large">{reading.meterValue}</span>
+                  <span className="value meter-value-large">{effectiveReading?.meterValue ?? reading.meterValue}</span>
                 </div>
-                {reading.rawPrediction && (
+                {(effectiveReading?.rawPrediction || reading.rawPrediction) && (
                   <div className="metadata-item">
                     <span className="label">Raw prediction</span>
                     <span className="value" style={{ fontFamily: 'var(--font-mono)' }}>
-                      {reading.rawPrediction}
+                      {effectiveReading?.rawPrediction ?? reading.rawPrediction}
                     </span>
                   </div>
                 )}
-                {reading.expectedValue && (
+                {(effectiveReading?.expectedValue || reading.expectedValue) && (
                   <div className="metadata-item">
                     <span className="label">User correction</span>
-                    <span className="value expected-value">{reading.expectedValue}</span>
+                    <span className="value expected-value">
+                      {effectiveReading?.expectedValue ?? reading.expectedValue}
+                    </span>
                   </div>
                 )}
                 {reading.userName ? (

@@ -10,7 +10,7 @@ const GLOSSARY: { status: ReadingStatus; hint: string }[] = [
   { status: 'incorrect_new', hint: 'Flagged incorrect from the field app; new in the review queue — next step is triage or analysis.' },
   { status: 'incorrect_analyzed', hint: 'Someone has reviewed diagnostics (e.g. model vs user); use this to track deeper review.' },
   { status: 'incorrect_labeled', hint: 'Ground truth or labels are applied so the session can be used as training input.' },
-  { status: 'incorrect_training', hint: 'Marked as included in or ready for the training dataset / export pipeline.' },
+  { status: 'incorrect_training', hint: 'Marked as included in or ready for the training dataset pipeline.' },
   { status: 'no_dials', hint: 'No dials were detected or the meter type has no visible dials in the images.' },
   { status: 'not_sure', hint: 'Image or reading is ambiguous; needs a human decision before counting it as correct or incorrect.' },
 ];
@@ -79,7 +79,7 @@ const PortalWelcomeModal: React.FC = () => {
             <ul className="portal-welcome-list">
               <li>Lists meter sessions from cloud storage by <strong>work type</strong> and <strong>source</strong> (field vs simulator).</li>
               <li>Lets you open a session, inspect images and metadata, and <strong>change status</strong> — which moves the session folder in storage to match your workflow.</li>
-              <li>Offers <strong>ZIP export</strong>: all incorrect-queue sessions from the dashboard or list, or <strong>this session only</strong> on the reading detail page (images + <code>metadata.json</code>) for labeling and model retraining.</li>
+              <li><strong>Reviewer</strong> mode focuses on opening sessions and moving queues. <strong>Labeler</strong> mode adds <strong>Training</strong>: pipelines in S3, copy selected rows into a pipeline folder, then download a dataset ZIP; you can also zip a single session from the reading detail page (images + <code>metadata.json</code>).</li>
               <li>The <strong>Models</strong> page summarizes app/model versions and session mix for comparing generations over time.</li>
               <li><strong>Usage</strong> shows sessions, image counts, and distinct users per day from the same S3 metadata (until Dynamo backs it).</li>
             </ul>

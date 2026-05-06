@@ -1,4 +1,5 @@
 import type { MeterReading, DashboardCounts, WorkType } from '../types';
+import type { PortalWorkMode } from '../utils/portalWorkMode';
 import type { DataSource } from '../context/ReadingsContext';
 
 const API_BASE_URL = '/api';
@@ -238,6 +239,55 @@ export async function fetchReadingById(id: string, workType?: WorkType): Promise
   }
 }
 
+/** Allowed keys for `PATCH /api/readings/:id/metadata` (merged into S3 `metadata.json`). */
+export type SessionMetadataPatch = {
+  user_correction?: string;
+  ml_prediction?: string;
+  ml_raw_prediction?: string | null;
+  dial_count?: number;
+  dial_details?: Array<{
+    dial: number;
+    prediction: number;
+    direction: string;
+    confidence: number;
+  }>;
+  is_correct?: boolean;
+  condition_code?: string | null;
+  portal_review_notes?: string;
+  confidence?: number;
+  processing_time_ms?: number;
+};
+
+export async function patchSessionMetadata(
+  sessionId: string,
+  workType: WorkType | undefined,
+  body: { s3SessionPrefix: string; patch: SessionMetadataPatch },
+  userEmail?: string,
+  /** Server rejects metadata PATCH unless this is `reviewer`. */
+  portalWorkMode: PortalWorkMode = 'reviewer',
+): Promise<S3MeterReading> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-portal-work-mode': portalWorkMode,
+  };
+  if (userEmail) headers['x-user-email'] = userEmail;
+  const response = await fetch(`${API_BASE_URL}/readings/${encodeURIComponent(sessionId)}/metadata`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({
+      workType: workType || undefined,
+      s3SessionPrefix: body.s3SessionPrefix,
+      patch: body.patch,
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<S3MeterReading>(text, response.status);
+}
+
 export async function checkHealth(): Promise<{ status: string; buckets: string[] }> {
   try {
     const response = await fetch(`${API_BASE_URL}/health`);
@@ -345,6 +395,175 @@ export async function downloadSessionRetrainZip(sessionId: string, workType: Wor
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** `weights.pt` stored at `{folderPrefix}model/weights.pt` — see `dataset.json` weights block. */
+export interface TrainingPipelineWeightsSummary {
+  s3Key: string | null;
+  uploadedAt: string | null;
+  sizeBytes: number | null;
+  originalFileName: string | null;
+}
+
+export interface TrainingDatasetRow {
+  folderPrefix: string;
+  displayName: string;
+  createdAt: string | null;
+  slug: string | null;
+  timestamp: number | null;
+  manifestMissing?: boolean;
+  /** Distinct session ids ever copied into this folder (from manifest). */
+  copiedSessionCount?: number;
+  lastCopyAt?: string | null;
+  weights?: TrainingPipelineWeightsSummary | null;
+}
+
+export interface CopySessionsToTrainingDatasetResult {
+  ok: boolean;
+  copied: Array<{ sessionId: string; objectCount: number; destinationPrefix: string }>;
+  errors: Array<{ sessionId: string; error: string }>;
+}
+
+export async function copySessionsToTrainingDataset(
+  folderPrefix: string,
+  sessions: Array<{ sessionId: string; s3SessionPrefix?: string; workType?: WorkType }>,
+): Promise<CopySessionsToTrainingDatasetResult> {
+  const response = await fetch(`${API_BASE_URL}/training-datasets/copy-sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPrefix, sessions }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<CopySessionsToTrainingDatasetResult>(text, response.status);
+}
+
+/** ZIP all objects under a training-dataset prefix (includes dataset.json and sessions/*). */
+export interface UploadTrainingWeightsResponse {
+  ok: boolean;
+  weights: {
+    s3Key: string;
+    bucket: string;
+    relativeKey: string;
+    uploadedAt: string;
+    sizeBytes: number;
+    originalFileName: string;
+    contentType: string;
+  };
+}
+
+export async function uploadTrainingDatasetWeights(
+  folderPrefix: string,
+  file: File,
+): Promise<UploadTrainingWeightsResponse> {
+  const fd = new FormData();
+  fd.set('folderPrefix', folderPrefix);
+  fd.set('file', file, file.name);
+  const response = await fetch(`${API_BASE_URL}/training-datasets/weights`, {
+    method: 'POST',
+    body: fd,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<UploadTrainingWeightsResponse>(text, response.status);
+}
+
+export interface TrainingWeightsSignedUrlResponse {
+  url: string;
+  expiresInSeconds: number;
+  bucket: string;
+  key: string;
+}
+
+export async function fetchTrainingWeightsSignedUrl(
+  folderPrefix: string,
+): Promise<TrainingWeightsSignedUrlResponse> {
+  const params = new URLSearchParams();
+  params.set('folderPrefix', folderPrefix);
+  const response = await fetch(`${API_BASE_URL}/training-datasets/weights-signed-url?${params.toString()}`);
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<TrainingWeightsSignedUrlResponse>(text, response.status);
+}
+
+export async function downloadTrainingDatasetZip(folderPrefix: string): Promise<void> {
+  const params = new URLSearchParams();
+  params.set('folderPrefix', folderPrefix);
+  const res = await fetch(`${API_BASE_URL}/export/training-dataset-zip?${params.toString()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = `HTTP ${res.status}`;
+    try {
+      const err = JSON.parse(text) as { error?: string };
+      if (err?.error) msg = err.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition');
+  const match = cd?.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `training-dataset-${Date.now()}.zip`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export interface TrainingDatasetsResponse {
+  bucket: string;
+  rootPrefix: string;
+  trainingDatasetsSegment: string;
+  datasets: TrainingDatasetRow[];
+}
+
+export async function fetchTrainingDatasets(): Promise<TrainingDatasetsResponse> {
+  const response = await fetch(`${API_BASE_URL}/training-datasets`);
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<TrainingDatasetsResponse>(text, response.status);
+}
+
+export interface CreateTrainingDatasetResponse {
+  schemaVersion: number;
+  displayName: string;
+  createdAt: string;
+  folderPrefix: string;
+  slug: string;
+  timestamp: number;
+  note?: string;
+  key: string;
+  bucket: string;
+}
+
+export async function createTrainingDataset(name: string): Promise<CreateTrainingDatasetResponse> {
+  const response = await fetch(`${API_BASE_URL}/training-datasets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name.trim() }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<CreateTrainingDatasetResponse>(text, response.status);
 }
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {

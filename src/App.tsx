@@ -3,6 +3,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { ReadingsProvider } from './context/ReadingsContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import PortalLayout from './components/PortalLayout';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import ReadingsList from './components/ReadingsList';
@@ -12,7 +13,9 @@ import UploadsTable from './components/UploadsTable';
 import MFASettings from './components/MFASettings';
 import ModelAnalytics from './components/ModelAnalytics';
 import UsageSummary from './components/UsageSummary';
-import Navbar from './components/Navbar';
+import DatasetsPage from './components/DatasetsPage';
+import TrainingHubPage from './components/TrainingHubPage';
+import TrainingPipelinePage from './components/TrainingPipelinePage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -24,52 +27,30 @@ function AppContent() {
     <div className="app">
       {!isLoginPage && (
         <ProtectedRoute>
-          <Navbar />
           <PortalWelcomeModal />
         </ProtectedRoute>
       )}
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/" element={
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        } />
-        <Route path="/readings/:status" element={
-          <ProtectedRoute>
-            <ReadingsList />
-          </ProtectedRoute>
-        } />
-        <Route path="/reading/:id" element={
-          <ProtectedRoute>
-            <ReadingDetail />
-          </ProtectedRoute>
-        } />
-        <Route path="/activity" element={
-          <ProtectedRoute>
-            <ActivityLog />
-          </ProtectedRoute>
-        } />
-        <Route path="/uploads" element={
-          <ProtectedRoute>
-            <UploadsTable />
-          </ProtectedRoute>
-        } />
-        <Route path="/mfa" element={
-          <ProtectedRoute>
-            <MFASettings />
-          </ProtectedRoute>
-        } />
-        <Route path="/models" element={
-          <ProtectedRoute>
-            <ModelAnalytics />
-          </ProtectedRoute>
-        } />
-        <Route path="/usage" element={
-          <ProtectedRoute>
-            <UsageSummary />
-          </ProtectedRoute>
-        } />
+        <Route
+          element={
+            <ProtectedRoute>
+              <PortalLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/readings/:status" element={<ReadingsList />} />
+          <Route path="/reading/:id" element={<ReadingDetail />} />
+          <Route path="/activity" element={<ActivityLog />} />
+          <Route path="/uploads" element={<UploadsTable />} />
+          <Route path="/mfa" element={<MFASettings />} />
+          <Route path="/models" element={<ModelAnalytics />} />
+          <Route path="/usage" element={<UsageSummary />} />
+          <Route path="/datasets" element={<DatasetsPage />} />
+          <Route path="/training/pipeline/:segment" element={<TrainingPipelinePage />} />
+          <Route path="/training" element={<TrainingHubPage />} />
+        </Route>
       </Routes>
     </div>
   );

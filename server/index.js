@@ -8,6 +8,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import admin from 'firebase-admin';
 import { registerRoboflowRoutes } from './roboflow.js';
 import archiver from 'archiver';
+import multer from 'multer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +47,35 @@ const BUCKET_NAME = (process.env.AWS_S3_BUCKET || 'meter-reader-training-feedbac
 const REGION = (process.env.AWS_REGION || 'us-east-1').trim();
 /** If objects live under a parent folder (e.g. prod/ or mobile-uploads/), set AWS_S3_BASE_PREFIX=prod */
 const S3_BASE_PREFIX = (process.env.AWS_S3_BASE_PREFIX || '').trim();
+
+/**
+ * Portal-created training dataset roots live under this single segment inside the same bucket as readings
+ * (not a separate AWS bucket — set IAM on this prefix). Override with AWS_S3_TRAINING_DATASETS_ROOT.
+ */
+const TRAINING_DATASETS_SEGMENT = (() => {
+  let s = (process.env.AWS_S3_TRAINING_DATASETS_ROOT || 'training-datasets')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\\/g, '');
+  if (!s) s = 'training-datasets';
+  return s;
+})();
+
+function getTrainingDatasetsRootPrefix() {
+  return withS3Base(`${TRAINING_DATASETS_SEGMENT}/`);
+}
+
+function sanitizeDatasetSlug(displayName) {
+  const base = String(displayName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return base || 'dataset';
+}
 
 const WORK_TYPES = ['1000', '2000', '3000', '4000', '5000'];
 
@@ -296,7 +326,10 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       feedbackType: metadata.feedback_type || '',
       /** iOS `AppConfig.appVersion` — use to compare on-device model generations. */
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
-      comments: '',
+      comments:
+        metadata.portal_review_notes != null && metadata.portal_review_notes !== ''
+          ? String(metadata.portal_review_notes)
+          : '',
       images,
       createdAt: metadata.timestamp,
       updatedAt: metadata.timestamp,
@@ -758,6 +791,203 @@ app.get('/api/readings/:id', async (req, res) => {
   }
 });
 
+function normalizeS3SessionPrefix(p) {
+  const s = String(p || '').trim();
+  if (!s) return '';
+  return s.endsWith('/') ? s : `${s}/`;
+}
+
+const METADATA_PATCHABLE = new Set([
+  'user_correction',
+  'ml_prediction',
+  'ml_raw_prediction',
+  'dial_count',
+  'dial_details',
+  'is_correct',
+  'condition_code',
+  'portal_review_notes',
+  'confidence',
+  'processing_time_ms',
+]);
+
+function validateDialDetailsForPatch(dialDetails) {
+  if (!Array.isArray(dialDetails)) return 'dial_details must be an array';
+  if (dialDetails.length > 48) return 'dial_details: at most 48 rows';
+  for (let i = 0; i < dialDetails.length; i += 1) {
+    const row = dialDetails[i];
+    if (!row || typeof row !== 'object') return `dial_details[${i}]: invalid row`;
+    if (!Number.isInteger(row.dial) || row.dial < 1 || row.dial > 48) return `dial_details[${i}]: dial must be 1–48`;
+    if (typeof row.prediction !== 'number' || Number.isNaN(row.prediction)) {
+      return `dial_details[${i}]: prediction must be a number`;
+    }
+    if (typeof row.direction !== 'string' || row.direction.length < 1 || row.direction.length > 40) {
+      return `dial_details[${i}]: direction must be a non-empty string (≤40 chars)`;
+    }
+    if (typeof row.confidence !== 'number' || row.confidence < 0 || row.confidence > 1 || Number.isNaN(row.confidence)) {
+      return `dial_details[${i}]: confidence must be between 0 and 1`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Merge reviewer edits into session `metadata.json` (same bucket). Does not move the session folder.
+ * Body: { workType?: string, s3SessionPrefix?: string, patch: { user_correction?, ml_prediction?, dial_details?, ... } }
+ */
+app.patch('/api/readings/:id/metadata', async (req, res) => {
+  try {
+    const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+    if (portalMode !== 'reviewer') {
+      return res.status(403).json({
+        error:
+          'Metadata edits are only allowed in reviewer mode. Send header x-portal-work-mode: reviewer from the portal.',
+      });
+    }
+
+    const sessionId = req.params.id;
+    const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
+    const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+    if (!reading?.s3SessionPrefix) {
+      return res.status(404).json({ error: 'Reading not found or missing s3SessionPrefix' });
+    }
+
+    const serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
+    const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
+    if (clientPrefix && clientPrefix !== serverPrefix) {
+      return res.status(400).json({ error: 's3SessionPrefix does not match this session' });
+    }
+
+    const patch = req.body?.patch && typeof req.body.patch === 'object' ? req.body.patch : null;
+    if (!patch || Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'patch must be an object with at least one allowed field' });
+    }
+
+    for (const k of Object.keys(patch)) {
+      if (!METADATA_PATCHABLE.has(k)) {
+        return res.status(400).json({ error: `Field not allowed in patch: ${k}` });
+      }
+    }
+
+    const metaKey = `${serverPrefix}metadata.json`;
+    const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
+    const meta = JSON.parse(await streamToString(getOut.Body));
+    if (String(meta.session_id) !== String(sessionId)) {
+      return res.status(500).json({ error: 'metadata session_id does not match URL id' });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'user_correction')) {
+      if (patch.user_correction != null && typeof patch.user_correction !== 'string') {
+        return res.status(400).json({ error: 'user_correction must be a string' });
+      }
+      const v = patch.user_correction == null ? '' : String(patch.user_correction);
+      if (v.length > 500) return res.status(400).json({ error: 'user_correction too long (max 500)' });
+      meta.user_correction = v;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'ml_prediction')) {
+      if (typeof patch.ml_prediction !== 'string') {
+        return res.status(400).json({ error: 'ml_prediction must be a string' });
+      }
+      if (patch.ml_prediction.length > 500) return res.status(400).json({ error: 'ml_prediction too long' });
+      meta.ml_prediction = patch.ml_prediction;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'ml_raw_prediction')) {
+      if (patch.ml_raw_prediction != null && typeof patch.ml_raw_prediction !== 'string') {
+        return res.status(400).json({ error: 'ml_raw_prediction must be a string' });
+      }
+      meta.ml_raw_prediction =
+        patch.ml_raw_prediction == null ? null : String(patch.ml_raw_prediction).slice(0, 2000);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'dial_details')) {
+      const err = validateDialDetailsForPatch(patch.dial_details);
+      if (err) return res.status(400).json({ error: err });
+      meta.dial_details = patch.dial_details;
+      meta.dial_count = patch.dial_details.length;
+    } else if (Object.prototype.hasOwnProperty.call(patch, 'dial_count')) {
+      if (!Number.isInteger(patch.dial_count) || patch.dial_count < 0 || patch.dial_count > 48) {
+        return res.status(400).json({ error: 'dial_count must be an integer 0–48' });
+      }
+      meta.dial_count = patch.dial_count;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'is_correct')) {
+      if (typeof patch.is_correct !== 'boolean') {
+        return res.status(400).json({ error: 'is_correct must be boolean' });
+      }
+      meta.is_correct = patch.is_correct;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'condition_code')) {
+      if (patch.condition_code != null && typeof patch.condition_code !== 'string') {
+        return res.status(400).json({ error: 'condition_code must be a string' });
+      }
+      meta.condition_code =
+        patch.condition_code == null ? null : String(patch.condition_code).slice(0, 200);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'portal_review_notes')) {
+      if (typeof patch.portal_review_notes !== 'string') {
+        return res.status(400).json({ error: 'portal_review_notes must be a string' });
+      }
+      if (patch.portal_review_notes.length > 8000) {
+        return res.status(400).json({ error: 'portal_review_notes too long (max 8000)' });
+      }
+      meta.portal_review_notes = patch.portal_review_notes;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'confidence')) {
+      if (typeof patch.confidence !== 'number' || patch.confidence < 0 || patch.confidence > 1 || Number.isNaN(patch.confidence)) {
+        return res.status(400).json({ error: 'confidence must be a number from 0 to 1' });
+      }
+      meta.confidence = patch.confidence;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'processing_time_ms')) {
+      if (typeof patch.processing_time_ms !== 'number' || patch.processing_time_ms < 0 || Number.isNaN(patch.processing_time_ms)) {
+        return res.status(400).json({ error: 'processing_time_ms must be a non-negative number' });
+      }
+      meta.processing_time_ms = patch.processing_time_ms;
+    }
+
+    const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
+    meta.portal_metadata_updated_at = new Date().toISOString();
+    if (userEmail) meta.portal_metadata_updated_by = userEmail.slice(0, 320);
+
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: metaKey,
+        Body: JSON.stringify(meta, null, 2),
+        ContentType: 'application/json; charset=utf-8',
+      }),
+    );
+
+    invalidateCache();
+
+    await loadActivityLog();
+    activityLog.unshift({
+      id: `${Date.now()}-${sessionId}-meta`,
+      timestamp: new Date().toISOString(),
+      userEmail: userEmail || 'unknown',
+      action: 'metadata_patch',
+      sessionId,
+      keys: Object.keys(patch),
+    });
+    await saveActivityLog();
+
+    const fresh = await parseSession(serverPrefix, reading.status, reading.type, reading.workType || '1000');
+    if (!fresh) {
+      return res.status(500).json({ error: 'Failed to re-read session after metadata update' });
+    }
+    res.json(fresh);
+  } catch (error) {
+    console.error('PATCH /api/readings/:id/metadata:', error);
+    res.status(500).json({ error: error.message || 'Metadata update failed' });
+  }
+});
+
 function buildTargetSessionPrefixFromSource(sourcePrefix, sourceType, targetStatus) {
   const normalized = sourcePrefix.replace(/\/+$/, '');
   const parts = normalized.split('/').filter(Boolean);
@@ -788,6 +1018,65 @@ async function collectAllObjectKeysUnderPrefix(prefix) {
     continuationToken = r.NextContinuationToken;
   }
   return keys;
+}
+
+/** `folderPrefix` must be under {@link getTrainingDatasetsRootPrefix} (trailing slash). */
+function normalizeTrainingDatasetFolderPrefix(input) {
+  const root = getTrainingDatasetsRootPrefix();
+  let p = String(input || '').trim();
+  if (!p) return null;
+  const withSlash = p.endsWith('/') ? p : `${p}/`;
+  if (!withSlash.startsWith(root)) return null;
+  if (withSlash.length <= root.length) return null;
+  return withSlash;
+}
+
+/** Copy every object under sourcePrefix into destPrefix (same relative paths). Does not delete source. */
+async function copyPrefixTree(sourcePrefix, destPrefix) {
+  const src = sourcePrefix.endsWith('/') ? sourcePrefix : `${sourcePrefix}/`;
+  const dst = destPrefix.endsWith('/') ? destPrefix : `${destPrefix}/`;
+  const keys = await collectAllObjectKeysUnderPrefix(src);
+  if (keys.length === 0) return { objectCount: 0 };
+  for (const key of keys) {
+    const relative = key.startsWith(src) ? key.slice(src.length) : '';
+    if (relative === '') continue;
+    const newKey = `${dst}${relative}`;
+    await s3Client.send(
+      new CopyObjectCommand({
+        Bucket: BUCKET_NAME,
+        CopySource: `${BUCKET_NAME}/${key}`,
+        Key: newKey,
+      }),
+    );
+  }
+  return { objectCount: keys.length };
+}
+
+async function readTrainingDatasetManifest(folderPrefix) {
+  const norm = folderPrefix.endsWith('/') ? folderPrefix : `${folderPrefix}/`;
+  const key = `${norm}dataset.json`;
+  const obj = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+  return JSON.parse(await streamToString(obj.Body));
+}
+
+async function writeTrainingDatasetManifest(folderPrefix, manifest) {
+  const norm = folderPrefix.endsWith('/') ? folderPrefix : `${folderPrefix}/`;
+  const key = `${norm}dataset.json`;
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      Body: JSON.stringify(manifest, null, 2),
+      ContentType: 'application/json; charset=utf-8',
+    }),
+  );
+}
+
+async function copySessionIntoTrainingDataset(sourcePrefix, datasetFolderPrefix, sessionId) {
+  const safeId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '_') || 'session';
+  const src = sourcePrefix.endsWith('/') ? sourcePrefix : `${sourcePrefix}/`;
+  const dest = `${datasetFolderPrefix}sessions/${safeId}/`;
+  return copyPrefixTree(src, dest);
 }
 
 /**
@@ -1013,6 +1302,123 @@ app.get('/api/uploads', async (req, res) => {
   }
 });
 
+/** List training-dataset folders (S3 prefixes + dataset.json manifest when present). */
+app.get('/api/training-datasets', async (req, res) => {
+  try {
+    const root = getTrainingDatasetsRootPrefix();
+    const out = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET_NAME,
+        Prefix: root,
+        Delimiter: '/',
+        MaxKeys: 500,
+      }),
+    );
+    const prefixes = (out.CommonPrefixes || []).map((p) => p.Prefix).filter(Boolean);
+    const datasets = await Promise.all(
+      prefixes.map(async (folderPrefix) => {
+        const metaKey = `${folderPrefix}dataset.json`;
+        try {
+          const obj = await s3Client.send(
+            new GetObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: metaKey,
+            }),
+          );
+          const body = await streamToString(obj.Body);
+          const j = JSON.parse(body);
+          const copiedIds = Array.isArray(j.copiedSessionIds) ? j.copiedSessionIds : [];
+          const w = j.weights && typeof j.weights === 'object' ? j.weights : null;
+          return {
+            folderPrefix,
+            displayName: typeof j.displayName === 'string' ? j.displayName : folderPrefix,
+            createdAt: typeof j.createdAt === 'string' ? j.createdAt : null,
+            slug: typeof j.slug === 'string' ? j.slug : null,
+            timestamp: typeof j.timestamp === 'number' ? j.timestamp : null,
+            copiedSessionCount: copiedIds.length,
+            lastCopyAt: typeof j.lastCopyAt === 'string' ? j.lastCopyAt : null,
+            weights: w?.s3Key
+              ? {
+                  s3Key: typeof w.s3Key === 'string' ? w.s3Key : null,
+                  uploadedAt: typeof w.uploadedAt === 'string' ? w.uploadedAt : null,
+                  sizeBytes: typeof w.sizeBytes === 'number' ? w.sizeBytes : null,
+                  originalFileName: typeof w.originalFileName === 'string' ? w.originalFileName : null,
+                }
+              : null,
+          };
+        } catch {
+          const leaf = folderPrefix.slice(root.length).replace(/\/$/, '');
+          return {
+            folderPrefix,
+            displayName: leaf,
+            createdAt: null,
+            slug: null,
+            timestamp: null,
+            manifestMissing: true,
+          };
+        }
+      }),
+    );
+    datasets.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    res.json({
+      bucket: BUCKET_NAME,
+      rootPrefix: root,
+      trainingDatasetsSegment: TRAINING_DATASETS_SEGMENT,
+      datasets,
+    });
+  } catch (e) {
+    console.error('training-datasets GET:', e);
+    res.status(500).json({ error: e.message || 'Failed to list training datasets' });
+  }
+});
+
+/**
+ * Create an empty training-dataset folder: `{slug}_{timestamp}/dataset.json` under the training root.
+ * Body: `{ "name": "My export" }` — slug is derived from name; folder name is slug + numeric timestamp.
+ */
+app.post('/api/training-datasets', async (req, res) => {
+  try {
+    const displayName =
+      typeof req.body?.name === 'string' ? req.body.name.trim() : typeof req.body?.displayName === 'string'
+        ? req.body.displayName.trim()
+        : '';
+    if (!displayName || displayName.length > 200) {
+      return res.status(400).json({ error: 'Name is required and must be 200 characters or less.' });
+    }
+    const slug = sanitizeDatasetSlug(displayName);
+    const timestamp = Date.now();
+    const folderSegment = `${slug}_${timestamp}`;
+    const root = getTrainingDatasetsRootPrefix();
+    const folderPrefix = `${root}${folderSegment}/`;
+    const key = `${folderPrefix}dataset.json`;
+    const manifest = {
+      schemaVersion: 1,
+      displayName,
+      createdAt: new Date(timestamp).toISOString(),
+      folderPrefix,
+      slug,
+      timestamp,
+      note: 'Portal copies sessions via POST /api/training-datasets/copy-sessions; ZIP via GET /api/export/training-dataset-zip (excludes model/weights.pt); weights via POST /api/training-datasets/weights.',
+    };
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: key,
+        Body: JSON.stringify(manifest, null, 2),
+        ContentType: 'application/json; charset=utf-8',
+      }),
+    );
+    res.status(201).json({
+      ...manifest,
+      key,
+      bucket: BUCKET_NAME,
+    });
+  } catch (e) {
+    console.error('training-datasets POST:', e);
+    res.status(500).json({ error: e.message || 'Failed to create training dataset' });
+  }
+});
+
 /** Inspect bucket layout vs what the app scans (debug local / staging). */
 app.get('/api/s3-discover', async (req, res) => {
   try {
@@ -1065,6 +1471,8 @@ app.get('/api/health', (req, res) => {
     workTypes: WORK_TYPES,
     region: REGION,
     s3BasePrefix: S3_BASE_PREFIX || null,
+    trainingDatasetsRootPrefix: getTrainingDatasetsRootPrefix(),
+    trainingWeightsMaxMb: Math.round(TRAINING_WEIGHTS_MAX_BYTES / (1024 * 1024)),
     roboflow: Boolean(process.env.ROBOFLOW_API_KEY),
   });
 });
@@ -1098,6 +1506,236 @@ async function findReadingAcrossWorkTypes(id, workTypeHint) {
   }
   return reading;
 }
+
+const COPY_TO_TRAINING_MAX_SESSIONS = Math.max(
+  1,
+  Math.min(500, parseInt(process.env.COPY_TO_TRAINING_MAX_SESSIONS || '80', 10) || 80),
+);
+
+const TRAINING_DATASET_EXPORT_MAX_OBJECTS = Math.max(
+  50,
+  Math.min(25_000, parseInt(process.env.TRAINING_DATASET_EXPORT_MAX_OBJECTS || '8000', 10) || 8000),
+);
+
+/** Roboflow / YOLO `weights.pt` per pipeline — stored at `{folderPrefix}model/weights.pt`. */
+const TRAINING_WEIGHTS_MAX_BYTES = Math.max(
+  1024 * 1024,
+  Math.min(
+    2 * 1024 * 1024 * 1024,
+    parseInt(process.env.TRAINING_WEIGHTS_MAX_BYTES || String(512 * 1024 * 1024), 10) || 512 * 1024 * 1024,
+  ),
+);
+const WEIGHTS_S3_RELATIVE_KEY = 'model/weights.pt';
+
+const weightsUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: TRAINING_WEIGHTS_MAX_BYTES, files: 1 },
+});
+
+function weightsUploadMiddleware(req, res, next) {
+  weightsUpload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: `weights.pt too large (max ${Math.round(TRAINING_WEIGHTS_MAX_BYTES / (1024 * 1024))} MB). Set TRAINING_WEIGHTS_MAX_BYTES if needed.`,
+      });
+    }
+    return res.status(400).json({ error: err.message || 'Upload parse failed' });
+  });
+}
+
+/**
+ * Copy meter sessions (raw S3 objects) into a training-dataset folder under sessions/{sessionId}/.
+ * Body: { folderPrefix, sessions: [{ sessionId, s3SessionPrefix?, workType? }] }
+ */
+app.post('/api/training-datasets/copy-sessions', async (req, res) => {
+  try {
+    const folderPrefix = normalizeTrainingDatasetFolderPrefix(req.body?.folderPrefix);
+    if (!folderPrefix) {
+      return res.status(400).json({
+        error: 'folderPrefix must be a training dataset folder under the configured training root.',
+      });
+    }
+    const sessions = req.body?.sessions;
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      return res.status(400).json({ error: 'sessions must be a non-empty array.' });
+    }
+    if (sessions.length > COPY_TO_TRAINING_MAX_SESSIONS) {
+      return res.status(400).json({
+        error: `Too many sessions in one request (max ${COPY_TO_TRAINING_MAX_SESSIONS}). Split into batches.`,
+      });
+    }
+
+    let manifest;
+    try {
+      manifest = await readTrainingDatasetManifest(folderPrefix);
+    } catch {
+      return res.status(404).json({
+        error: 'dataset.json not found for this folder. Create the training dataset in the portal first.',
+      });
+    }
+
+    const copied = [];
+    const errors = [];
+
+    for (const entry of sessions) {
+      const sessionId = typeof entry.sessionId === 'string' ? entry.sessionId.trim() : '';
+      if (!sessionId) {
+        errors.push({ sessionId: entry.sessionId, error: 'missing sessionId' });
+        continue;
+      }
+      let sourcePrefix = typeof entry.s3SessionPrefix === 'string' ? entry.s3SessionPrefix.trim() : '';
+      if (!sourcePrefix || sourcePrefix.length < 4) {
+        const wt =
+          typeof entry.workType === 'string' && WORK_TYPES.includes(entry.workType.trim())
+            ? entry.workType.trim()
+            : '';
+        const reading = await findReadingAcrossWorkTypes(sessionId, wt || null);
+        if (!reading?.s3SessionPrefix) {
+          errors.push({ sessionId, error: 'reading not found or missing s3SessionPrefix (reload list, pick live S3 rows).' });
+          continue;
+        }
+        sourcePrefix = reading.s3SessionPrefix;
+      }
+      try {
+        const { objectCount } = await copySessionIntoTrainingDataset(sourcePrefix, folderPrefix, sessionId);
+        const safeId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '_') || 'session';
+        copied.push({
+          sessionId,
+          objectCount,
+          destinationPrefix: `${folderPrefix}sessions/${safeId}/`,
+        });
+      } catch (e) {
+        errors.push({ sessionId, error: e.message || String(e) });
+      }
+    }
+
+    const idsAdded = copied.map((c) => c.sessionId);
+    manifest.lastCopyAt = new Date().toISOString();
+    manifest.lastCopyBatchCount = idsAdded.length;
+    manifest.copiedSessionIds = [...new Set([...(Array.isArray(manifest.copiedSessionIds) ? manifest.copiedSessionIds : []), ...idsAdded])].slice(-800);
+    await writeTrainingDatasetManifest(folderPrefix, manifest);
+
+    res.json({ ok: true, copied, errors });
+  } catch (e) {
+    console.error('training-datasets copy-sessions:', e);
+    res.status(500).json({ error: e.message || 'Copy failed' });
+  }
+});
+
+/**
+ * Upload trained weights for a pipeline (e.g. Roboflow `weights.pt`) → S3 `{folderPrefix}model/weights.pt`.
+ * Multipart: field `folderPrefix` (full encoded prefix), file field `file` (.pt only).
+ */
+app.post('/api/training-datasets/weights', weightsUploadMiddleware, async (req, res) => {
+  try {
+    const folderPrefix = normalizeTrainingDatasetFolderPrefix(req.body?.folderPrefix);
+    if (!folderPrefix) {
+      return res.status(400).json({
+        error: 'folderPrefix must be a training dataset folder under the configured training root.',
+      });
+    }
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ error: 'Missing file field "file" with a non-empty .pt body.' });
+    }
+    const orig = String(req.file.originalname || '').trim().toLowerCase();
+    if (!orig.endsWith('.pt')) {
+      return res.status(400).json({ error: 'File must use a .pt extension (e.g. weights.pt).' });
+    }
+
+    let manifest;
+    try {
+      manifest = await readTrainingDatasetManifest(folderPrefix);
+    } catch {
+      return res.status(404).json({
+        error: 'dataset.json not found for this folder. Create the pipeline in the portal first.',
+      });
+    }
+
+    const weightsKey = `${folderPrefix}${WEIGHTS_S3_RELATIVE_KEY}`;
+    const contentType = req.file.mimetype && req.file.mimetype !== 'application/octet-stream'
+      ? req.file.mimetype
+      : 'application/octet-stream';
+
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: weightsKey,
+        Body: req.file.buffer,
+        ContentType: contentType,
+      }),
+    );
+
+    const uploadedAt = new Date().toISOString();
+    manifest.weights = {
+      s3Key: weightsKey,
+      bucket: BUCKET_NAME,
+      relativeKey: WEIGHTS_S3_RELATIVE_KEY,
+      uploadedAt,
+      sizeBytes: req.file.size,
+      originalFileName: String(req.file.originalname || 'weights.pt').trim() || 'weights.pt',
+      contentType,
+    };
+    await writeTrainingDatasetManifest(folderPrefix, manifest);
+
+    res.status(201).json({
+      ok: true,
+      weights: manifest.weights,
+    });
+  } catch (e) {
+    console.error('training-datasets weights POST:', e);
+    res.status(500).json({ error: e.message || 'Weights upload failed' });
+  }
+});
+
+/**
+ * Short-lived HTTPS URL for iOS (or tooling) to download `model/weights.pt` without listing the whole bucket.
+ * Query: folderPrefix (URL-encoded, same as other training APIs).
+ */
+app.get('/api/training-datasets/weights-signed-url', async (req, res) => {
+  try {
+    const raw = typeof req.query.folderPrefix === 'string' ? req.query.folderPrefix.trim() : '';
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    const folderPrefix = normalizeTrainingDatasetFolderPrefix(decoded);
+    if (!folderPrefix) {
+      return res.status(400).json({
+        error: 'folderPrefix query must be a training dataset folder under the configured root (URL-encoded).',
+      });
+    }
+
+    let manifest;
+    try {
+      manifest = await readTrainingDatasetManifest(folderPrefix);
+    } catch {
+      return res.status(404).json({ error: 'dataset.json not found for this pipeline.' });
+    }
+    const key = manifest.weights && typeof manifest.weights.s3Key === 'string' ? manifest.weights.s3Key : '';
+    if (!key || !key.startsWith(folderPrefix)) {
+      return res.status(404).json({ error: 'No weights.pt uploaded for this pipeline yet.' });
+    }
+
+    const expiresIn = Math.min(
+      86400,
+      Math.max(60, parseInt(process.env.TRAINING_WEIGHTS_SIGNED_URL_TTL_SEC || '3600', 10) || 3600),
+    );
+    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
+    const url = await getSignedUrl(s3Client, command, { expiresIn });
+    res.json({
+      url,
+      expiresInSeconds: expiresIn,
+      bucket: BUCKET_NAME,
+      key,
+    });
+  } catch (e) {
+    console.error('training-datasets weights-signed-url:', e);
+    res.status(500).json({ error: e.message || 'Signed URL failed' });
+  }
+});
 
 /** Allowed `listStatus` values for GET /api/export/list-retrain-zip (must match portal routes). */
 const VALID_LIST_EXPORT_STATUSES = new Set([
@@ -1396,6 +2034,85 @@ app.get('/api/export/incorrect-retrain-zip', async (req, res) => {
     await archive.finalize();
   } catch (e) {
     console.error('incorrect-retrain-zip:', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message || 'Export failed' });
+    }
+  }
+});
+
+/**
+ * ZIP everything under a training-dataset folder (sessions/* + dataset.json), same bucket.
+ * Query: folderPrefix (full S3 prefix, URL-encoded). Caps total objects via TRAINING_DATASET_EXPORT_MAX_OBJECTS.
+ */
+app.get('/api/export/training-dataset-zip', async (req, res) => {
+  try {
+    const raw = typeof req.query.folderPrefix === 'string' ? req.query.folderPrefix.trim() : '';
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    const folderPrefix = normalizeTrainingDatasetFolderPrefix(decoded);
+    if (!folderPrefix) {
+      return res.status(400).json({
+        error: 'folderPrefix query must be a training dataset folder under the configured root (URL-encoded).',
+      });
+    }
+
+    let keys = await collectAllObjectKeysUnderPrefix(folderPrefix);
+    let truncated = false;
+    if (keys.length > TRAINING_DATASET_EXPORT_MAX_OBJECTS) {
+      keys = keys.slice(0, TRAINING_DATASET_EXPORT_MAX_OBJECTS);
+      truncated = true;
+    }
+
+    if (keys.length === 0) {
+      return res.status(404).json({ error: 'No objects under this training dataset prefix yet.' });
+    }
+
+    const slug = folderPrefix
+      .replace(/\/+$/, '')
+      .split('/')
+      .filter(Boolean)
+      .pop()
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filename = `training-dataset-${slug || 'export'}-${Date.now()}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Export-Object-Count', String(keys.length));
+    if (truncated) res.setHeader('X-Export-Truncated', 'true');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('warning', (err) => console.warn('archiver warning:', err.message));
+    archive.on('error', (err) => {
+      console.error('archiver error:', err);
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+    archive.pipe(res);
+
+    const baseLen = folderPrefix.length;
+    for (const key of keys) {
+      const rel = key.startsWith(folderPrefix) ? key.slice(baseLen) : key;
+      if (!rel || rel.endsWith('/')) continue;
+      /** Large binary for mobile inference — keep out of labeling ZIPs; iOS uses manifest + signed URL or direct S3. */
+      if (rel.startsWith('model/')) continue;
+      try {
+        const obj = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+        if (obj.Body) {
+          const buf = await streamToBuffer(obj.Body);
+          if (buf && buf.length) {
+            archive.append(buf, { name: rel });
+          }
+        }
+      } catch (e) {
+        console.warn(`training-dataset-zip skip ${key}:`, e.message);
+      }
+    }
+
+    await archive.finalize();
+  } catch (e) {
+    console.error('training-dataset-zip:', e);
     if (!res.headersSent) {
       res.status(500).json({ error: e.message || 'Export failed' });
     }

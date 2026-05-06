@@ -8,6 +8,29 @@ export type ReadingStatus =
   | 'no_dials'
   | 'not_sure';
 
+/** S3 / portal pipeline stages after a session is marked incorrect (labeler workflow). */
+export const INCORRECT_PIPELINE_STATUSES: ReadingStatus[] = [
+  'incorrect_new',
+  'incorrect_analyzed',
+  'incorrect_labeled',
+  'incorrect_training',
+];
+
+export function isIncorrectPipelineStatus(status: ReadingStatus): boolean {
+  return INCORRECT_PIPELINE_STATUSES.includes(status);
+}
+
+/** Short labels for the pipeline dropdown (labeler mode). */
+export const labelerPipelineStatusLabels: Record<
+  'incorrect_new' | 'incorrect_analyzed' | 'incorrect_labeled' | 'incorrect_training',
+  string
+> = {
+  incorrect_new: 'New (in queue)',
+  incorrect_analyzed: 'Analyzed',
+  incorrect_labeled: 'Labeled',
+  incorrect_training: 'Added to training dataset',
+};
+
 /** URL segment `/readings/incorrect-queues` — all incorrect_* queues together. */
 export type IncorrectQueuesListSlug = 'incorrect-queues';
 

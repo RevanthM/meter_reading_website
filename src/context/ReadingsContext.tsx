@@ -1,15 +1,9 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import type { ReadingStatus, DashboardCounts, WorkType, ReadingsListFilter } from '../types';
+import { isIncorrectPipelineStatus } from '../types';
 import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
 import { useAuth } from './AuthContext';
-
-const INCORRECT_QUEUE_STATUSES: ReadingStatus[] = [
-  'incorrect_new',
-  'incorrect_analyzed',
-  'incorrect_labeled',
-  'incorrect_training',
-];
 
 export type DataSource = 'all' | 'field' | 'simulator';
 
@@ -24,7 +18,7 @@ interface ReadingsContextType {
   setDataSource: (source: DataSource) => void;
   workType: WorkType;
   setWorkType: (workType: WorkType) => void;
-  updateReadingStatus: (id: string, status: ReadingStatus) => Promise<void>;
+  updateReadingStatus: (id: string, status: ReadingStatus, snapshot?: S3MeterReading) => Promise<void>;
   updateReadingComments: (id: string, comments: string) => void;
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
   getReadingsByStatus: (status: ReadingsListFilter) => S3MeterReading[];
@@ -108,18 +102,15 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     await loadData(dataSource, workType);
   }, [loadData, dataSource, workType]);
 
-  const updateReadingStatus = useCallback(async (id: string, status: ReadingStatus) => {
-    // Find the reading to get current status and type
-    const reading = allReadings.find(r => r.id === id);
+  const updateReadingStatus = useCallback(async (id: string, status: ReadingStatus, snapshot?: S3MeterReading) => {
+    const reading = snapshot ?? allReadings.find(r => r.id === id);
     if (!reading) return;
 
-    // If status hasn't changed, just update locally
     if (reading.status === status) {
       return;
     }
 
     try {
-      // Call API to move files in S3
       await bulkMoveReadings([{
         sessionId: reading.id,
         sourceType: reading.type,
@@ -128,11 +119,10 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         ...(reading.s3SessionPrefix ? { s3SessionPrefix: reading.s3SessionPrefix } : {}),
       }], userEmail || undefined);
 
-      // Update local state after successful S3 move
-      setAllReadings(prev => prev.map(r => 
-        r.id === id 
+      setAllReadings(prev => prev.map(r =>
+        r.id === id
           ? { ...r, status, updatedAt: new Date().toISOString() }
-          : r
+          : r,
       ));
 
       console.log(`✅ Moved reading ${id} from ${reading.status} to ${status}`);
@@ -183,7 +173,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const getReadingsByStatus = useCallback((status: ReadingsListFilter) => {
     if (status === 'all') return filteredReadings;
     if (status === 'incorrect-queues') {
-      return filteredReadings.filter((r) => INCORRECT_QUEUE_STATUSES.includes(r.status));
+      return filteredReadings.filter((r) => isIncorrectPipelineStatus(r.status));
     }
     return filteredReadings.filter((r) => r.status === status);
   }, [filteredReadings]);
