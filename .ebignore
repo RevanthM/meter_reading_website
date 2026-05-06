@@ -1,0 +1,12 @@
+# Elastic Beanstalk deploy bundle (same idea as .gitignore for `eb deploy`)
+node_modules/
+.git/
+.gitignore
+*.log
+.env
+.env.*
+src/.env
+.DS_Store
+coverage/
+.vscode/
+.idea/
