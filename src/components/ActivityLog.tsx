@@ -37,8 +37,8 @@ const statusIcons: Record<string, React.ReactNode> = {
 const statusColors: Record<string, string> = {
   correct: '#10b981',
   incorrect_new: '#ef4444',
-  incorrect_analyzed: '#f59e0b',
-  incorrect_labeled: '#8b5cf6',
+  incorrect_analyzed: '#d29922',
+  incorrect_labeled: '#a371f7',
   incorrect_training: '#06b6d4',
 };
 

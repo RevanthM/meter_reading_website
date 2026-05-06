@@ -7,7 +7,7 @@ import {
   PhoneMultiFactorGenerator,
   RecaptchaVerifier,
 } from '../context/AuthContext';
-import { auth } from '../config/firebase';
+import { auth, isFirebaseAuthConfigured } from '../config/firebase';
 import {
   ArrowLeft,
   Shield,
@@ -40,6 +40,7 @@ const MFASettings: React.FC = () => {
   const isMFAEnabled = enrolledFactors.length > 0;
 
   const initRecaptcha = useCallback(() => {
+    if (!auth) return;
     if (recaptchaVerifierRef.current) {
       recaptchaVerifierRef.current.clear();
     }
@@ -61,6 +62,7 @@ const MFASettings: React.FC = () => {
         phoneNumber,
         session,
       };
+      if (!auth) return;
       const phoneProvider = new PhoneAuthProvider(auth);
       const id = await phoneProvider.verifyPhoneNumber(phoneInfoOptions, recaptchaVerifierRef.current!);
       setVerificationId(id);
@@ -117,6 +119,38 @@ const MFASettings: React.FC = () => {
       }
     }
   };
+
+  if (!isFirebaseAuthConfigured || !auth) {
+    return (
+      <div className="mfa-page">
+        <header className="page-header">
+          <div className="header-content">
+            <button className="back-button" type="button" onClick={() => navigate('/')}>
+              <ArrowLeft size={18} />
+              Back
+            </button>
+            <div className="page-title">
+              <Gauge size={28} strokeWidth={1.5} />
+              <div>
+                <h1>MFA Settings</h1>
+                <p>Firebase is not configured</p>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div className="mfa-content">
+          <div className="mfa-alert error" style={{ maxWidth: 560 }}>
+            <AlertCircle size={16} />
+            <span>
+              Phone-based MFA in this screen uses Firebase Authentication. The app can run with{' '}
+              <strong>user ID sign-in only</strong> — set valid <code className="login-code">VITE_FIREBASE_*</code>{' '}
+              values if you need Firebase sign-in or this MFA page.
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mfa-page">

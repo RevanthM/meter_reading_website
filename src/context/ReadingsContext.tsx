@@ -1,8 +1,15 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
-import type { ReadingStatus, DashboardCounts, WorkType } from '../types';
+import type { ReadingStatus, DashboardCounts, WorkType, ReadingsListFilter } from '../types';
 import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
 import { useAuth } from './AuthContext';
+
+const INCORRECT_QUEUE_STATUSES: ReadingStatus[] = [
+  'incorrect_new',
+  'incorrect_analyzed',
+  'incorrect_labeled',
+  'incorrect_training',
+];
 
 export type DataSource = 'all' | 'field' | 'simulator';
 
@@ -20,7 +27,7 @@ interface ReadingsContextType {
   updateReadingStatus: (id: string, status: ReadingStatus) => Promise<void>;
   updateReadingComments: (id: string, comments: string) => void;
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
-  getReadingsByStatus: (status: ReadingStatus | 'all') => S3MeterReading[];
+  getReadingsByStatus: (status: ReadingsListFilter) => S3MeterReading[];
   getReadingById: (id: string) => S3MeterReading | undefined;
   refreshData: () => Promise<void>;
 }
@@ -28,7 +35,7 @@ interface ReadingsContextType {
 const ReadingsContext = createContext<ReadingsContextType | undefined>(undefined);
 
 export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, isAuthorized, userEmail } = useAuth();
+  const { user, anicaLoginUser, isAuthorized, userEmail } = useAuth();
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
   const [serverCounts, setServerCounts] = useState<DashboardCounts | null>(null);
   const [loading, setLoading] = useState(false);
@@ -36,7 +43,6 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [isUsingRealData, setIsUsingRealData] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>('all');
   const [workType, setWorkType] = useState<WorkType>('1000');
-  const [hasLoadedReadings, setHasLoadedReadings] = useState(false);
 
   // Load lightweight counts first (fast), then full readings in background
   const loadData = useCallback(async (source?: DataSource, wt?: WorkType) => {
@@ -55,7 +61,6 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
 
       const apiReadings = await readingsPromise;
       setAllReadings(apiReadings);
-      setHasLoadedReadings(true);
       console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || '1000'})`);
     } catch (err) {
       console.warn('⚠️ Failed to load from API, using mock data:', err);
@@ -69,10 +74,10 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
 
   // Only load data when user is authenticated
   useEffect(() => {
-    if (user && isAuthorized) {
+    if ((user || anicaLoginUser) && isAuthorized) {
       loadData(dataSource, workType);
     }
-  }, [loadData, dataSource, workType, user, isAuthorized]);
+  }, [loadData, dataSource, workType, user, anicaLoginUser, isAuthorized]);
 
   // Filter readings based on data source
   const filteredReadings = useMemo(() => {
@@ -80,9 +85,10 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     return allReadings.filter(r => r.type === dataSource);
   }, [allReadings, dataSource]);
 
-  // Use server counts if available (faster), otherwise compute from loaded readings
+  // Prefer server aggregates (S3 session-folder counts). Do not replace with
+  // readings.length after load — parsing can return fewer rows while counts are non-zero.
   const counts = useMemo((): DashboardCounts => {
-    if (serverCounts && !hasLoadedReadings) {
+    if (serverCounts) {
       return serverCounts;
     }
     const readings = filteredReadings;
@@ -96,7 +102,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       noDialsCount: readings.filter(r => r.status === 'no_dials').length,
       notSureCount: readings.filter(r => r.status === 'not_sure').length,
     };
-  }, [filteredReadings, serverCounts, hasLoadedReadings]);
+  }, [filteredReadings, serverCounts]);
 
   const refreshData = useCallback(async () => {
     await loadData(dataSource, workType);
@@ -119,6 +125,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         sourceType: reading.type,
         currentStatus: reading.status,
         targetStatus: status,
+        ...(reading.s3SessionPrefix ? { s3SessionPrefix: reading.s3SessionPrefix } : {}),
       }], userEmail || undefined);
 
       // Update local state after successful S3 move
@@ -156,6 +163,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         sourceType: r.type,
         currentStatus: r.status,
         targetStatus: status,
+        ...(r.s3SessionPrefix ? { s3SessionPrefix: r.s3SessionPrefix } : {}),
       })), userEmail || undefined);
 
       // Update local state
@@ -172,9 +180,12 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   }, [allReadings, userEmail]);
 
-  const getReadingsByStatus = useCallback((status: ReadingStatus | 'all') => {
+  const getReadingsByStatus = useCallback((status: ReadingsListFilter) => {
     if (status === 'all') return filteredReadings;
-    return filteredReadings.filter(r => r.status === status);
+    if (status === 'incorrect-queues') {
+      return filteredReadings.filter((r) => INCORRECT_QUEUE_STATUSES.includes(r.status));
+    }
+    return filteredReadings.filter((r) => r.status === status);
   }, [filteredReadings]);
 
   const getReadingById = useCallback((id: string) => {

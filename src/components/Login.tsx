@@ -1,102 +1,407 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Gauge, Mail, Lock, Loader2, AlertCircle, Eye, EyeOff, Smartphone, CheckCircle } from 'lucide-react';
+import {
+  Lock,
+  Loader2,
+  AlertCircle,
+  Eye,
+  EyeOff,
+  User,
+  Mail,
+  Phone,
+  CheckCircle,
+  Briefcase,
+} from 'lucide-react';
+import ThemeToggle from './ThemeToggle';
+import LoginSplitArt from './LoginSplitArt';
+import {
+  anicaLogin,
+  anicaRegister,
+  anicaSendOtp,
+  anicaValidateOtp,
+  envelopeErrorMessage,
+  getAnicaLoginAppl,
+  getAnicaLoginAppForOtp,
+  getAnicaLoginDefaultRegisterRole,
+  getAnicaLoginRole,
+  getOrCreateClientFingerprint,
+  getStoredDeviceId,
+  isAnicaLoginSuccess,
+  parseDeviceIdFromEntity,
+  parseEntityJson,
+  setStoredDeviceId,
+  assertSuccess,
+  type AnicaLoginSessionUser,
+} from '../services/anicaLoginAuth';
+
+type LoginSplitShellProps = {
+  children: React.ReactNode;
+  /** Narrow column (OTP, loading) */
+  compact?: boolean;
+};
+
+function LoginBrandMark() {
+  return (
+    <div className="login-brand">
+      <div className="login-brand__icon" aria-hidden>
+        <img
+          className="login-brand__icon-img"
+          src={`${import.meta.env.BASE_URL}login-brand-icon.png`}
+          width={1024}
+          height={1024}
+          alt=""
+          decoding="async"
+        />
+      </div>
+      <div className="login-brand__text">
+        <div className="login-brand__wordmark">
+          <span className="login-brand__meter">Analog Meter </span>
+          <span className="login-brand__reading">Reading</span>
+        </div>
+        <p className="login-brand__tagline">Smart meter reading portal</p>
+      </div>
+    </div>
+  );
+}
+
+function LoginSplitShell({ children, compact }: LoginSplitShellProps) {
+  return (
+    <div className="login-page login-page--split">
+      <ThemeToggle variant="floating" />
+      <aside className="login-split-art" aria-hidden>
+        <LoginSplitArt />
+      </aside>
+      <div className="login-split-main">
+        <div
+          className={['login-split-main-inner', compact ? 'login-split-main-inner--compact' : '']
+            .filter(Boolean)
+            .join(' ')}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type LoginSsoRowProps = {
+  onMicrosoft: () => void;
+  ssoComingSoon: boolean;
+};
+
+function LoginSsoRow({ onMicrosoft, ssoComingSoon }: LoginSsoRowProps) {
+  return (
+    <div className="login-sso-after-form">
+      <div className="login-divider" aria-hidden>
+        <span>Or continue with</span>
+      </div>
+      <div className="login-sso-row">
+        <button type="button" className="login-sso-btn login-sso-btn--full" onClick={onMicrosoft}>
+          <svg width="20" height="20" viewBox="0 0 21 21" aria-hidden>
+            <path fill="#f25022" d="M1 1h9v9H1z" />
+            <path fill="#00a4ef" d="M1 11h9v9H1z" />
+            <path fill="#7fba00" d="M11 1h9v9h-9z" />
+            <path fill="#ffb900" d="M11 11h9v9h-9z" />
+          </svg>
+          Continue with Microsoft
+        </button>
+      </div>
+      {ssoComingSoon && (
+        <p className="login-sso-notice login-sso-notice--below-sso" role="status">
+          Microsoft SSO is not enabled in this environment yet.
+        </p>
+      )}
+    </div>
+  );
+}
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
-    user, isAuthorized, login, error, clearError, loading,
-    mfaRequired, mfaPhoneHint, sendMfaCode, verifyMfaCode,
-    sendEmailLink, completeEmailLinkSignIn,
+    user,
+    anicaLoginUser,
+    isAuthorized,
+    loading,
+    completeAnicaLoginSession,
   } = useAuth();
-  const [email, setEmail] = useState('');
+
+  const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [mfaCode, setMfaCode] = useState('');
-  const [mfaSent, setMfaSent] = useState(false);
-  const [mfaSending, setMfaSending] = useState(false);
-  const [useEmailMfa, setUseEmailMfa] = useState(false);
-  const [emailLinkSent, setEmailLinkSent] = useState(false);
-  const [emailSending, setEmailSending] = useState(false);
-  const recaptchaRef = useRef<HTMLDivElement>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [ssoComingSoon, setSsoComingSoon] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
+  const [registerSuccess, setRegisterSuccess] = useState<string | null>(null);
+  const [regUserId, setRegUserId] = useState('');
+  const [regFirstName, setRegFirstName] = useState('');
+  const [regLastName, setRegLastName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regRole, setRegRole] = useState(() => getAnicaLoginDefaultRegisterRole());
+  const [showRegPassword, setShowRegPassword] = useState(false);
+  const [agreeTerms, setAgreeTerms] = useState(false);
+
+  const pendingRegLoginRef = useRef<{ userId: string; password: string } | null>(null);
+  const [registerOtpOpen, setRegisterOtpOpen] = useState(false);
+  const [registerOtpCode, setRegisterOtpCode] = useState('');
+
+  const clearPostRegisterOtp = () => {
+    setRegisterOtpOpen(false);
+    setRegisterOtpCode('');
+    pendingRegLoginRef.current = null;
+  };
 
   useEffect(() => {
-    if (user && isAuthorized && !loading) {
+    if (loading) return;
+    if ((user || anicaLoginUser) && isAuthorized) {
       navigate('/', { replace: true });
     }
-  }, [user, isAuthorized, loading, navigate]);
+  }, [user, anicaLoginUser, isAuthorized, loading, navigate]);
 
   useEffect(() => {
-    completeEmailLinkSignIn().then(completed => {
-      if (completed) {
-        navigate('/', { replace: true });
-      }
-    });
-  }, [completeEmailLinkSignIn, navigate]);
+    const openRegister =
+      searchParams.get('register') === '1' || searchParams.get('mode') === 'register';
+    if (!openRegister) return;
+    setAuthMode('register');
+    setAgreeTerms(false);
+    setFormError(null);
+    setSsoComingSoon(false);
+    setRegisterSuccess(null);
+    setRegisterOtpOpen(false);
+    setRegisterOtpCode('');
+    pendingRegLoginRef.current = null;
+    const next = new URLSearchParams(searchParams);
+    next.delete('register');
+    next.delete('mode');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
-  useEffect(() => {
-    if (mfaRequired && !mfaSent && !useEmailMfa && recaptchaRef.current) {
-      setMfaSending(true);
-      sendMfaCode(recaptchaRef.current)
-        .then(() => setMfaSent(true))
-        .catch((err) => {
-          console.error('Failed to send MFA code:', err);
-        })
-        .finally(() => setMfaSending(false));
-    }
-  }, [mfaRequired, mfaSent, useEmailMfa, sendMfaCode]);
+  const dismissError = () => setFormError(null);
 
-  const handleResendCode = () => {
-    if (recaptchaRef.current) {
-      setMfaSent(false);
-      setMfaSending(true);
-      sendMfaCode(recaptchaRef.current)
-        .then(() => setMfaSent(true))
-        .catch((err) => {
-          console.error('Failed to resend MFA code:', err);
-        })
-        .finally(() => setMfaSending(false));
-    }
+  const handleSsoClick = () => {
+    setFormError(null);
+    setSsoComingSoon(true);
   };
 
-  const handleSendEmailLink = async () => {
-    setEmailSending(true);
-    clearError();
-    try {
-      await sendEmailLink();
-      setEmailLinkSent(true);
-    } catch {
-      // error set by context
-    } finally {
-      setEmailSending(false);
-    }
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
+  const handleCredentialsSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!email || !password) return;
+    if (!userId.trim() || !password) return;
 
     setSubmitting(true);
+    setFormError(null);
+    setSsoComingSoon(false);
     try {
-      await login(email, password);
-    } catch {
-      // error state is set by login()
+      const serverDevice = getStoredDeviceId();
+      const deviceForRequest = serverDevice || getOrCreateClientFingerprint();
+      const hadServerDevice = !!serverDevice;
+
+      const env = await anicaLogin(userId.trim(), password, deviceForRequest);
+      if (!isAnicaLoginSuccess(env)) {
+        throw new Error(envelopeErrorMessage(env));
+      }
+
+      if (hadServerDevice) {
+        const profile = parseEntityJson(env.entityJson) as AnicaLoginSessionUser | null;
+        if (!profile || Object.keys(profile).length === 0) {
+          throw new Error('Login succeeded but user profile was missing. Try signing in again after clearing saved device data.');
+        }
+        completeAnicaLoginSession(profile);
+        navigate('/', { replace: true });
+        return;
+      }
+
+      const send = await anicaSendOtp(userId.trim(), getAnicaLoginAppl(), getAnicaLoginRole());
+      assertSuccess(send);
+      setOtpSent(true);
+      setStep('otp');
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Sign-in failed.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleMfaSubmit = async (e: FormEvent) => {
+  const handleResendOtp = async () => {
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const send = await anicaSendOtp(userId.trim(), getAnicaLoginAppl(), getAnicaLoginRole());
+      assertSuccess(send);
+      setOtpSent(true);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Could not resend code.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRegisterOtpSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!mfaCode || mfaCode.length < 6) return;
+    const cred = pendingRegLoginRef.current;
+    if (!cred) {
+      setFormError('Verification session expired. Sign in with your user ID.');
+      setRegisterOtpOpen(false);
+      return;
+    }
+    if (registerOtpCode.replace(/\D/g, '').length < 6) return;
 
     setSubmitting(true);
+    setFormError(null);
     try {
-      await verifyMfaCode(mfaCode);
-    } catch {
-      // error state is set by verifyMfaCode()
+      const val = await anicaValidateOtp(
+        cred.userId,
+        registerOtpCode.replace(/\D/g, ''),
+        getAnicaLoginAppForOtp(),
+      );
+      assertSuccess(val);
+      const deviceId = parseDeviceIdFromEntity(val.entityJson);
+      if (!deviceId) {
+        throw new Error('OTP verified but no device ID was returned.');
+      }
+      setStoredDeviceId(deviceId);
+
+      const again = await anicaLogin(cred.userId, cred.password, deviceId);
+      if (!isAnicaLoginSuccess(again)) {
+        throw new Error(envelopeErrorMessage(again));
+      }
+      const profile = parseEntityJson(again.entityJson) as AnicaLoginSessionUser | null;
+      if (!profile || Object.keys(profile).length === 0) {
+        throw new Error('Login succeeded but user profile was missing.');
+      }
+      completeAnicaLoginSession(profile);
+      clearPostRegisterOtp();
+      navigate('/', { replace: true });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Verification failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendRegisterOtp = async () => {
+    const cred = pendingRegLoginRef.current;
+    if (!cred) return;
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const send = await anicaSendOtp(cred.userId, getAnicaLoginAppl(), getAnicaLoginRole());
+      assertSuccess(send);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Could not resend code.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancelRegisterOtpModal = () => {
+    clearPostRegisterOtp();
+    setUserId(regUserId.trim());
+    setAuthMode('signin');
+    setFormError(null);
+    setSsoComingSoon(false);
+    setRegisterSuccess(null);
+  };
+
+  const handleOtpSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!otp.trim() || otp.replace(/\D/g, '').length < 6) return;
+
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const val = await anicaValidateOtp(userId.trim(), otp.replace(/\D/g, ''), getAnicaLoginAppForOtp());
+      assertSuccess(val);
+      const deviceId = parseDeviceIdFromEntity(val.entityJson);
+      if (!deviceId) {
+        throw new Error('OTP verified but no device ID was returned.');
+      }
+      setStoredDeviceId(deviceId);
+
+      const again = await anicaLogin(userId.trim(), password, deviceId);
+      if (!isAnicaLoginSuccess(again)) {
+        throw new Error(envelopeErrorMessage(again));
+      }
+      const profile = parseEntityJson(again.entityJson) as AnicaLoginSessionUser | null;
+      if (!profile || Object.keys(profile).length === 0) {
+        throw new Error('Login succeeded but user profile was missing.');
+      }
+      completeAnicaLoginSession(profile);
+      navigate('/', { replace: true });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Verification failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const backToCredentials = () => {
+    setStep('credentials');
+    setOtp('');
+    setOtpSent(false);
+    setFormError(null);
+  };
+
+  const goToRegisterFromOtp = () => {
+    backToCredentials();
+    setAuthMode('register');
+    setRegisterSuccess(null);
+    clearPostRegisterOtp();
+  };
+
+  const switchAuthMode = (mode: 'signin' | 'register') => {
+    clearPostRegisterOtp();
+    setAuthMode(mode);
+    setFormError(null);
+    setSsoComingSoon(false);
+    setAgreeTerms(false);
+    if (mode === 'signin') {
+      setRegisterSuccess(null);
+    }
+  };
+
+  const handleRegisterSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!agreeTerms) {
+      setFormError('Please agree to the Terms & Conditions and Privacy Policy to continue.');
+      return;
+    }
+    if (!regUserId.trim() || !regFirstName.trim() || !regLastName.trim() || !regEmail.trim() || !regPhone.trim() || !regPassword) {
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError(null);
+    setRegisterSuccess(null);
+    try {
+      const env = await anicaRegister({
+        UserID: regUserId.trim(),
+        FirstName: regFirstName.trim(),
+        LastName: regLastName.trim(),
+        EMailID: regEmail.trim(),
+        PhoneNum: regPhone.trim(),
+        password: regPassword,
+        Role: regRole.trim() || getAnicaLoginDefaultRegisterRole(),
+      });
+      if (!isAnicaLoginSuccess(env)) {
+        throw new Error(envelopeErrorMessage(env));
+      }
+
+      const uid = regUserId.trim();
+      const pwd = regPassword;
+      pendingRegLoginRef.current = { userId: uid, password: pwd };
+      setRegPassword('');
+      setRegisterOtpCode('');
+      setRegisterOtpOpen(true);
+      setFormError(null);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Registration failed.');
     } finally {
       setSubmitting(false);
     }
@@ -104,264 +409,500 @@ const Login: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="login-page">
-        <div className="login-loading">
-          <Loader2 size={48} className="spin" />
-          <p>Checking authentication...</p>
+      <LoginSplitShell>
+        <div className="login-card login-panel">
+          <div className="login-loading login-loading--split login-loading--in-card">
+            <Loader2 size={44} className="spin" />
+            <p>Authenticating…</p>
+          </div>
         </div>
-      </div>
+      </LoginSplitShell>
     );
   }
 
-  if (mfaRequired && useEmailMfa) {
+  if (step === 'otp') {
     return (
-      <div className="login-page">
-        <div className="login-card">
+      <LoginSplitShell>
+        <div className="login-card login-panel">
           <div className="login-header">
-            <div className="login-logo">
-              <Mail size={48} strokeWidth={1.5} />
+            <LoginBrandMark />
+            <div className="login-page-heading">
+              <h1 className="login-page-heading__title">Device verification</h1>
+              <p className="login-page-heading__sub">
+                {otpSent
+                  ? 'Enter the code sent to the email on file for your account.'
+                  : 'Preparing verification…'}
+              </p>
             </div>
-            <h1>Email Verification</h1>
-            <p>
-              {!emailLinkSent
-                ? 'We\'ll send a sign-in link to your email'
-                : 'Check your email and click the sign-in link'}
-            </p>
           </div>
 
-          {error && (
+          {formError && (
             <div className="login-error">
               <AlertCircle size={16} />
-              <span>{error}</span>
-              <button onClick={clearError} className="dismiss-error">&times;</button>
+              <span>{formError}</span>
+              <button type="button" onClick={dismissError} className="dismiss-error">&times;</button>
             </div>
           )}
 
-          {!emailLinkSent ? (
-            <div className="login-form">
-              <button
-                className="login-submit"
-                onClick={handleSendEmailLink}
-                disabled={emailSending}
-              >
-                {emailSending ? (
-                  <>
-                    <Loader2 size={18} className="spin" />
-                    Sending...
-                  </>
-                ) : (
-                  'Send Sign-in Link to Email'
-                )}
-              </button>
-            </div>
-          ) : (
-            <div className="login-form">
-              <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <CheckCircle size={48} color="#10b981" style={{ margin: '0 auto 12px' }} />
-                <p style={{ color: '#1e293b', fontWeight: 500, margin: '0 0 8px' }}>
-                  Email sent!
-                </p>
-                <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>
-                  Check your inbox and click the sign-in link. You can close this tab.
-                </p>
-              </div>
-              <button
-                className="login-submit"
-                onClick={handleSendEmailLink}
-                disabled={emailSending}
-                style={{ background: '#64748b' }}
-              >
-                {emailSending ? 'Sending...' : 'Resend Link'}
-              </button>
-            </div>
-          )}
-
-          <div className="login-footer">
-            <p>
-              <button
-                type="button"
-                onClick={() => { setUseEmailMfa(false); setEmailLinkSent(false); setMfaCode(''); clearError(); }}
-                style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
-              >
-                Use SMS verification instead
-              </button>
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (mfaRequired) {
-    return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-header">
-            <div className="login-logo">
-              <Smartphone size={48} strokeWidth={1.5} />
-            </div>
-            <h1>Verification Required</h1>
-            <p>
-              {mfaSending
-                ? 'Sending verification code...'
-                : `Enter the code sent to ${mfaPhoneHint || 'your phone'}`}
-            </p>
-          </div>
-
-          {error && (
-            <div className="login-error">
-              <AlertCircle size={16} />
-              <span>{error}</span>
-              <button onClick={clearError} className="dismiss-error">&times;</button>
-            </div>
-          )}
-
-          <form onSubmit={handleMfaSubmit} className="login-form">
+          <form onSubmit={handleOtpSubmit} className="login-form">
             <div className="form-group">
-              <label htmlFor="mfa-code">Verification Code</label>
+              <label htmlFor="login-otp">Security code</label>
               <div className="input-wrapper">
                 <Lock size={18} className="input-icon" />
                 <input
-                  id="mfa-code"
+                  id="login-otp"
                   type="text"
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  value={mfaCode}
-                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  value={otp}
+                  onChange={(ev) => setOtp(ev.target.value.replace(/\D/g, '').slice(0, 8))}
                   placeholder="123456"
                   required
                   autoFocus
-                  maxLength={6}
+                  maxLength={8}
                 />
               </div>
             </div>
 
             <button
               type="submit"
-              className="login-submit"
-              disabled={submitting || mfaCode.length < 6 || !mfaSent}
+              className={['login-submit', submitting ? '' : 'login-submit--cta'].filter(Boolean).join(' ')}
+              disabled={submitting || otp.replace(/\D/g, '').length < 6}
             >
               {submitting ? (
                 <>
                   <Loader2 size={18} className="spin" />
-                  Verifying...
+                  Verifying…
                 </>
               ) : (
-                'Verify'
+                'Verify and proceed'
               )}
             </button>
           </form>
 
-          <div className="login-footer">
-            <p>
-              Didn't receive the code?{' '}
-              <button
-                type="button"
-                onClick={handleResendCode}
-                disabled={mfaSending}
-                style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
-              >
-                {mfaSending ? 'Sending...' : 'Resend code'}
-              </button>
-              {' | '}
-              <button
-                type="button"
-                onClick={() => { setUseEmailMfa(true); setMfaCode(''); clearError(); }}
-                style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
-              >
-                Verify via Email
-              </button>
-            </p>
+          <div className="login-footer login-footer--row">
+            <button
+              type="button"
+              className="login-link-btn"
+              onClick={handleResendOtp}
+              disabled={submitting}
+            >
+              Resend code
+            </button>
+            <button type="button" className="login-link-btn" onClick={backToCredentials}>
+              Return to sign-in
+            </button>
+            <button type="button" className="login-link-btn" onClick={goToRegisterFromOtp}>
+              Register
+            </button>
           </div>
         </div>
-        <div ref={recaptchaRef} id="recaptcha-container" />
-      </div>
+      </LoginSplitShell>
     );
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
+    <>
+    <LoginSplitShell>
+      <div className={`login-card login-panel ${authMode === 'register' ? 'login-card--register' : ''}`}>
         <div className="login-header">
-          <div className="login-logo">
-            <Gauge size={48} strokeWidth={1.5} />
+          <LoginBrandMark />
+          <div className="login-page-heading">
+            <h1 className="login-page-heading__title">
+              {authMode === 'signin'
+                ? 'Sign In'
+                : registerSuccess && !registerOtpOpen
+                  ? 'Request submitted'
+                  : 'Create an Account'}
+            </h1>
+            <p className="login-page-heading__sub">
+              {authMode === 'signin' ? (
+                <>
+                  Need directory access?{' '}
+                  <button type="button" className="login-inline-link" onClick={() => switchAuthMode('register')}>
+                    Create an account
+                  </button>
+                </>
+              ) : (
+                <>
+                  Already have an account?{' '}
+                  <button type="button" className="login-inline-link" onClick={() => switchAuthMode('signin')}>
+                    Sign in
+                  </button>
+                </>
+              )}
+            </p>
           </div>
-          <h1>Meter Reading Analytics</h1>
-          <p>Sign in to access the dashboard</p>
+          {authMode === 'register' && registerOtpOpen && (
+            <p className="login-header-context">
+              Enter the verification code from your email in the dialog to finish setup.
+            </p>
+          )}
+          {authMode === 'register' && !registerSuccess && !registerOtpOpen && (
+            <p className="login-header-context">
+              Request directory access. Approval may be required.
+            </p>
+          )}
+          {authMode === 'register' && registerSuccess && !registerOtpOpen && (
+            <p className="login-header-context">
+              Registration received. Continue to sign in when your account is active.
+            </p>
+          )}
         </div>
 
-        {error && (
+        {formError && (
           <div className="login-error">
             <AlertCircle size={16} />
-            <span>{error}</span>
-            <button onClick={clearError} className="dismiss-error">&times;</button>
+            <span>{formError}</span>
+            <button type="button" onClick={dismissError} className="dismiss-error">&times;</button>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label htmlFor="email">Email</label>
-            <div className="input-wrapper">
-              <Mail size={18} className="input-icon" />
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                required
-                autoComplete="email"
-                autoFocus
-              />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <div className="input-wrapper">
-              <Lock size={18} className="input-icon" />
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                required
-                autoComplete="current-password"
-              />
+        {authMode === 'register' && registerSuccess && !registerOtpOpen && (
+          <div className="login-success-banner">
+            <CheckCircle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <p style={{ margin: 0 }}>{registerSuccess}</p>
               <button
                 type="button"
-                className="toggle-password"
-                onClick={() => setShowPassword(!showPassword)}
-                tabIndex={-1}
+                className="login-link-btn"
+                style={{ marginTop: '0.5rem' }}
+                onClick={() => {
+                  switchAuthMode('signin');
+                  setUserId(regUserId.trim());
+                }}
               >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                Continue to sign-in
               </button>
             </div>
           </div>
+        )}
 
-          <button
-            type="submit"
-            className="login-submit"
-            disabled={submitting || !email || !password}
-          >
-            {submitting ? (
-              <>
-                <Loader2 size={18} className="spin" />
-                Signing in...
-              </>
-            ) : (
-              'Sign In'
-            )}
-          </button>
-        </form>
+        {authMode === 'signin' && (
+          <>
+            <form onSubmit={handleCredentialsSubmit} className="login-form">
+              <div className="form-group">
+                <label htmlFor="userid">User ID</label>
+                <div className="input-wrapper">
+                  <User size={18} className="input-icon" />
+                  <input
+                    id="userid"
+                    type="text"
+                    value={userId}
+                    onChange={(ev) => setUserId(ev.target.value)}
+                    placeholder="john_doe"
+                    required
+                    autoComplete="username"
+                    autoFocus
+                  />
+                </div>
+              </div>
 
-        <div className="login-footer">
-          <p>Contact your administrator if you need access.</p>
+              <div className="form-group">
+                <label htmlFor="password">Password</label>
+                <div className="input-wrapper">
+                  <Lock size={18} className="input-icon" />
+                  <input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(ev) => setPassword(ev.target.value)}
+                    placeholder="Enter your password"
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="toggle-password"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className={['login-submit', submitting ? '' : 'login-submit--cta'].filter(Boolean).join(' ')}
+                disabled={submitting || !userId.trim() || !password}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={18} className="spin" />
+                    Signing in…
+                  </>
+                ) : (
+                  'Sign in'
+                )}
+              </button>
+            </form>
+
+            <LoginSsoRow onMicrosoft={handleSsoClick} ssoComingSoon={ssoComingSoon} />
+          </>
+        )}
+
+        {authMode === 'register' && !registerSuccess && !registerOtpOpen && (
+          <form onSubmit={handleRegisterSubmit} className="login-form login-register-form">
+            <div className="form-group login-reg-span-2">
+              <label htmlFor="reg-userid">User ID</label>
+              <div className="input-wrapper">
+                <User size={18} className="input-icon" />
+                <input
+                  id="reg-userid"
+                  type="text"
+                  value={regUserId}
+                  onChange={(ev) => setRegUserId(ev.target.value)}
+                  placeholder="john_doe"
+                  required
+                  autoComplete="username"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-first">First name</label>
+              <div className="input-wrapper">
+                <User size={18} className="input-icon" />
+                <input
+                  id="reg-first"
+                  type="text"
+                  value={regFirstName}
+                  onChange={(ev) => setRegFirstName(ev.target.value)}
+                  placeholder="John"
+                  required
+                  autoComplete="given-name"
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-last">Last name</label>
+              <div className="input-wrapper">
+                <User size={18} className="input-icon" />
+                <input
+                  id="reg-last"
+                  type="text"
+                  value={regLastName}
+                  onChange={(ev) => setRegLastName(ev.target.value)}
+                  placeholder="Doe"
+                  required
+                  autoComplete="family-name"
+                />
+              </div>
+            </div>
+            <div className="form-group login-reg-span-2">
+              <label htmlFor="reg-email">Email address</label>
+              <div className="input-wrapper">
+                <Mail size={18} className="input-icon" />
+                <input
+                  id="reg-email"
+                  type="email"
+                  value={regEmail}
+                  onChange={(ev) => setRegEmail(ev.target.value)}
+                  placeholder="john@example.com"
+                  required
+                  autoComplete="email"
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-phone">Phone</label>
+              <div className="input-wrapper">
+                <Phone size={18} className="input-icon" />
+                <input
+                  id="reg-phone"
+                  type="tel"
+                  value={regPhone}
+                  onChange={(ev) => setRegPhone(ev.target.value)}
+                  placeholder="+11234567890"
+                  required
+                  autoComplete="tel"
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-role">Role</label>
+              <div className="input-wrapper">
+                <Briefcase size={18} className="input-icon" />
+                <input
+                  id="reg-role"
+                  type="text"
+                  value={regRole}
+                  onChange={(ev) => setRegRole(ev.target.value)}
+                  placeholder="AMR"
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-group login-reg-span-2">
+              <label htmlFor="reg-password">Password</label>
+              <div className="input-wrapper">
+                <Lock size={18} className="input-icon" />
+                <input
+                  id="reg-password"
+                  type={showRegPassword ? 'text' : 'password'}
+                  value={regPassword}
+                  onChange={(ev) => setRegPassword(ev.target.value)}
+                  placeholder="Choose a password"
+                  required
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="toggle-password"
+                  onClick={() => setShowRegPassword(!showRegPassword)}
+                  tabIndex={-1}
+                >
+                  {showRegPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <label className="login-terms login-reg-span-2">
+              <input
+                type="checkbox"
+                checked={agreeTerms}
+                onChange={(ev) => setAgreeTerms(ev.target.checked)}
+              />
+              <span>
+                I agree to the{' '}
+                <a href="#terms" className="login-terms__link" onClick={(ev) => ev.preventDefault()}>
+                  Terms {'&'} Conditions
+                </a>
+                {' '}and{' '}
+                <a href="#privacy" className="login-terms__link" onClick={(ev) => ev.preventDefault()}>
+                  Privacy Policy
+                </a>
+                .
+              </span>
+            </label>
+
+            <button
+              type="submit"
+              className={['login-submit', 'login-reg-span-2', submitting ? '' : 'login-submit--cta']
+                .filter(Boolean)
+                .join(' ')}
+              disabled={
+                submitting
+                || !agreeTerms
+                || !regUserId.trim()
+                || !regFirstName.trim()
+                || !regLastName.trim()
+                || !regEmail.trim()
+                || !regPhone.trim()
+                || !regPassword
+                || !regRole.trim()
+              }
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={18} className="spin" />
+                  Submitting registration…
+                </>
+              ) : (
+                'Sign up'
+              )}
+            </button>
+          </form>
+        )}
+
+        {authMode === 'signin' && (
+          <div className="login-footer">
+            <p>
+              First access from this browser may require device verification by email. For credential or access issues,
+              contact your IT administrator.
+            </p>
+          </div>
+        )}
+      </div>
+    </LoginSplitShell>
+
+    {registerOtpOpen && (
+      <div
+        className="login-modal-overlay"
+        role="presentation"
+        aria-hidden={!registerOtpOpen}
+      >
+        <div
+          className="login-modal login-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="register-otp-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="login-header login-modal-header login-modal-header--brand">
+            <LoginBrandMark />
+            <div className="login-page-heading">
+              <h1 id="register-otp-title" className="login-page-heading__title">
+                Complete registration
+              </h1>
+              <p className="login-page-heading__sub">
+                Enter the code sent to your registered email to finish setup.
+              </p>
+            </div>
+          </div>
+
+          {formError && (
+            <div className="login-error">
+              <AlertCircle size={16} />
+              <span>{formError}</span>
+              <button type="button" onClick={dismissError} className="dismiss-error">&times;</button>
+            </div>
+          )}
+
+          <form onSubmit={handleRegisterOtpSubmit} className="login-form">
+            <div className="form-group">
+              <label htmlFor="register-post-otp">Security code</label>
+              <div className="input-wrapper">
+                <Lock size={18} className="input-icon" />
+                <input
+                  id="register-post-otp"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={registerOtpCode}
+                  onChange={(ev) => setRegisterOtpCode(ev.target.value.replace(/\D/g, '').slice(0, 8))}
+                  placeholder="123456"
+                  required
+                  autoFocus
+                  maxLength={8}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className={['login-submit', submitting ? '' : 'login-submit--cta'].filter(Boolean).join(' ')}
+              disabled={submitting || registerOtpCode.replace(/\D/g, '').length < 6}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={18} className="spin" />
+                  Verifying…
+                </>
+              ) : (
+                'Verify and sign in'
+              )}
+            </button>
+          </form>
+
+          <div className="login-footer login-footer--row login-modal-footer">
+            <button
+              type="button"
+              className="login-link-btn"
+              onClick={handleResendRegisterOtp}
+              disabled={submitting}
+            >
+              Resend code
+            </button>
+            <button type="button" className="login-link-btn" onClick={cancelRegisterOtpModal}>
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
-      <div ref={recaptchaRef} id="recaptcha-container" />
-    </div>
+    )}
+    </>
   );
 };
 

@@ -14,9 +14,13 @@ import {
   type MultiFactorResolver,
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
+import type { AnicaLoginSessionUser } from '../services/anicaLoginAuth';
+import { clearAnicaLoginSession, loadAnicaLoginSession, persistAnicaLoginSession } from '../services/anicaLoginAuth';
 
 interface AuthContextType {
   user: User | null;
+  /** Session from password auth (user ID / password + device verification). */
+  anicaLoginUser: AnicaLoginSessionUser | null;
   userEmail: string | null;
   loading: boolean;
   error: string | null;
@@ -29,6 +33,7 @@ interface AuthContextType {
   verifyMfaCode: (code: string) => Promise<void>;
   sendEmailLink: () => Promise<void>;
   completeEmailLinkSignIn: () => Promise<boolean>;
+  completeAnicaLoginSession: (profile: AnicaLoginSessionUser) => void;
   logout: () => Promise<void>;
   clearError: () => void;
   isAuthorized: boolean;
@@ -36,16 +41,29 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function anicaLoginDisplayEmail(profile: AnicaLoginSessionUser | null): string | null {
+  if (!profile) return null;
+  const e = profile.EMailID ?? profile.email ?? profile.Email;
+  if (typeof e === 'string' && e.trim()) return e;
+  const uid = profile.UserID ?? profile.userId;
+  if (typeof uid === 'string' && uid.trim()) return uid;
+  return null;
+}
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const initialAnicaLogin = loadAnicaLoginSession();
   const [user, setUser] = useState<User | null>(null);
+  const [anicaLoginUser, setAnicaLoginUser] = useState<AnicaLoginSessionUser | null>(initialAnicaLogin);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState(!!initialAnicaLogin);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
   const [mfaPhoneHint, setMfaPhoneHint] = useState<string | null>(null);
   const [mfaVerificationId, setMfaVerificationId] = useState<string | null>(null);
   const [mfaEmail, setMfaEmail] = useState<string | null>(null);
+  const anicaLoginUserRef = useRef<AnicaLoginSessionUser | null>(anicaLoginUser);
+  anicaLoginUserRef.current = anicaLoginUser;
 
   const checkAuthorization = useCallback(async (_currentUser: User) => {
     setIsAuthorized(true);
@@ -53,13 +71,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         await checkAuthorization(currentUser);
         setUser(currentUser);
       } else {
         setUser(null);
-        setIsAuthorized(false);
+        if (!anicaLoginUserRef.current) {
+          setIsAuthorized(false);
+        }
       }
       setLoading(false);
     });
@@ -68,6 +92,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [checkAuthorization]);
 
   const login = useCallback(async (email: string, password: string) => {
+    if (!auth) {
+      setError('Firebase sign-in is not configured. Use user ID sign-in on the login page.');
+      throw new Error('Firebase not configured');
+    }
     setError(null);
     setMfaRequired(false);
     setMfaResolver(null);
@@ -104,6 +132,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const mfaRecaptchaRef = useRef<RecaptchaVerifier | null>(null);
 
   const sendMfaCode = useCallback(async (recaptchaContainer: HTMLElement) => {
+    if (!auth) throw new Error('Firebase is not configured');
     if (!mfaResolver) throw new Error('No MFA resolver');
     setError(null);
 
@@ -150,6 +179,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [mfaResolver, mfaVerificationId]);
 
   const sendEmailLink = useCallback(async () => {
+    if (!auth) throw new Error('Firebase is not configured');
     if (!mfaEmail) throw new Error('No email available');
     setError(null);
 
@@ -168,6 +198,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [mfaEmail]);
 
   const completeEmailLinkSignIn = useCallback(async () => {
+    if (!auth) return false;
     if (!isSignInWithEmailLink(auth, window.location.href)) return false;
 
     const email = window.localStorage.getItem('emailForSignIn');
@@ -210,9 +241,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, []);
 
+  const completeAnicaLoginSession = useCallback((profile: AnicaLoginSessionUser) => {
+    persistAnicaLoginSession(profile);
+    setAnicaLoginUser(profile);
+    setIsAuthorized(true);
+  }, []);
+
   const logout = useCallback(async () => {
     try {
-      await signOut(auth);
+      try {
+        sessionStorage.removeItem('meter_portal_welcome_dismissed_session');
+      } catch {
+        /* ignore */
+      }
+      clearAnicaLoginSession();
+      setAnicaLoginUser(null);
+      if (auth) {
+        await signOut(auth);
+      }
       setUser(null);
       setIsAuthorized(false);
       setMfaRequired(false);
@@ -227,7 +273,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <AuthContext.Provider value={{
       user,
-      userEmail: user?.email || null,
+      anicaLoginUser,
+      userEmail: user?.email || anicaLoginDisplayEmail(anicaLoginUser),
       loading,
       error,
       mfaRequired,
@@ -239,6 +286,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       verifyMfaCode,
       sendEmailLink,
       completeEmailLinkSignIn,
+      completeAnicaLoginSession,
       logout,
       clearError,
       isAuthorized,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useReadings } from '../context/ReadingsContext';
 import {
   ArrowLeft,
   Gauge,
@@ -43,7 +44,7 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string; icon: React.ReactNod
   { value: 'all', label: 'All Statuses', icon: <SlidersHorizontal size={14} />, color: 'var(--text-muted)' },
   { value: 'correct', label: 'Correct', icon: <CheckCircle size={14} />, color: '#10b981' },
   { value: 'incorrect', label: 'Incorrect', icon: <XCircle size={14} />, color: '#ef4444' },
-  { value: 'not_sure', label: 'Not Sure', icon: <HelpCircle size={14} />, color: '#f59e0b' },
+  { value: 'not_sure', label: 'Not Sure', icon: <HelpCircle size={14} />, color: '#d29922' },
   { value: 'no_dials', label: 'No Dials', icon: <XCircle size={14} />, color: '#8b5cf6' },
 ];
 
@@ -59,6 +60,7 @@ function matchesStatus(upload: UploadEntry, filter: StatusFilter): boolean {
 const UploadsTable: React.FC = () => {
   const navigate = useNavigate();
   const { userEmail } = useAuth();
+  const { workType } = useReadings();
   const [uploads, setUploads] = useState<UploadEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -70,12 +72,13 @@ const UploadsTable: React.FC = () => {
 
   useEffect(() => {
     loadUploads();
-  }, []);
+  }, [workType]);
 
   const loadUploads = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/uploads');
+      const params = new URLSearchParams({ workType });
+      const response = await fetch(`/api/uploads?${params}`);
       if (response.ok) {
         const data = await response.json();
         setUploads(data);
@@ -348,7 +351,7 @@ const UploadsTable: React.FC = () => {
               </thead>
               <tbody>
                 {filteredUploads.map((upload) => (
-                  <tr key={upload.id} onClick={() => navigate(`/reading/${upload.sessionId}`)} style={{ cursor: 'pointer' }}>
+                  <tr key={upload.id} onClick={() => navigate(`/reading/${encodeURIComponent(upload.sessionId)}?workType=${workType}`)} style={{ cursor: 'pointer' }}>
                     <td>
                       <span className="cell-with-icon">
                         <Upload size={14} className="cell-icon" />
@@ -388,7 +391,7 @@ const UploadsTable: React.FC = () => {
                       </span>
                     </td>
                     <td>
-                      <button className="table-view-btn" onClick={(e) => { e.stopPropagation(); navigate(`/reading/${upload.sessionId}`); }}>
+                      <button className="table-view-btn" onClick={(e) => { e.stopPropagation(); navigate(`/reading/${encodeURIComponent(upload.sessionId)}?workType=${workType}`); }}>
                         <Eye size={14} />
                       </button>
                     </td>

@@ -1,7 +1,15 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
-const BUCKET_NAME = 'meter-reader-training-feedback';
-const REGION = 'us-east-1';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(__dirname, '..');
+dotenv.config({ path: path.join(repoRoot, '.env') });
+dotenv.config({ path: path.join(repoRoot, 'src', '.env') });
+
+const BUCKET_NAME = (process.env.AWS_S3_BUCKET || 'meter-reader-training-feedback').trim();
+const REGION = (process.env.AWS_REGION || 'us-east-1').trim();
 
 const s3Client = new S3Client({
   region: REGION,

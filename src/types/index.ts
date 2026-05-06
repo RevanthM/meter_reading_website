@@ -8,6 +8,11 @@ export type ReadingStatus =
   | 'no_dials'
   | 'not_sure';
 
+/** URL segment `/readings/incorrect-queues` — all incorrect_* queues together. */
+export type IncorrectQueuesListSlug = 'incorrect-queues';
+
+export type ReadingsListFilter = ReadingStatus | 'all' | IncorrectQueuesListSlug;
+
 // Reading type - simulator or field
 export type ReadingType = 'simulator' | 'field';
 
@@ -27,6 +32,8 @@ export type MeterImage = {
   id: string;
   url: string;
   label: string;
+  /** Present for S3-backed readings (used for Roboflow / tooling). */
+  fileName?: string;
   metadata: {
     capturedAt: string;
     resolution: string;
@@ -77,8 +84,8 @@ export const statusLabels: Record<ReadingStatus, string> = {
 export const statusColors: Record<ReadingStatus, string> = {
   correct: '#10b981',
   incorrect_new: '#ef4444',
-  incorrect_analyzed: '#f59e0b',
-  incorrect_labeled: '#8b5cf6',
+  incorrect_analyzed: '#d29922',
+  incorrect_labeled: '#a371f7',
   incorrect_training: '#06b6d4',
   no_dials: '#6b7280',
   not_sure: '#d97706',

@@ -1,12 +1,22 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('meter_portal_theme');
+          document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Meter Reading Analytics</title>
-    <script type="module" crossorigin src="/assets/index-BNaoDrPL.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CmJGS8ir.css">
+    <script type="module" crossorigin src="/assets/index-B8Kg-g-S.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BiVYAs4_.css">
   </head>
   <body>
     <div id="root"></div>
