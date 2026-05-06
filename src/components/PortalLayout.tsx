@@ -23,6 +23,8 @@ import {
   Inbox,
   FolderOpen,
   GraduationCap,
+  PanelLeft,
+  PanelLeftClose,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -63,6 +65,7 @@ function pathIsReadings(pathname: string): boolean {
 const STORAGE_MORE = 'portal_nav_more_open';
 const STORAGE_ACCOUNT = 'portal_nav_account_open';
 const STORAGE_TRAINING_NAV = 'portal_nav_training_open';
+const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
 const PortalLayout: FC = () => {
   const navigate = useNavigate();
@@ -70,6 +73,16 @@ const PortalLayout: FC = () => {
   const pathname = location.pathname;
   const { userEmail, logout, user } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      const v = localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
+      if (v === '0' || v === '1') return v === '1';
+    } catch {
+      /* ignore */
+    }
+    return false;
+  });
 
   const [workMode, setWorkMode] = useState<PortalWorkMode>(() => getStoredPortalWorkMode());
 
@@ -255,6 +268,14 @@ const PortalLayout: FC = () => {
     }
   }, [accountOpen]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_SIDEBAR_COLLAPSED, sidebarCollapsed ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarCollapsed]);
+
   const handleLogout = async () => {
     await logout();
     navigate('/login');
@@ -302,7 +323,11 @@ const PortalLayout: FC = () => {
   const mainAfterDash = mainLinks.filter((l) => l.path !== '/');
 
   return (
-    <div className={`portal-shell${mobileNavOpen ? ' portal-shell--nav-open' : ''}`}>
+    <div
+      className={`portal-shell${mobileNavOpen ? ' portal-shell--nav-open' : ''}${
+        sidebarCollapsed ? ' portal-shell--sidebar-collapsed' : ''
+      }`}
+    >
       {mobileNavOpen ? (
         <button
           type="button"
@@ -507,6 +532,18 @@ const PortalLayout: FC = () => {
           >
             {mobileNavOpen ? <X size={20} /> : <Menu size={20} />}
             <span className="portal-topbar-menu-label">Menu</span>
+          </button>
+
+          <button
+            type="button"
+            className="portal-sidebar-toggle"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            aria-pressed={sidebarCollapsed}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          >
+            {sidebarCollapsed ? <PanelLeft size={20} strokeWidth={2} aria-hidden /> : <PanelLeftClose size={20} strokeWidth={2} aria-hidden />}
+            <span className="portal-sidebar-toggle-label">{sidebarCollapsed ? 'Show' : 'Hide'}</span>
           </button>
 
           <div className="portal-topbar-spacer" />

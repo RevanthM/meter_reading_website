@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type FC } from 'react';
 import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import { useAuth } from '../context/AuthContext';
@@ -33,6 +33,8 @@ import {
   Maximize2,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
+  ArrowDown,
 } from 'lucide-react';
 import {
   fetchReadingById,
@@ -89,6 +91,52 @@ function partitionMeterImages(images: MeterImage[]): {
   return { fullMeter, dialImages, otherImages };
 }
 
+type DialDetailRow = NonNullable<S3MeterReading['dialDetails']>[number];
+
+/** When `metadata.json` has no `dial_details`, still give reviewers one row per dial crop (digits from model reading). */
+function dialRowsFromDialCropImages(
+  images: MeterImage[],
+  meterValue: string | number | null | undefined,
+): DialDetailRow[] {
+  const sorted = images
+    .filter(isDialCropImage)
+    .sort((a, b) => (a.metadata.dialIndex ?? 0) - (b.metadata.dialIndex ?? 0));
+  const mv = meterValue != null ? String(meterValue) : '';
+  return sorted.map((img) => {
+    const pos = img.metadata.dialIndex ?? 0;
+    const ch = mv[pos];
+    let prediction = 0;
+    if (ch !== undefined && ch !== '' && /\d/.test(ch)) {
+      prediction = parseInt(ch, 10);
+    }
+    return {
+      dial: pos + 1,
+      prediction,
+      direction: 'clockwise',
+      confidence: 0,
+    };
+  });
+}
+
+/** Baseline dial editor rows from the server session (explicit dial_details or inferred from dial images). */
+function baselineDialRowsForReading(reading: S3MeterReading): DialDetailRow[] {
+  if (reading.dialDetails && reading.dialDetails.length > 0) {
+    return reading.dialDetails.map((d) => ({
+      dial: d.dial,
+      prediction: d.prediction,
+      direction: d.direction,
+      confidence: d.confidence,
+    }));
+  }
+  return dialRowsFromDialCropImages(reading.images, reading.meterValue);
+}
+
+function dialCropImageForDial(dialImages: MeterImage[], dialNumber: number): MeterImage | undefined {
+  return dialImages.find(
+    (img) => typeof img.metadata.dialIndex === 'number' && img.metadata.dialIndex + 1 === dialNumber,
+  );
+}
+
 type ReadingDetailImageCardProps = {
   image: MeterImage;
   reading: S3MeterReading;
@@ -96,8 +144,6 @@ type ReadingDetailImageCardProps = {
   onActivate: (imageId: string) => void;
   strip?: boolean;
 };
-
-type DialDetailRow = NonNullable<S3MeterReading['dialDetails']>[number];
 
 const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   image,
@@ -216,6 +262,9 @@ const ReadingDetail: React.FC = () => {
     return ix;
   }, [reading?.id, readingQueueIds]);
 
+  const reviewerCorrectionsRef = useRef<HTMLDivElement | null>(null);
+  const [incorrectOutcomeIntroOpen, setIncorrectOutcomeIntroOpen] = useState(false);
+
   const [mlPrediction, setMlPrediction] = useState('');
   const [userCorrection, setUserCorrection] = useState('');
   const [localDialRows, setLocalDialRows] = useState<DialDetailRow[]>([]);
@@ -282,11 +331,7 @@ const ReadingDetail: React.FC = () => {
     setSelectedStatus(reading.status);
     setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
     setUserCorrection(reading.expectedValue != null ? String(reading.expectedValue) : '');
-    if (reading.dialDetails && reading.dialDetails.length > 0) {
-      setLocalDialRows(reading.dialDetails.map((d) => ({ ...d })));
-    } else {
-      setLocalDialRows([]);
-    }
+    setLocalDialRows(baselineDialRowsForReading(reading).map((d) => ({ ...d })));
   }, [
     reading?.id,
     reading?.status,
@@ -306,7 +351,7 @@ const ReadingDetail: React.FC = () => {
     const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
     const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
     const baseComments = r.comments || '';
-    const baseDialStr = JSON.stringify(r.dialDetails || []);
+    const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
     return (
       userCorrection !== baseExpected ||
@@ -376,7 +421,7 @@ const ReadingDetail: React.FC = () => {
     const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
     const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
     const baseComments = r.comments || '';
-    const baseDialStr = JSON.stringify(r.dialDetails || []);
+    const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
 
     const metaDirty =
@@ -502,6 +547,20 @@ const ReadingDetail: React.FC = () => {
   })();
   /** Reviewer incorrect flow: corrections + queue nav live in the main column (no modal). */
   const inlineIncorrectReview = incorrectContext && !isLabelerMode;
+
+  useEffect(() => {
+    if (!incorrectContext) setIncorrectOutcomeIntroOpen(false);
+  }, [incorrectContext]);
+
+  const scrollToReviewerCorrections = useCallback(() => {
+    setIncorrectOutcomeIntroOpen(false);
+    requestAnimationFrame(() => {
+      const el = reviewerCorrectionsRef.current;
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.focus();
+    });
+  }, []);
 
   useEffect(() => {
     if (!inlineIncorrectReview) return;
@@ -648,6 +707,18 @@ const ReadingDetail: React.FC = () => {
             </span>
           </div>
         </div>
+        {!isLabelerMode && incorrectContext ? (
+          <div className="reading-detail-corrections-dock" role="region" aria-label="Reviewer corrections shortcut">
+            <button type="button" className="reading-detail-corrections-dock-btn" onClick={() => scrollToReviewerCorrections()}>
+              <ClipboardList size={18} aria-hidden />
+              <span>Jump to corrections</span>
+              <ArrowDown size={16} aria-hidden />
+            </button>
+            <span className="reading-detail-corrections-dock-hint">
+              Update dial values and readings—section is below the images.
+            </span>
+          </div>
+        ) : null}
       </header>
 
       <main className="detail-content">
@@ -767,7 +838,12 @@ const ReadingDetail: React.FC = () => {
                 ) : null}
 
                 {!isLabelerMode && incorrectContext ? (
-                  <div className="incorrect-review-inline">
+                  <div
+                    ref={reviewerCorrectionsRef}
+                    id="reading-detail-reviewer-corrections"
+                    className="incorrect-review-inline"
+                    tabIndex={-1}
+                  >
                     <div className="incorrect-review-inline-head">
                       <h3 id="incorrect-review-inline-title">Incorrect reading — reviewer corrections</h3>
                       <p className="incorrect-review-subid">
@@ -819,33 +895,60 @@ const ReadingDetail: React.FC = () => {
 
                       {localDialRows.length > 0 ? (
                         <div className="incorrect-review-dials">
-                          <h4 className="reading-detail-dial-simple-title">Dial values</h4>
+                          <h4 className="reading-detail-dial-simple-title">Dial crops and values</h4>
+                          <p className="reading-detail-field-hint incorrect-review-dials-hint">
+                            Match each crop to the dial position, then set the digit. Click an image to enlarge.
+                          </p>
                           <div className="incorrect-review-dial-grid">
-                            {localDialRows.map((dial, idx) => (
-                              <label key={`${dial.dial}-${idx}`} className="incorrect-review-dial-cell">
-                                <span className="incorrect-review-dial-label">Dial {dial.dial}</span>
-                                <input
-                                  type="number"
-                                  step="any"
-                                  className="reading-detail-dial-input reading-detail-dial-input--value"
-                                  aria-label={`Correct value for dial ${dial.dial}`}
-                                  value={dial.prediction}
-                                  onChange={(e) => {
-                                    const v = parseFloat(e.target.value);
-                                    setLocalDialRows((rows) =>
-                                      rows.map((r, i) =>
-                                        i === idx ? { ...r, prediction: Number.isFinite(v) ? v : r.prediction } : r,
-                                      ),
-                                    );
-                                  }}
-                                />
-                              </label>
-                            ))}
+                            {localDialRows.map((dial, idx) => {
+                              const dialImg = dialCropImageForDial(dialImages, dial.dial);
+                              return (
+                                <div key={`${dial.dial}-${idx}`} className="incorrect-review-dial-cell">
+                                  {dialImg ? (
+                                    <button
+                                      type="button"
+                                      className="incorrect-review-dial-thumb"
+                                      onClick={() => handleImageActivate(dialImg.id)}
+                                      title="Open dial image"
+                                      aria-label={`Open dial ${dial.dial} image larger`}
+                                    >
+                                      <img src={dialImg.url} alt="" loading="lazy" />
+                                    </button>
+                                  ) : (
+                                    <div
+                                      className="incorrect-review-dial-thumb incorrect-review-dial-thumb--empty"
+                                      aria-hidden
+                                      title="No matching dial crop in this session"
+                                    />
+                                  )}
+                                  <label className="incorrect-review-dial-fields">
+                                    <span className="incorrect-review-dial-label">Dial {dial.dial}</span>
+                                    <input
+                                      type="number"
+                                      step="any"
+                                      className="reading-detail-dial-input reading-detail-dial-input--value"
+                                      aria-label={`Correct value for dial ${dial.dial}`}
+                                      value={dial.prediction}
+                                      onChange={(e) => {
+                                        const v = parseFloat(e.target.value);
+                                        setLocalDialRows((rows) =>
+                                          rows.map((row, i) =>
+                                            i === idx
+                                              ? { ...row, prediction: Number.isFinite(v) ? v : row.prediction }
+                                              : row,
+                                          ),
+                                        );
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       ) : (
                         <p className="reading-detail-field-hint reading-detail-field-hint--solo">
-                          No per-dial rows in this file—use <strong>Correct reading</strong> above.
+                          No dial crops or per-dial data in this session—use <strong>Correct reading</strong> above.
                         </p>
                       )}
                     </div>
@@ -1068,10 +1171,12 @@ const ReadingDetail: React.FC = () => {
                       onChange={(e) => {
                         const raw = e.target.value;
                         if (raw === REVIEWER_SELECT_INCORRECT) {
-                          setSelectedStatus((prev) => {
-                            if (statusIsIncorrect(prev)) return prev;
-                            return 'incorrect_new';
-                          });
+                          if (!statusIsIncorrect(selectedStatus)) {
+                            setSelectedStatus('incorrect_new');
+                            setIncorrectOutcomeIntroOpen(true);
+                          } else {
+                            setSelectedStatus((prev) => (statusIsIncorrect(prev) ? prev : 'incorrect_new'));
+                          }
                         } else {
                           setSelectedStatus(raw as ReadingStatus);
                         }
@@ -1229,6 +1334,38 @@ const ReadingDetail: React.FC = () => {
           </aside>
         </div>
       </main>
+
+      {!isLabelerMode && incorrectOutcomeIntroOpen ? (
+        <div
+          className="reading-detail-outcome-intro-overlay"
+          role="presentation"
+          onClick={() => setIncorrectOutcomeIntroOpen(false)}
+        >
+          <div
+            className="reading-detail-outcome-intro-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reading-detail-outcome-intro-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="reading-detail-outcome-intro-title">Marked incorrect</h2>
+            <p>
+              Update the <strong>model reading</strong>, <strong>whole-meter correction</strong>, and any{' '}
+              <strong>dial values</strong> if needed, then use <strong>Save changes</strong> in the sidebar (or{' '}
+              <strong>Save</strong> in the corrections block). The form is below the images—you can open it from the
+              bar under the header too.
+            </p>
+            <div className="reading-detail-outcome-intro-actions">
+              <button type="button" className="reading-detail-outcome-intro-primary" onClick={() => scrollToReviewerCorrections()}>
+                Go to corrections
+              </button>
+              <button type="button" className="reading-detail-outcome-intro-secondary" onClick={() => setIncorrectOutcomeIntroOpen(false)}>
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Lightbox */}
       {selectedImage ? (
