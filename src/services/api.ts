@@ -47,8 +47,8 @@ export interface S3MeterReading extends MeterReading {
   feedbackType?: string;
   /** Reviewer flagged this session for the training dataset (`reviewer_recommend_training` in metadata). */
   reviewerRecommendTraining?: boolean;
-  /** iOS sets `is_human_reviewed` in metadata when a capture has been human-reviewed. */
-  isHumanReviewed?: boolean;
+  /** `is_manually_reviewed` in metadata; legacy `is_human_reviewed` is still read by the server until migrated. */
+  isManuallyReviewed?: boolean;
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
   portalMetadataUpdatedBy?: string;
 }
@@ -262,6 +262,8 @@ export type SessionMetadataPatch = {
   portal_review_notes?: string;
   /** When true, labelers can filter the list for reviewer-recommended sessions. */
   reviewer_recommend_training?: boolean;
+  /** Portal reviewer save sets true in metadata.json (replaces legacy `is_human_reviewed` on write). */
+  is_manually_reviewed?: boolean;
   confidence?: number;
   processing_time_ms?: number;
 };

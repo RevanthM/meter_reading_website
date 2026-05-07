@@ -116,7 +116,7 @@ const PortalLayout: FC = () => {
             path: '/readings/incorrect_new',
             label: 'Awaiting review',
             description: 'New captures, not reviewed',
-            hint: 'Same folder as today; iOS will set is_human_reviewed when ready',
+            hint: 'Same folder as today; use is_manually_reviewed in metadata (legacy is_human_reviewed still read)',
             icon: <Inbox size={17} strokeWidth={2} />,
           },
           {

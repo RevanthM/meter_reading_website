@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, type CSSProperties, type FC } from 'react';
-import { useParams, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import type { ReadingStatus, ReadingsListFilter } from '../types';
 import { statusLabels, statusColors, INCORRECT_PIPELINE_STATUSES, labelerPipelineStatusLabels } from '../types';
@@ -20,6 +20,8 @@ import {
   FolderInput,
   User,
   SlidersHorizontal,
+  ArrowDown,
+  ArrowUp,
 } from 'lucide-react';
 import {
   downloadListRetrainZip,
@@ -37,6 +39,7 @@ import {
   isDateRangePresetId,
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
+import { formatReadingShortDate } from '../utils/readingDisplayDates';
 
 /** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
@@ -87,9 +90,82 @@ function normalizeReadingAppVersion(r: S3MeterReading): string {
   return raw;
 }
 
-function sortReadingsForList(readings: S3MeterReading[], listStatus: string | undefined): S3MeterReading[] {
+/** Coerce metadata confidence (number, numeric string, or 0–100 percentage) to 0–1. */
+function normalizeConfidenceScalar(raw: unknown): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    if (raw > 1 && raw <= 100) return raw / 100;
+    if (raw >= 0 && raw <= 1) return raw;
+    return undefined;
+  }
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t) return undefined;
+    const n = parseFloat(t);
+    if (!Number.isFinite(n)) return undefined;
+    if (n > 1 && n <= 100) return n / 100;
+    if (n >= 0 && n <= 1) return n;
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * One scalar for sorting: session-level confidence when present, else minimum dial confidence.
+ * Missing values → +∞ so ascending (lowest first) keeps them at the bottom.
+ */
+function effectiveConfidenceForSort(r: S3MeterReading): number {
+  const top = normalizeConfidenceScalar(r.confidence);
+  if (top !== undefined) return top;
+  const dials = r.dialDetails;
+  if (Array.isArray(dials) && dials.length > 0) {
+    const nested = dials
+      .map((d) => normalizeConfidenceScalar(d.confidence))
+      .filter((n): n is number => n !== undefined);
+    if (nested.length > 0) return Math.min(...nested);
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function effectiveConfidenceForDisplay(r: S3MeterReading): number | undefined {
+  const top = normalizeConfidenceScalar(r.confidence);
+  if (top !== undefined) return top;
+  const dials = r.dialDetails;
+  if (Array.isArray(dials) && dials.length > 0) {
+    const nested = dials
+      .map((d) => normalizeConfidenceScalar(d.confidence))
+      .filter((n): n is number => n !== undefined);
+    if (nested.length > 0) return Math.min(...nested);
+  }
+  return undefined;
+}
+
+function sortReadingsForList(
+  readings: S3MeterReading[],
+  listStatus: string | undefined,
+  listSort: 'date' | 'confidence',
+): S3MeterReading[] {
   const byDateDesc = (a: S3MeterReading, b: S3MeterReading) =>
     new Date(b.dateOfReading).getTime() - new Date(a.dateOfReading).getTime();
+  const byConfidenceAscThenDateDesc = (a: S3MeterReading, b: S3MeterReading) => {
+    const ca = effectiveConfidenceForSort(a);
+    const cb = effectiveConfidenceForSort(b);
+    if (ca !== cb) return ca - cb;
+    return byDateDesc(a, b);
+  };
+
+  if (listSort === 'confidence') {
+    if (listStatus !== 'all') {
+      return [...readings].sort(byConfidenceAscThenDateDesc);
+    }
+    return [...readings].sort((a, b) => {
+      const pa = LIST_PRIORITY[a.status] ?? 99;
+      const pb = LIST_PRIORITY[b.status] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return byConfidenceAscThenDateDesc(a, b);
+    });
+  }
+
   if (listStatus !== 'all') {
     return [...readings].sort(byDateDesc);
   }
@@ -104,6 +180,7 @@ function sortReadingsForList(readings: S3MeterReading[], listStatus: string | un
 const ReadingsList: FC = () => {
   const { status } = useParams<{ status: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { getReadingsByStatus, bulkUpdateStatus, workType, dataSource, isUsingRealData } = useReadings();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
@@ -153,6 +230,31 @@ const ReadingsList: FC = () => {
 
   const listStatusKey = (status ?? 'all') as ReadingsListFilter;
 
+  const sortParamRaw = useMemo(() => {
+    const p = new URLSearchParams(location.search);
+    return (p.get('sort') || '').trim().toLowerCase();
+  }, [location.search]);
+  const effectiveListSort = useMemo((): 'date' | 'confidence' => {
+    if (sortParamRaw === 'confidence') return 'confidence';
+    if (sortParamRaw === 'date') return 'date';
+    if (listStatusKey === 'incorrect_new' || activeCohort === 'untrained') return 'confidence';
+    return 'date';
+  }, [sortParamRaw, listStatusKey, activeCohort]);
+
+  const setListSort = useCallback(
+    (mode: 'date' | 'confidence') => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.set('sort', mode === 'confidence' ? 'confidence' : 'date');
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   const [capturedDraft, setCapturedDraft] = useState(capturedParam);
   useEffect(() => {
     setCapturedDraft(capturedParam);
@@ -188,7 +290,7 @@ const ReadingsList: FC = () => {
       filtered = filtered.filter((r) => matchesReadingsCohort(r, activeCohort));
     }
     const sortKey = filterKey === 'incorrect-queues' ? 'all' : filterKey;
-    return sortReadingsForList(filtered, sortKey);
+    return sortReadingsForList(filtered, sortKey, effectiveListSort);
   }, [
     getReadingsByStatus,
     listStatusKey,
@@ -199,6 +301,8 @@ const ReadingsList: FC = () => {
     appVersionParam,
     capturedParam,
     activeCohort,
+    effectiveListSort,
+    location.search,
   ]);
 
   const clearListFilters = () => setSearchParams({}, { replace: true });
@@ -311,16 +415,6 @@ const ReadingsList: FC = () => {
     () => readings.reduce((n, r) => n + (Array.isArray(r.images) ? r.images.length : 0), 0),
     [readings],
   );
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
 
   const getStatusTitle = () => {
     if (status === 'all') return 'All Readings';
@@ -908,9 +1002,36 @@ const ReadingsList: FC = () => {
                 <th>Location</th>
                 <th>Type</th>
                 <th>Status</th>
-                <th>Date of reading</th>
+                <th scope="col" className="readings-th-sortable">
+                  <button
+                    type="button"
+                    className={`readings-table-sort-th${effectiveListSort === 'date' ? ' readings-table-sort-th--active' : ''}`}
+                    onClick={() => setListSort('date')}
+                    aria-pressed={effectiveListSort === 'date'}
+                    title="Newest capture date first"
+                  >
+                    <span>Date of reading</span>
+                    {effectiveListSort === 'date' ? (
+                      <ArrowDown size={14} className="readings-table-sort-icon" aria-hidden />
+                    ) : null}
+                  </button>
+                </th>
                 <th>Captured by</th>
-                <th>Meter Value</th>
+                <th className="readings-th-meter-value">Meter value</th>
+                <th scope="col" className="readings-col-confidence readings-th-sortable readings-th-sortable--right">
+                  <button
+                    type="button"
+                    className={`readings-table-sort-th readings-table-sort-th--right readings-table-sort-th--confidence${effectiveListSort === 'confidence' ? ' readings-table-sort-th--active' : ''}`}
+                    onClick={() => setListSort('confidence')}
+                    aria-pressed={effectiveListSort === 'confidence'}
+                    title="Sort by confidence (lowest first)"
+                  >
+                    <span className="readings-th-confidence-text">Confidence</span>
+                    {effectiveListSort === 'confidence' ? (
+                      <ArrowUp size={14} className="readings-table-sort-icon" aria-hidden />
+                    ) : null}
+                  </button>
+                </th>
                 {showImagesColumn ? <th className="readings-col-images">Images</th> : null}
                 <th>Actions</th>
               </tr>
@@ -967,7 +1088,7 @@ const ReadingsList: FC = () => {
                   <td>
                     <div className="cell-with-icon">
                       <Calendar size={16} className="cell-icon" />
-                      <span>{formatDate(reading.dateOfReading)}</span>
+                      <span>{formatReadingShortDate(reading.dateOfReading)}</span>
                     </div>
                   </td>
                   <td>
@@ -978,8 +1099,28 @@ const ReadingsList: FC = () => {
                       </span>
                     </div>
                   </td>
-                  <td>
+                  <td className="readings-td-meter-value">
                     <span className="meter-value">{reading.meterValue}</span>
+                  </td>
+                  <td className="readings-col-confidence">
+                    {(() => {
+                      const c = effectiveConfidenceForDisplay(reading);
+                      if (c === undefined) {
+                        return <span className="readings-confidence-missing">—</span>;
+                      }
+                      const fromSession = normalizeConfidenceScalar(reading.confidence) !== undefined;
+                      return (
+                        <span
+                          title={
+                            fromSession
+                              ? 'Model confidence for this reading'
+                              : 'Minimum dial confidence (no session-level score in metadata)'
+                          }
+                        >
+                          {(c * 100).toFixed(0)}%
+                        </span>
+                      );
+                    })()}
                   </td>
                   {showImagesColumn ? (
                     <td className="readings-col-images">
@@ -997,7 +1138,12 @@ const ReadingsList: FC = () => {
                             pathname: `/reading/${encodeURIComponent(reading.id)}`,
                             search: sp.toString() ? `?${sp.toString()}` : '',
                           },
-                          { state: { readingQueueIds: readings.map((r) => r.id) } },
+                          {
+                            state: {
+                              readingQueueIds: readings.map((r) => r.id),
+                              listReturn: { pathname: location.pathname, search: location.search },
+                            },
+                          },
                         );
                       }}
                       style={{ '--accent': getStatusColor() } as CSSProperties}

@@ -247,6 +247,16 @@ async function getSignedImageUrl(key) {
   return await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
+/** Coerce metadata confidence to 0–1; supports numeric strings and 1–100 percentages. */
+function normalizeSessionConfidenceValue(raw) {
+  if (raw == null || raw === '') return undefined;
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw).trim());
+  if (!Number.isFinite(n)) return undefined;
+  if (n > 1 && n <= 100) return n / 100;
+  if (n >= 0 && n <= 1) return n;
+  return undefined;
+}
+
 async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER') {
   try {
     const metadataCommand = new GetObjectCommand({
@@ -315,10 +325,16 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       expectedValue: metadata.user_correction || undefined,
       rawPrediction: metadata.ml_raw_prediction,
       isCorrect: metadata.is_correct,
-      confidence: metadata.confidence,
+      confidence: normalizeSessionConfidenceValue(metadata.confidence),
       processingTimeMs: metadata.processing_time_ms,
       dialCount: metadata.dial_count,
-      dialDetails: metadata.dial_details,
+      dialDetails: Array.isArray(metadata.dial_details)
+        ? metadata.dial_details.map((d) => {
+            if (!d || typeof d !== 'object') return d;
+            const c = normalizeSessionConfidenceValue(d.confidence);
+            return c !== undefined ? { ...d, confidence: c } : d;
+          })
+        : metadata.dial_details,
       conditionCode: metadata.condition_code,
       userName: metadata.user_name || metadata.user_email || '',
       imageSource: metadata.image_source || '',
@@ -327,8 +343,9 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       /** iOS `AppConfig.appVersion` — use to compare on-device model generations. */
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
       reviewerRecommendTraining: metadata.reviewer_recommend_training === true,
-      /** iOS will set when human review is recorded (`is_human_reviewed` in metadata.json). */
-      isHumanReviewed: metadata.is_human_reviewed === true,
+      /** Portal / iOS: `is_manually_reviewed` in metadata.json (legacy `is_human_reviewed` still honored when reading). */
+      isManuallyReviewed:
+        metadata.is_manually_reviewed === true || metadata.is_human_reviewed === true,
       portalMetadataUpdatedBy:
         typeof metadata.portal_metadata_updated_by === 'string' && metadata.portal_metadata_updated_by.trim() !== ''
           ? String(metadata.portal_metadata_updated_by).trim().slice(0, 320)
@@ -814,6 +831,7 @@ const METADATA_PATCHABLE = new Set([
   'condition_code',
   'portal_review_notes',
   'reviewer_recommend_training',
+  'is_manually_reviewed',
   'confidence',
   'processing_time_ms',
 ]);
@@ -950,6 +968,16 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         return res.status(400).json({ error: 'reviewer_recommend_training must be boolean' });
       }
       meta.reviewer_recommend_training = patch.reviewer_recommend_training;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'is_manually_reviewed')) {
+      if (typeof patch.is_manually_reviewed !== 'boolean') {
+        return res.status(400).json({ error: 'is_manually_reviewed must be boolean' });
+      }
+      meta.is_manually_reviewed = patch.is_manually_reviewed;
+      if (patch.is_manually_reviewed === true && Object.prototype.hasOwnProperty.call(meta, 'is_human_reviewed')) {
+        delete meta.is_human_reviewed;
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'confidence')) {

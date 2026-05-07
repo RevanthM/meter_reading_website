@@ -9,7 +9,7 @@ const GLOSSARY: { status: ReadingStatus; hint: string }[] = [
   { status: 'correct', hint: 'The capture is treated as a good reading for this session (agreement / accepted outcome).' },
   {
     status: 'incorrect_new',
-    hint: 'List for captures not yet human-reviewed (iOS will set is_human_reviewed). Same storage folder as today until the app ships the flag.',
+    hint: 'List for captures not yet manually reviewed (metadata is_manually_reviewed; legacy is_human_reviewed still read). Same storage folder as today.',
   },
   { status: 'incorrect_analyzed', hint: 'Someone has reviewed diagnostics (e.g. model vs user); use this to track deeper review.' },
   { status: 'incorrect_labeled', hint: 'Ground truth or labels are applied so the session can be used as training input.' },

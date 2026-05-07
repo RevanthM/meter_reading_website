@@ -976,9 +976,10 @@ const Dashboard: FC = () => {
             <strong>Reviewer</strong>
             <span className="dashboard-reviewer-strip-dash">—</span>
             <span>
-              Open <strong>Awaiting review</strong> for captures that are <strong>not human-reviewed</strong> yet (the app
-              will set <code>is_human_reviewed</code> soon). Everything else is <strong>reviewed outcomes</strong> (wrong
-              pipeline, correct, etc.). Optional: <strong>Recommend for training</strong> for labelers.
+              Open <strong>Awaiting review</strong> for captures that are <strong>not manually reviewed</strong> yet (
+              <code>is_manually_reviewed</code> in metadata; legacy <code>is_human_reviewed</code> is still honored).
+              Everything else is <strong>reviewed outcomes</strong> (wrong pipeline, correct, etc.). Optional:{' '}
+              <strong>Recommend for training</strong> for labelers.
             </span>
           </div>
           <button
