@@ -21,7 +21,6 @@ import {
   Save,
   ImageIcon,
   FileText,
-  Info,
   Gauge,
   Check,
   Zap,
@@ -29,26 +28,26 @@ import {
   Clock,
   RotateCw,
   Loader2,
-  Download,
   Maximize2,
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
-  ArrowDown,
   UserCheck,
+  Pencil,
 } from 'lucide-react';
 import {
   fetchReadingById,
-  downloadSessionRetrainZip,
   patchSessionMetadata,
   type SessionMetadataPatch,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
+import { formatReadingShortDate } from '../utils/readingDisplayDates';
 
 const PORTAL_WORK_TYPES: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
 export type ReadingDetailLocationState = {
   readingQueueIds?: string[];
+  /** When opened from a list, go here instead of history.back() so Next/Prev does not trap “back” on another reading. */
+  listReturn?: { pathname: string; search?: string };
 };
 
 function statusIsIncorrect(status: ReadingStatus): boolean {
@@ -132,11 +131,22 @@ function baselineDialRowsForReading(reading: S3MeterReading): DialDetailRow[] {
   return dialRowsFromDialCropImages(reading.images, reading.meterValue);
 }
 
-function dialCropImageForDial(dialImages: MeterImage[], dialNumber: number): MeterImage | undefined {
-  return dialImages.find(
-    (img) => typeof img.metadata.dialIndex === 'number' && img.metadata.dialIndex + 1 === dialNumber,
-  );
+/** Whole-meter digit string from per-dial predictions (dial 1 → left). */
+function concatDialDigitsFromRows(rows: DialDetailRow[]): string {
+  if (!rows.length) return '';
+  return [...rows]
+    .sort((a, b) => a.dial - b.dial)
+    .map((r) => {
+      const n = Math.round(Number(r.prediction));
+      if (!Number.isFinite(n)) return '0';
+      return String(((n % 10) + 10) % 10);
+    })
+    .join('');
 }
+
+type StripDialEditProps = {
+  onDigitChange: (digit: number) => void;
+};
 
 type ReadingDetailImageCardProps = {
   image: MeterImage;
@@ -144,7 +154,24 @@ type ReadingDetailImageCardProps = {
   selectedImage: string | null;
   onActivate: (imageId: string) => void;
   strip?: boolean;
+  stripReviewerEdit?: StripDialEditProps;
 };
+
+function normalizeDialDigit(v: number): number {
+  return ((Math.round(v) % 10) + 10) % 10;
+}
+
+/** `s_YYYYMMDD_HHMMSS_suffix` → `MM/DD/YY · suffix` (drops the HHMMSS segment). */
+function formatSessionIdForDisplay(id: string): string {
+  const m = /^s_(\d{4})(\d{2})(\d{2})_\d{6}_(.+)$/.exec(id);
+  if (!m) return id;
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10);
+  const d = parseInt(m[3], 10);
+  const suffix = m[4];
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return id;
+  return `${String(mo).padStart(2, '0')}/${String(d).padStart(2, '0')}/${String(y % 100).padStart(2, '0')} · ${suffix}`;
+}
 
 const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   image,
@@ -152,7 +179,10 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   selectedImage,
   onActivate,
   strip,
+  stripReviewerEdit,
 }) => {
+  const [stripDialEditorOpen, setStripDialEditorOpen] = useState(false);
+
   const dialDetail =
     image.metadata.dialIndex !== undefined && reading.dialDetails
       ? reading.dialDetails.find((d) => d.dial === (image.metadata.dialIndex! + 1))
@@ -165,6 +195,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   const predictedDigit = dialPosition !== undefined ? predictedDigits[dialPosition] : undefined;
 
   const isSelected = selectedImage === image.id;
+  const stripEdit = strip && stripReviewerEdit ? stripReviewerEdit : undefined;
 
   return (
     <div
@@ -186,6 +217,20 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
         <div className="image-overlay">
           <span className="image-label">{image.label}</span>
         </div>
+        {stripEdit && dialDetail ? (
+          <button
+            type="button"
+            className="image-dial-strip-pencil"
+            title="Correct this dial"
+            aria-label={`Edit predicted digit for ${image.label}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setStripDialEditorOpen((o) => !o);
+            }}
+          >
+            <Pencil size={14} aria-hidden />
+          </button>
+        ) : null}
       </div>
       <div className="image-meta">
         <div className="meta-row">
@@ -205,10 +250,36 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
       </div>
 
       {dialDetail && (
-        <div className="dial-prediction-display">
+        <div
+          className="dial-prediction-display"
+          onClick={(e) => {
+            if (stripDialEditorOpen) e.stopPropagation();
+          }}
+        >
           <div className="prediction-row">
             <span className="prediction-label">Predicted:</span>
-            <span className="prediction-number">{dialDetail.prediction}</span>
+            {stripEdit && stripDialEditorOpen ? (
+              <select
+                className="image-dial-strip-digit-select"
+                aria-label={`Digit for dial ${(image.metadata.dialIndex ?? 0) + 1}`}
+                value={normalizeDialDigit(Number(dialDetail.prediction))}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v)) stripEdit.onDigitChange(v);
+                  setStripDialEditorOpen(false);
+                }}
+              >
+                {Array.from({ length: 10 }, (_, d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="prediction-number">{dialDetail.prediction}</span>
+            )}
           </div>
           {reading.expectedValue &&
             expectedDigit !== undefined &&
@@ -218,9 +289,11 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
                 <span className="prediction-number correct">{expectedDigit}</span>
               </div>
             )}
-          <div className="prediction-confidence">
-            {(dialDetail.confidence * 100).toFixed(0)}% confidence
-          </div>
+          {dialDetail.confidence != null && Number.isFinite(dialDetail.confidence) ? (
+            <div className="prediction-confidence">
+              {(dialDetail.confidence * 100).toFixed(0)}% confidence
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -257,19 +330,36 @@ const ReadingDetail: React.FC = () => {
     return Array.isArray(st?.readingQueueIds) && st.readingQueueIds.length > 0 ? st.readingQueueIds : undefined;
   }, [location.state]);
 
+  const listReturn = useMemo(() => {
+    const st = location.state as ReadingDetailLocationState | null;
+    const lr = st?.listReturn;
+    if (!lr || typeof lr.pathname !== 'string' || !lr.pathname.trim()) return undefined;
+    return { pathname: lr.pathname, search: lr.search ?? '' };
+  }, [location.state]);
+
+  const goBackToList = useCallback(() => {
+    if (listReturn) {
+      const s = listReturn.search;
+      navigate({ pathname: listReturn.pathname, ...(s ? { search: s } : {}) });
+    } else {
+      navigate(-1);
+    }
+  }, [navigate, listReturn]);
+
   const queueIndex = useMemo(() => {
     if (!reading?.id || !readingQueueIds?.length) return -1;
     const ix = readingQueueIds.indexOf(reading.id);
     return ix;
   }, [reading?.id, readingQueueIds]);
 
-  const reviewerCorrectionsRef = useRef<HTMLDivElement | null>(null);
-  /** After choosing Incorrect from a non-incorrect outcome, scroll once the inline corrections block exists. */
-  const scrollToCorrectionsAfterIncorrectSelect = useRef(false);
+  /** When true, dial edits do not overwrite "Correct reading" (user typed a different whole-meter value). */
+  const [readingDetachedFromDials, setReadingDetachedFromDials] = useState(false);
 
   const [mlPrediction, setMlPrediction] = useState('');
   const [userCorrection, setUserCorrection] = useState('');
   const [localDialRows, setLocalDialRows] = useState<DialDetailRow[]>([]);
+  /** Baseline per-dial predictions when this reading loaded (strip edits that differ → incorrect). */
+  const initialDialRowsRef = useRef<DialDetailRow[]>([]);
 
   const effectiveReading = useMemo((): S3MeterReading | null => {
     if (!reading) return null;
@@ -294,6 +384,24 @@ const ReadingDetail: React.FC = () => {
     setSelectedImage((prev) => (prev === imageId ? null : imageId));
   }, []);
 
+  /** Single path for per-dial edits (dial strip cards). */
+  const commitDialDigit = useCallback((dialNumber: number, raw: number) => {
+    const n = normalizeDialDigit(raw);
+    setReadingDetachedFromDials(false);
+    setLocalDialRows((rows) => {
+      const ix = rows.findIndex((r) => r.dial === dialNumber);
+      if (ix < 0) return rows;
+      const next = rows.map((row, i) => (i === ix ? { ...row, prediction: n } : row));
+      setMlPrediction(concatDialDigitsFromRows(next));
+      return next;
+    });
+    const baseline = initialDialRowsRef.current.find((r) => r.dial === dialNumber);
+    const baseDig = baseline != null ? normalizeDialDigit(Number(baseline.prediction)) : null;
+    if (baseDig !== null && baseDig !== n) {
+      setSelectedStatus((s) => (statusIsIncorrect(s) ? s : 'incorrect_new'));
+    }
+  }, []);
+
   const [comments, setComments] = useState(reading?.comments || '');
   const [selectedStatus, setSelectedStatus] = useState<ReadingStatus>(
     reading?.status || 'incorrect_new'
@@ -301,7 +409,7 @@ const ReadingDetail: React.FC = () => {
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [sessionZipExporting, setSessionZipExporting] = useState(false);
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [recommendTraining, setRecommendTraining] = useState(false);
 
   useEffect(() => {
@@ -333,8 +441,13 @@ const ReadingDetail: React.FC = () => {
     setComments(reading.comments || '');
     setSelectedStatus(reading.status);
     setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
-    setUserCorrection(reading.expectedValue != null ? String(reading.expectedValue) : '');
-    setLocalDialRows(baselineDialRowsForReading(reading).map((d) => ({ ...d })));
+    const baseRows = baselineDialRowsForReading(reading);
+    const fromDials = concatDialDigitsFromRows(baseRows);
+    const exp = reading.expectedValue != null ? String(reading.expectedValue).trim() : '';
+    setReadingDetachedFromDials(Boolean(exp !== '' && exp !== fromDials));
+    setUserCorrection(exp || fromDials);
+    setLocalDialRows(baseRows.map((d) => ({ ...d })));
+    initialDialRowsRef.current = baseRows.map((d) => ({ ...d }));
     setRecommendTraining(reading.reviewerRecommendTraining === true);
   }, [
     reading?.id,
@@ -440,27 +553,34 @@ const ReadingDetail: React.FC = () => {
       comments !== baseComments ||
       recommendTraining !== baseRecommend;
 
+    const statusWillChange = selectedStatus !== snapshotForMove.status;
+    const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
+
     setIsSaving(true);
     try {
-      if (metaDirty) {
-        const patch: SessionMetadataPatch = {
-          ml_prediction: mlPrediction,
-          user_correction: userCorrection,
-          portal_review_notes: comments,
-        };
-        if (recommendTraining !== baseRecommend) {
-          patch.reviewer_recommend_training = recommendTraining;
+      if (metaDirty || shouldMarkManual) {
+        const patch: SessionMetadataPatch = {};
+        if (metaDirty) {
+          patch.ml_prediction = mlPrediction;
+          patch.user_correction = userCorrection;
+          patch.portal_review_notes = comments;
+          if (recommendTraining !== baseRecommend) {
+            patch.reviewer_recommend_training = recommendTraining;
+          }
+          const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
+          if (localDialRows.length > 0) {
+            patch.dial_details = localDialRows.map((row) => ({
+              dial: Math.round(Number(row.dial)) || 1,
+              prediction: Number(row.prediction),
+              direction: String(row.direction || 'clockwise').slice(0, 40),
+              confidence: Math.min(1, Math.max(0, Number(row.confidence))),
+            }));
+          } else if (hadDialDetails) {
+            patch.dial_details = [];
+          }
         }
-        const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
-        if (localDialRows.length > 0) {
-          patch.dial_details = localDialRows.map((row) => ({
-            dial: Math.round(Number(row.dial)) || 1,
-            prediction: Number(row.prediction),
-            direction: String(row.direction || 'clockwise').slice(0, 40),
-            confidence: Math.min(1, Math.max(0, Number(row.confidence))),
-          }));
-        } else if (hadDialDetails) {
-          patch.dial_details = [];
+        if (shouldMarkManual) {
+          patch.is_manually_reviewed = true;
         }
 
         const fresh = await patchSessionMetadata(
@@ -528,57 +648,31 @@ const ReadingDetail: React.FC = () => {
       if (nextIdx < 0 || nextIdx >= readingQueueIds.length) return;
       const nextId = readingQueueIds[nextIdx];
       const qs = searchParams.toString();
+      const st = location.state as ReadingDetailLocationState | null;
       navigate(
         {
           pathname: `/reading/${encodeURIComponent(nextId)}`,
           search: qs ? `?${qs}` : '',
         },
-        { state: { readingQueueIds } },
+        { state: { readingQueueIds, listReturn: st?.listReturn } },
       );
     },
-    [readingQueueIds, queueIndex, searchParams, navigate],
+    [readingQueueIds, queueIndex, searchParams, navigate, location.state],
   );
-
-  const saveAndGoNext = useCallback(async () => {
-    const ok = await performSaveAction();
-    if (ok && readingQueueIds?.length && queueIndex >= 0 && queueIndex < readingQueueIds.length - 1) {
-      const nextId = readingQueueIds[queueIndex + 1];
-      const qs = searchParams.toString();
-      navigate(
-        {
-          pathname: `/reading/${encodeURIComponent(nextId)}`,
-          search: qs ? `?${qs}` : '',
-        },
-        { state: { readingQueueIds } },
-      );
-    }
-  }, [performSaveAction, readingQueueIds, queueIndex, searchParams, navigate]);
 
   const rNow = directReading || contextReading;
   const incorrectContext = (() => {
     if (!rNow) return false;
     return statusIsIncorrect(selectedStatus) || statusIsIncorrect(rNow.status);
   })();
-  /** Reviewer incorrect flow: corrections + queue nav live in the main column (no modal). */
-  const inlineIncorrectReview = incorrectContext && !isLabelerMode;
-
-  const scrollToReviewerCorrections = useCallback(() => {
-    requestAnimationFrame(() => {
-      const el = reviewerCorrectionsRef.current;
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      el.focus();
-    });
-  }, []);
+  useEffect(() => {
+    if (isLabelerMode || !incorrectContext || readingDetachedFromDials) return;
+    const next = concatDialDigitsFromRows(localDialRows);
+    setUserCorrection(next);
+  }, [localDialRows, isLabelerMode, incorrectContext, readingDetachedFromDials]);
 
   useEffect(() => {
-    if (!inlineIncorrectReview || !scrollToCorrectionsAfterIncorrectSelect.current) return;
-    scrollToCorrectionsAfterIncorrectSelect.current = false;
-    scrollToReviewerCorrections();
-  }, [inlineIncorrectReview, scrollToReviewerCorrections]);
-
-  useEffect(() => {
-    if (!inlineIncorrectReview) return;
+    if (!incorrectContext || isLabelerMode) return;
     const onKey = (e: KeyboardEvent) => {
       if (isSaving) return;
       const el = e.target as HTMLElement | null;
@@ -608,14 +702,23 @@ const ReadingDetail: React.FC = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [inlineIncorrectReview, isSaving, canQueuePrev, canQueueNext, navigateQueue, performSaveAction]);
+  }, [incorrectContext, isLabelerMode, isSaving, canQueuePrev, canQueueNext, navigateQueue, performSaveAction]);
+
+  useEffect(() => {
+    if (!moreDetailsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreDetailsOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [moreDetailsOpen]);
 
   if (fetchLoading) {
     return (
       <div className="detail-page">
         <header className="page-header">
           <div className="header-content">
-            <button className="back-button" onClick={() => navigate(-1)}>
+            <button type="button" className="back-button" onClick={goBackToList}>
               <ArrowLeft size={20} />
               <span>Back to List</span>
             </button>
@@ -643,34 +746,13 @@ const ReadingDetail: React.FC = () => {
       <div className="detail-page">
         <div className="error-state">
           <p>{fetchError ? 'Reading not found' : 'No readings available'}</p>
-          <button onClick={() => navigate(-1)}>Go Back</button>
+          <button type="button" onClick={goBackToList}>
+            Go Back
+          </button>
         </div>
       </div>
     );
   }
-
-  const handleDownloadSessionZip = async () => {
-    if (!reading?.id) return;
-    setSessionZipExporting(true);
-    try {
-      await downloadSessionRetrainZip(reading.id, workTypeForApi);
-    } catch (e) {
-      console.error(e);
-      alert(e instanceof Error ? e.message : 'Failed to build session ZIP.');
-    } finally {
-      setSessionZipExporting(false);
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
 
   // Check if we have extended S3 metadata
   const hasS3Metadata = reading.confidence !== undefined || reading.dialDetails !== undefined;
@@ -683,7 +765,7 @@ const ReadingDetail: React.FC = () => {
       <header className="page-header">
         <div className="header-content reading-detail-header">
           <div className="reading-detail-header-lead">
-            <button type="button" className="back-button" onClick={() => navigate(-1)}>
+            <button type="button" className="back-button" onClick={goBackToList}>
               <ArrowLeft size={20} />
               <span>Back to List</span>
             </button>
@@ -691,49 +773,45 @@ const ReadingDetail: React.FC = () => {
               <Gauge size={32} strokeWidth={1.5} />
               <div>
                 <h1>Reading Details</h1>
-                <p>ID: {reading.id}</p>
+                <p title={reading.id}>ID: {formatSessionIdForDisplay(reading.id)}</p>
               </div>
             </div>
           </div>
           <div className="reading-detail-header-actions">
+            {readingQueueIds && readingQueueIds.length > 0 && queueIndex >= 0 ? (
+              <div className="reading-detail-header-queue" role="group" aria-label="Position in list">
+                <button
+                  type="button"
+                  className="reading-detail-header-nav-btn"
+                  onClick={() => navigateQueue(-1)}
+                  disabled={!canQueuePrev || isSaving}
+                >
+                  <ChevronLeft size={18} aria-hidden />
+                  Previous
+                </button>
+                <span className="reading-detail-header-queue-count" aria-live="polite">
+                  {queueIndex + 1} / {readingQueueIds.length}
+                </span>
+                <button
+                  type="button"
+                  className="reading-detail-header-nav-btn"
+                  onClick={() => navigateQueue(1)}
+                  disabled={!canQueueNext || isSaving}
+                >
+                  Next
+                  <ChevronRight size={18} aria-hidden />
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
-              className="detail-download-zip-btn"
-              onClick={handleDownloadSessionZip}
-              disabled={sessionZipExporting}
-              title="Download a flat ZIP: raw full-frame meter photos plus dataset.json at the root (Roboflow-friendly; no dial crops, no per-session folders)."
+              className="reading-detail-more-details-btn"
+              onClick={() => setMoreDetailsOpen(true)}
             >
-              {sessionZipExporting ? (
-                <>
-                  <Loader2 size={18} className="spin" />
-                  <span>Building ZIP…</span>
-                </>
-              ) : (
-                <>
-                  <Download size={18} />
-                  <span>Download ZIP</span>
-                </>
-              )}
+              More details
             </button>
-            <span className="detail-download-zip-caption">
-              {sessionZipExporting
-                ? 'Packaging files from storage…'
-                : 'Flat ZIP: raw photos + dataset.json for Roboflow / training'}
-            </span>
           </div>
         </div>
-        {!isLabelerMode && incorrectContext ? (
-          <div className="reading-detail-corrections-dock" role="region" aria-label="Reviewer corrections shortcut">
-            <button type="button" className="reading-detail-corrections-dock-btn" onClick={() => scrollToReviewerCorrections()}>
-              <ClipboardList size={18} aria-hidden />
-              <span>Jump to corrections</span>
-              <ArrowDown size={16} aria-hidden />
-            </button>
-            <span className="reading-detail-corrections-dock-hint">
-              Update dial values and readings—section is below the images.
-            </span>
-          </div>
-        ) : null}
       </header>
 
       <main className="detail-content">
@@ -746,7 +824,7 @@ const ReadingDetail: React.FC = () => {
                 <strong>reviewer</strong> mode.
               </p>
             ) : null}
-            <section className="images-section">
+            <section className="images-section" id="reading-detail-dial-crops">
               <div className="images-section-head">
                 <h2>
                   <ImageIcon size={20} aria-hidden />
@@ -786,6 +864,14 @@ const ReadingDetail: React.FC = () => {
                       selectedImage={selectedImage}
                       onActivate={handleImageActivate}
                       strip
+                      stripReviewerEdit={
+                        !isLabelerMode
+                          ? {
+                              onDigitChange: (digit) =>
+                                commitDialDigit((image.metadata.dialIndex ?? 0) + 1, digit),
+                            }
+                          : undefined
+                      }
                     />
                   ))}
                 </div>
@@ -821,7 +907,7 @@ const ReadingDetail: React.FC = () => {
               ) : null}
             </section>
 
-            {(hasS3Metadata || !isLabelerMode) && (
+            {(hasS3Metadata || (isLabelerMode && reading.dialDetails && reading.dialDetails.length > 0)) && (
               <section className="ml-metrics-section reading-detail-ml">
                 <h2>
                   <Zap size={20} /> Reading check
@@ -849,199 +935,6 @@ const ReadingDetail: React.FC = () => {
                         <div className="metric-label">Dials detected</div>
                       </div>
                     )}
-                  </div>
-                ) : null}
-
-                {!isLabelerMode && incorrectContext ? (
-                  <div
-                    ref={reviewerCorrectionsRef}
-                    id="reading-detail-reviewer-corrections"
-                    className="incorrect-review-inline"
-                    tabIndex={-1}
-                  >
-                    <div className="incorrect-review-inline-head">
-                      <h3 id="incorrect-review-inline-title">Incorrect reading — reviewer corrections</h3>
-                      <p className="incorrect-review-subid">
-                        {readingQueueIds?.length ? (
-                          <>
-                            {queueIndex >= 0 ? (
-                              <span>
-                                {queueIndex + 1} of {readingQueueIds.length} in this list
-                              </span>
-                            ) : null}
-                            {queueIndex >= 0 ? ' · ' : null}
-                          </>
-                        ) : null}
-                        <code>{reading.id}</code>
-                      </p>
-                    </div>
-
-                    <p className="reading-detail-reviewer-callout incorrect-review-callout" role="status">
-                      This session is <strong>incorrect</strong>. Update dial values if the model was wrong, check the
-                      whole-meter reading, then <strong>Save changes</strong> in the sidebar (or Save here). Use{' '}
-                      <strong>Next</strong> / <strong>Previous</strong> to move through the same list order as the
-                      readings table.
-                    </p>
-
-                    <div className="incorrect-review-body">
-                      <div className="reading-detail-metadata-fields">
-                        <label className="reading-detail-meta-field" htmlFor="rd-ml-pred-incorrect">
-                          <span>Reading from model</span>
-                          <input
-                            id="rd-ml-pred-incorrect"
-                            className="reading-detail-meta-input"
-                            value={mlPrediction}
-                            onChange={(e) => setMlPrediction(e.target.value)}
-                            autoComplete="off"
-                          />
-                        </label>
-                        <label className="reading-detail-meta-field" htmlFor="rd-user-corr-incorrect">
-                          <span>Correct reading (whole meter)</span>
-                          <input
-                            id="rd-user-corr-incorrect"
-                            className="reading-detail-meta-input"
-                            value={userCorrection}
-                            onChange={(e) => setUserCorrection(e.target.value)}
-                            placeholder="What the dials should read overall"
-                            autoComplete="off"
-                          />
-                        </label>
-                      </div>
-
-                      {localDialRows.length > 0 ? (
-                        <div className="incorrect-review-dials">
-                          <h4 className="reading-detail-dial-simple-title">Dial crops and values</h4>
-                          <p className="reading-detail-field-hint incorrect-review-dials-hint">
-                            Match each crop to the dial position, then set the digit. Click an image to enlarge.
-                          </p>
-                          <div className="incorrect-review-dial-grid">
-                            {localDialRows.map((dial, idx) => {
-                              const dialImg = dialCropImageForDial(dialImages, dial.dial);
-                              return (
-                                <div key={`${dial.dial}-${idx}`} className="incorrect-review-dial-cell">
-                                  {dialImg ? (
-                                    <button
-                                      type="button"
-                                      className="incorrect-review-dial-thumb"
-                                      onClick={() => handleImageActivate(dialImg.id)}
-                                      title="Open dial image"
-                                      aria-label={`Open dial ${dial.dial} image larger`}
-                                    >
-                                      <img src={dialImg.url} alt="" loading="lazy" />
-                                    </button>
-                                  ) : (
-                                    <div
-                                      className="incorrect-review-dial-thumb incorrect-review-dial-thumb--empty"
-                                      aria-hidden
-                                      title="No matching dial crop in this session"
-                                    />
-                                  )}
-                                  <label className="incorrect-review-dial-fields">
-                                    <span className="incorrect-review-dial-label">Dial {dial.dial}</span>
-                                    <input
-                                      type="number"
-                                      step="any"
-                                      className="reading-detail-dial-input reading-detail-dial-input--value"
-                                      aria-label={`Correct value for dial ${dial.dial}`}
-                                      value={dial.prediction}
-                                      onChange={(e) => {
-                                        const v = parseFloat(e.target.value);
-                                        setLocalDialRows((rows) =>
-                                          rows.map((row, i) =>
-                                            i === idx
-                                              ? { ...row, prediction: Number.isFinite(v) ? v : row.prediction }
-                                              : row,
-                                          ),
-                                        );
-                                      }}
-                                    />
-                                  </label>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="reading-detail-field-hint reading-detail-field-hint--solo">
-                          No dial crops or per-dial data in this session—use <strong>Correct reading</strong> above.
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="incorrect-review-footer">
-                      <button
-                        type="button"
-                        className="incorrect-review-nav-btn"
-                        disabled={!canQueuePrev || isSaving}
-                        onClick={() => navigateQueue(-1)}
-                      >
-                        <ChevronLeft size={18} aria-hidden /> Previous
-                      </button>
-                      <button
-                        type="button"
-                        className="incorrect-review-save-btn"
-                        disabled={isSaving}
-                        onClick={() => void performSaveAction()}
-                      >
-                        {isSaving ? <Loader2 size={18} className="spin" /> : <Save size={18} />}
-                        {isSaving ? 'Saving…' : 'Save'}
-                      </button>
-                      <button
-                        type="button"
-                        className="incorrect-review-save-next-btn"
-                        disabled={isSaving || !canQueueNext}
-                        onClick={() => void saveAndGoNext()}
-                      >
-                        Save &amp; next
-                      </button>
-                      <button
-                        type="button"
-                        className="incorrect-review-nav-btn"
-                        disabled={!canQueueNext || isSaving}
-                        onClick={() => navigateQueue(1)}
-                      >
-                        Next <ChevronRight size={18} aria-hidden />
-                      </button>
-                    </div>
-                    <p className="incorrect-review-kbd-hint">
-                      <kbd>←</kbd> <kbd>P</kbd> previous · <kbd>→</kbd> <kbd>N</kbd> next ·{' '}
-                      <kbd>{typeof navigator !== 'undefined' && navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl'}</kbd>
-                      <kbd>Enter</kbd> save
-                    </p>
-                  </div>
-                ) : null}
-
-                {!isLabelerMode && !incorrectContext ? (
-                  <div className="reading-detail-metadata-editor">
-                    <h3 className="reading-detail-metadata-editor-title">Reviewer corrections</h3>
-                    <p className="reading-detail-field-hint">
-                      Includes sessions already marked <strong>correct</strong>: adjust values if needed, or change
-                      status—then <strong>Save changes</strong> updates <code>metadata.json</code> (and moves the
-                      session if you changed status).
-                    </p>
-                    <div className="reading-detail-metadata-fields">
-                      <label className="reading-detail-meta-field" htmlFor="rd-ml-pred-inline">
-                        <span>Reading from model</span>
-                        <input
-                          id="rd-ml-pred-inline"
-                          className="reading-detail-meta-input"
-                          value={mlPrediction}
-                          onChange={(e) => setMlPrediction(e.target.value)}
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label className="reading-detail-meta-field" htmlFor="rd-user-corr-inline">
-                        <span>Correct reading (whole meter)</span>
-                        <input
-                          id="rd-user-corr-inline"
-                          className="reading-detail-meta-input"
-                          value={userCorrection}
-                          onChange={(e) => setUserCorrection(e.target.value)}
-                          placeholder="What the dials should read overall"
-                          autoComplete="off"
-                        />
-                      </label>
-                    </div>
                   </div>
                 ) : null}
 
@@ -1186,12 +1079,7 @@ const ReadingDetail: React.FC = () => {
                       onChange={(e) => {
                         const raw = e.target.value;
                         if (raw === REVIEWER_SELECT_INCORRECT) {
-                          if (!statusIsIncorrect(selectedStatus)) {
-                            setSelectedStatus('incorrect_new');
-                            scrollToCorrectionsAfterIncorrectSelect.current = true;
-                          } else {
-                            setSelectedStatus((prev) => (statusIsIncorrect(prev) ? prev : 'incorrect_new'));
-                          }
+                          setSelectedStatus((prev) => (statusIsIncorrect(prev) ? prev : 'incorrect_new'));
                         } else {
                           setSelectedStatus(raw as ReadingStatus);
                         }
@@ -1269,31 +1157,129 @@ const ReadingDetail: React.FC = () => {
                 </>
               )}
             </section>
+          </aside>
+        </div>
+      </main>
 
-            <section
-              className="metadata-section"
-              aria-labelledby="reading-detail-metadata-heading"
-            >
-              <h2 id="reading-detail-metadata-heading">
-                <Info size={20} aria-hidden /> Reading information
-                {isLabelerMode ? <span className="reading-detail-readonly-tag"> read-only</span> : null}
-              </h2>
+      {moreDetailsOpen ? (
+        <div
+          className="reading-detail-more-modal-overlay"
+          role="presentation"
+          onClick={() => setMoreDetailsOpen(false)}
+        >
+          <div
+            className="reading-detail-more-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reading-detail-more-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reading-detail-more-modal-head">
+              <h2 id="reading-detail-more-modal-title">Session details</h2>
+              <button
+                type="button"
+                className="reading-detail-more-modal-close"
+                onClick={() => setMoreDetailsOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="reading-detail-more-modal-body">
+              {!isLabelerMode ? (
+                <>
+                  <h3 className="reading-detail-more-modal-subtitle">Readings</h3>
+                  <p className="reading-detail-field-hint">
+                    Use the <strong>pencil</strong> on dial crops to fix digits. Whole-meter fields here sync with save
+                    in the sidebar.
+                  </p>
+                  {readingQueueIds && readingQueueIds.length > 0 && queueIndex >= 0 ? (
+                    <p className="reading-detail-field-hint reading-detail-inline-queue">
+                      <strong>{queueIndex + 1}</strong> of {readingQueueIds.length} in this list ·{' '}
+                      <code title={reading.id}>{formatSessionIdForDisplay(reading.id)}</code>
+                    </p>
+                  ) : (
+                    <p className="reading-detail-field-hint">
+                      <code title={reading.id}>{formatSessionIdForDisplay(reading.id)}</code>
+                    </p>
+                  )}
+                  <div className="reading-detail-metadata-fields">
+                    <label className="reading-detail-meta-field" htmlFor="rd-ml-pred-modal">
+                      <span>Reading from model</span>
+                      <input
+                        id="rd-ml-pred-modal"
+                        className="reading-detail-meta-input"
+                        value={mlPrediction}
+                        onChange={(e) => setMlPrediction(e.target.value)}
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="reading-detail-meta-field" htmlFor="rd-user-corr-modal">
+                      <span>Correct reading (whole meter)</span>
+                      <input
+                        id="rd-user-corr-modal"
+                        className="reading-detail-meta-input"
+                        value={userCorrection}
+                        onChange={(e) => {
+                          if (incorrectContext) setReadingDetachedFromDials(true);
+                          setUserCorrection(e.target.value);
+                        }}
+                        placeholder={
+                          incorrectContext
+                            ? 'Digits from dial row above, or type the full reading'
+                            : 'What the dials should read overall'
+                        }
+                        autoComplete="off"
+                      />
+                    </label>
+                  </div>
+                  {incorrectContext && localDialRows.length > 0 ? (
+                    <p className="reading-detail-field-hint">
+                      <button
+                        type="button"
+                        className="training-hub-text-btn"
+                        onClick={() => {
+                          setReadingDetachedFromDials(false);
+                          setUserCorrection(concatDialDigitsFromRows(localDialRows));
+                        }}
+                      >
+                        Use digits from dials
+                      </button>
+                      <span> — fills from dial 1→4 (left to right) using the dial row on the page.</span>
+                    </p>
+                  ) : null}
+                  {incorrectContext && localDialRows.length === 0 ? (
+                    <p className="reading-detail-field-hint reading-detail-field-hint--solo">
+                      No per-dial data in this session—use <strong>Correct reading</strong> above.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+
+              <h3 className="reading-detail-more-modal-subtitle">Metadata</h3>
               <div className="metadata-grid">
-                <div className="reading-detail-review-summary" role="region" aria-label="Human review status">
+                <div className="reading-detail-review-summary" role="region" aria-label="Manual review status">
                   <div className="reading-detail-review-summary-row">
                     <span className="label">
-                      <UserCheck size={16} aria-hidden /> Human review
+                      <UserCheck size={16} aria-hidden /> Manual review
                     </span>
                     <span
-                      className={`reading-detail-review-summary-badge${reading.isHumanReviewed ? ' reading-detail-review-summary-badge--yes' : ''}`}
+                      className={`reading-detail-review-summary-badge${reading.isManuallyReviewed ? ' reading-detail-review-summary-badge--yes' : ''}`}
                     >
-                      {reading.isHumanReviewed ? 'Reviewed' : 'Not yet'}
+                      {reading.isManuallyReviewed ? 'Reviewed' : 'Not yet'}
                     </span>
                   </div>
                   <p className="reading-detail-review-summary-hint">
-                    {reading.isHumanReviewed
-                      ? 'The app marked this capture as human-reviewed.'
-                      : 'Placeholder: iOS will write is_human_reviewed in metadata when review tracking ships.'}
+                    {reading.isManuallyReviewed ? (
+                      <>
+                        Marked manually reviewed (<code>is_manually_reviewed</code> in metadata).
+                      </>
+                    ) : (
+                      <>
+                        Not marked yet — saving as reviewer sets <code>is_manually_reviewed</code> in metadata.json.
+                        Legacy <code>is_human_reviewed</code> is still read until migrated.
+                      </>
+                    )}
                   </p>
                   {reading.portalMetadataUpdatedBy ? (
                     <p className="reading-detail-review-summary-portal">
@@ -1304,16 +1290,12 @@ const ReadingDetail: React.FC = () => {
                       <span className="reading-detail-review-summary-sub"> · from this website</span>
                     </p>
                   ) : null}
-                  <p className="reading-detail-review-summary-subtle">
-                    &quot;Who reviewed&quot; (you vs others) will come from the app next; we will show it here when that
-                    field exists.
-                  </p>
                 </div>
                 <div className="metadata-item">
                   <span className="label">
                     <Calendar size={16} aria-hidden /> Date of reading
                   </span>
-                  <span className="value">{formatDate(reading.dateOfReading)}</span>
+                  <span className="value">{formatReadingShortDate(reading.dateOfReading)}</span>
                 </div>
                 <div className="metadata-item">
                   <span className="label">
@@ -1389,10 +1371,13 @@ const ReadingDetail: React.FC = () => {
                   </div>
                 ) : null}
               </div>
-            </section>
-          </aside>
+              <p className="reading-detail-field-hint reading-detail-more-modal-full-id">
+                Full session id: <code>{reading.id}</code>
+              </p>
+            </div>
+          </div>
         </div>
-      </main>
+      ) : null}
 
       {/* Lightbox */}
       {selectedImage ? (
