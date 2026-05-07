@@ -9,6 +9,7 @@ import admin from 'firebase-admin';
 import { registerRoboflowRoutes } from './roboflow.js';
 import archiver from 'archiver';
 import multer from 'multer';
+import { randomUUID } from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -130,6 +131,81 @@ function withS3Base(relativePath) {
   if (!S3_BASE_PREFIX) return rel;
   const base = S3_BASE_PREFIX.replace(/\/+$/, '');
   return `${base}/${rel}`;
+}
+
+/** Registry of manual training / model iterations (portal; S3 JSON). */
+function pipelineIterationsS3Key() {
+  return withS3Base('portal-admin/pipeline-iterations.json');
+}
+
+function cloneJsonObject(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  try {
+    return JSON.parse(JSON.stringify(v));
+  } catch {
+    return null;
+  }
+}
+
+function normalizePipelineIterationRow(raw, fallbackId) {
+  const id = typeof raw?.id === 'string' && raw.id.trim() ? raw.id.trim() : fallbackId;
+  const pipeline = String(raw?.pipeline ?? '').trim();
+  const iterationNumber = parseInt(String(raw?.iterationNumber ?? raw?.iteration_number ?? ''), 10);
+  const modelId = String(raw?.modelId ?? raw?.model_id ?? '').trim();
+  const appVersion = String(raw?.appVersion ?? raw?.app_version ?? '').trim();
+  const startDate = String(raw?.startDate ?? raw?.start_date ?? '').trim();
+  const plannedEndDate = String(raw?.plannedEndDate ?? raw?.planned_end_date ?? '').trim();
+  const scope = String(raw?.scope ?? '').trim();
+  const imageCount = raw?.imageCount ?? raw?.image_count;
+  const imagesAddedSinceLastIteration =
+    raw?.imagesAddedSinceLastIteration ?? raw?.images_added_since_last_iteration;
+  const currentStatus = String(raw?.currentStatus ?? raw?.current_status ?? '').trim();
+  const outcome = String(raw?.outcome ?? '').trim();
+
+  const numOrNull = (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  return {
+    id,
+    pipeline,
+    iterationNumber: Number.isFinite(iterationNumber) ? iterationNumber : NaN,
+    modelId,
+    appVersion,
+    startDate,
+    plannedEndDate,
+    scope,
+    imageCount: numOrNull(imageCount),
+    imagesAddedSinceLastIteration: numOrNull(imagesAddedSinceLastIteration),
+    currentStatus,
+    outcome,
+    portalStats: cloneJsonObject(raw?.portalStats),
+    manualMetrics: cloneJsonObject(raw?.manualMetrics),
+  };
+}
+
+function validatePipelineIterationsPayload(iterations) {
+  if (!Array.isArray(iterations)) return 'iterations must be an array';
+  const seen = new Set();
+  for (let i = 0; i < iterations.length; i++) {
+    const row = iterations[i];
+    if (!row || typeof row !== 'object') return `iterations[${i}]: invalid row`;
+    if (!row.pipeline?.trim()) return `iterations[${i}]: pipeline is required`;
+    if (!Number.isFinite(row.iterationNumber) || row.iterationNumber < 1) {
+      return `iterations[${i}]: iterationNumber must be a positive integer`;
+    }
+    if (!row.modelId?.trim()) return `iterations[${i}]: modelId is required`;
+    if (!row.appVersion?.trim()) return `iterations[${i}]: appVersion is required`;
+    if (!row.startDate?.trim()) return `iterations[${i}]: startDate is required`;
+    const dedupe = `${row.pipeline.trim().toLowerCase()}\t${row.iterationNumber}`;
+    if (seen.has(dedupe)) {
+      return `Duplicate pipeline + iteration # (${row.pipeline} / ${row.iterationNumber})`;
+    }
+    seen.add(dedupe);
+  }
+  return null;
 }
 
 function getFolderForStatus(sourceType, status, workType = null) {
@@ -2627,6 +2703,61 @@ app.post('/api/auth/verify-email-link', async (req, res) => {
   } catch (err) {
     console.error('Email link verification error:', err.message);
     res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+/** Manual pipeline / model iteration rows (stored in S3 JSON). */
+app.get('/api/pipeline-iterations', async (req, res) => {
+  try {
+    const key = pipelineIterationsS3Key();
+    const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+    const txt = await streamToString(out.Body);
+    const data = JSON.parse(txt);
+    const iterations = Array.isArray(data.iterations) ? data.iterations : [];
+    res.json({
+      iterations,
+      updatedAt: data.updatedAt ?? null,
+      updatedBy: data.updatedBy ?? null,
+    });
+  } catch (e) {
+    if (e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404) {
+      return res.json({ iterations: [], updatedAt: null, updatedBy: null });
+    }
+    console.error('GET /api/pipeline-iterations:', e);
+    res.status(500).json({ error: e.message || 'Failed to read pipeline iterations' });
+  }
+});
+
+app.put('/api/pipeline-iterations', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const rawList = body.iterations;
+    if (!Array.isArray(rawList)) {
+      return res.status(400).json({ error: 'Body must include iterations array' });
+    }
+    const iterations = rawList.map((r) => normalizePipelineIterationRow(r, randomUUID()));
+    const err = validatePipelineIterationsPayload(iterations);
+    if (err) return res.status(400).json({ error: err });
+
+    const updatedBy = String(req.headers['x-user-email'] || '').trim();
+    const doc = {
+      iterations,
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    };
+    const key = pipelineIterationsS3Key();
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: key,
+        Body: JSON.stringify(doc, null, 2),
+        ContentType: 'application/json; charset=utf-8',
+      }),
+    );
+    res.json(doc);
+  } catch (e) {
+    console.error('PUT /api/pipeline-iterations:', e);
+    res.status(500).json({ error: e.message || 'Failed to save pipeline iterations' });
   }
 });
 

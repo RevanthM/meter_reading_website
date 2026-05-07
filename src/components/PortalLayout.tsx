@@ -20,6 +20,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   Sparkles,
+  Layers,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -78,6 +79,16 @@ const PortalLayout: FC = () => {
   });
 
   const [workMode, setWorkMode] = useState<PortalWorkMode>(() => getStoredPortalWorkMode());
+
+  const pipelineIterationsNav = useMemo(
+    (): NavLeaf => ({
+      path: '/pipeline-iterations',
+      label: 'Pipeline iterations',
+      description: 'Model runs · compare',
+      icon: <Layers size={17} />,
+    }),
+    [],
+  );
 
   const [accountOpen, setAccountOpen] = useState(() => {
     try {
@@ -147,6 +158,56 @@ const PortalLayout: FC = () => {
             description: 'App / version mix',
             icon: <Cpu size={17} />,
           },
+          pipelineIterationsNav,
+        ],
+      };
+    }
+
+    if (workMode === 'admin') {
+      return {
+        modeHint: 'Iteration registry, training hub, and full lists.',
+        mainLinks: [
+          {
+            ...dash,
+            label: 'Dashboard',
+            description: 'Charts & KPIs',
+            hint: 'Session counts, trends, exports',
+          },
+          {
+            path: '/pipeline-iterations',
+            label: 'Pipeline iterations',
+            description: 'Model runs · compare · edit',
+            hint: 'Manual iteration registry (saved to S3)',
+            icon: <Layers size={17} strokeWidth={2} />,
+          },
+          {
+            path: '/readings/all',
+            label: 'All readings',
+            description: 'Full session list',
+            hint: 'Filter by cohort, version, date',
+            icon: <ListTree size={17} />,
+          },
+        ],
+        moreLinks: [
+          {
+            path: '/training',
+            label: 'Training',
+            description: 'Pipelines · copy · ZIP',
+            hint: 'Same hub as labeler mode',
+            icon: <GraduationCap size={17} strokeWidth={2} />,
+          },
+          {
+            path: '/models',
+            label: 'Models',
+            description: 'App / version mix',
+            icon: <Cpu size={17} />,
+          },
+          {
+            path: '/usage',
+            label: 'Usage',
+            description: 'Sessions by day',
+            icon: <Users size={17} />,
+          },
         ],
       };
     }
@@ -183,9 +244,10 @@ const PortalLayout: FC = () => {
           description: 'Sessions by day',
           icon: <Users size={17} />,
         },
+        pipelineIterationsNav,
       ],
     };
-  }, [workMode]);
+  }, [workMode, pipelineIterationsNav]);
 
   const accountLinks = useMemo(
     () =>
@@ -305,11 +367,12 @@ const PortalLayout: FC = () => {
             >
               <option value="reviewer">reviewer</option>
               <option value="labeler">labeler</option>
+              <option value="admin">admin</option>
             </select>
             <p className="portal-role-hint">{modeHint}</p>
           </div>
 
-          {workMode === 'labeler' ? (
+          {workMode === 'labeler' || workMode === 'admin' ? (
             <>
               <div className="portal-nav-block">
                 <button
@@ -322,14 +385,20 @@ const PortalLayout: FC = () => {
                     <GraduationCap size={18} strokeWidth={2} aria-hidden />
                     <span className="portal-nav-primary-label">Training</span>
                   </span>
-                  <span className="portal-nav-primary-note">All pipelines · copy · ZIP · weights</span>
+                  <span className="portal-nav-primary-note">
+                    {workMode === 'admin'
+                      ? 'Pipelines · copy · ZIP · weights'
+                      : 'All pipelines · copy · ZIP · weights'}
+                  </span>
                 </button>
               </div>
 
               <div className="portal-nav-section">
                 <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">Training</span>
-                  <span className="portal-nav-section-sub">Overview &amp; reviewer picks</span>
+                  <span className="portal-nav-section-title">{workMode === 'admin' ? 'Admin' : 'Training'}</span>
+                  <span className="portal-nav-section-sub">
+                    {workMode === 'admin' ? 'Dashboard · registry · lists' : 'Overview &amp; reviewer picks'}
+                  </span>
                 </div>
                 <ul className="portal-nav-nested portal-nav-nested--sections">
                   {mainLinks.map((item) => renderLeaf(item))}

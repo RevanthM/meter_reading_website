@@ -16,6 +16,7 @@ import UsageSummary from './components/UsageSummary';
 import DatasetsPage from './components/DatasetsPage';
 import TrainingHubPage from './components/TrainingHubPage';
 import TrainingPipelinePage from './components/TrainingPipelinePage';
+import PipelineIterationsPage from './components/PipelineIterationsPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -50,6 +51,7 @@ function AppContent() {
           <Route path="/datasets" element={<DatasetsPage />} />
           <Route path="/training/pipeline/:segment" element={<TrainingPipelinePage />} />
           <Route path="/training" element={<TrainingHubPage />} />
+          <Route path="/pipeline-iterations" element={<PipelineIterationsPage />} />
         </Route>
       </Routes>
     </div>

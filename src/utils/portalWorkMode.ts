@@ -1,5 +1,5 @@
-/** Stored on this device: reviewer (review / move queues) or labeler (pipelines + export). */
-export type PortalWorkMode = 'reviewer' | 'labeler';
+/** Stored on this device: reviewer (review / move queues), labeler (pipelines + export), or admin (iteration registry + broader tools). */
+export type PortalWorkMode = 'reviewer' | 'labeler' | 'admin';
 
 /** Passed from PortalLayout to child routes via `<Outlet context />`. */
 export type PortalOutletWorkContext = {
@@ -11,7 +11,7 @@ const STORAGE_KEY = 'meter_portal_work_mode';
 export function getStoredPortalWorkMode(): PortalWorkMode {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === 'reviewer' || v === 'labeler') return v;
+    if (v === 'reviewer' || v === 'labeler' || v === 'admin') return v;
     /** Legacy third mode — map to labeler (pipelines + lists). */
     if (v === 'all') {
       try {

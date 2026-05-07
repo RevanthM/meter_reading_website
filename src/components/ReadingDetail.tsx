@@ -588,7 +588,7 @@ const ReadingDetail: React.FC = () => {
           workTypeForApi,
           { s3SessionPrefix: r.s3SessionPrefix, patch },
           userEmail || undefined,
-          'reviewer',
+          portalWorkMode,
         );
         setDirectReading(fresh);
       }
@@ -630,6 +630,7 @@ const ReadingDetail: React.FC = () => {
     updateReadingComments,
     refreshData,
     recommendTraining,
+    portalWorkMode,
   ]);
 
   const handleSave = useCallback(() => {

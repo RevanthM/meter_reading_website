@@ -1,0 +1,527 @@
+import { useEffect, useState, type FC, type FormEvent } from 'react';
+import { X, RefreshCw } from 'lucide-react';
+import type { WorkType } from '../types';
+import type { DataSource } from '../context/ReadingsContext';
+import type { S3MeterReading, PipelineIterationRecord, PipelineIterationManualMetrics } from '../services/api';
+import {
+  computePortalStatsForAppVersion,
+  uniqueAppVersionsFromReadings,
+} from '../utils/pipelineIterationStats';
+
+function deepCloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
+  return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
+}
+
+function fmtPct01(x: number | null | undefined): string {
+  if (x == null || !Number.isFinite(x)) return '—';
+  return `${(x * 100).toFixed(1)}%`;
+}
+
+function fmtPct100(x: number | null | undefined): string {
+  if (x == null || !Number.isFinite(x)) return '—';
+  return `${x.toFixed(1)}%`;
+}
+
+function emptyManual(): PipelineIterationManualMetrics {
+  return {};
+}
+
+type Props = {
+  open: boolean;
+  initial: PipelineIterationRecord;
+  onClose: () => void;
+  onSave: (row: PipelineIterationRecord) => void;
+  readings: S3MeterReading[];
+  workType: WorkType;
+  dataSource: DataSource;
+};
+
+const PipelineIterationFormModal: FC<Props> = ({
+  open,
+  initial,
+  onClose,
+  onSave,
+  readings,
+  workType,
+  dataSource,
+}) => {
+  const [row, setRow] = useState<PipelineIterationRecord>(() => deepCloneRow(initial));
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setRow(deepCloneRow(initial));
+      setErr(null);
+    }
+  }, [open, initial]);
+
+  /** Debounced: when app version is set, pull portal images / confidence / queue proxies without an extra click. */
+  useEffect(() => {
+    if (!open) return;
+    const v = row.appVersion.trim();
+    const t = window.setTimeout(() => {
+      setRow((r) => {
+        const cur = r.appVersion.trim();
+        if (cur !== v) return r;
+        if (!cur) {
+          return { ...r, portalStats: null };
+        }
+        const stats = computePortalStatsForAppVersion(readings, cur, workType, dataSource);
+        if (!stats) {
+          return { ...r, portalStats: null };
+        }
+        return {
+          ...r,
+          portalStats: stats,
+          imageCount: r.imageCount != null ? r.imageCount : stats.totalImages,
+        };
+      });
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [open, row.appVersion, readings, workType, dataSource]);
+
+  const versionChoices = uniqueAppVersionsFromReadings(readings);
+  const mm = row.manualMetrics ?? emptyManual();
+
+  const setManual = (patch: Partial<PipelineIterationManualMetrics>) => {
+    setRow((r) => ({
+      ...r,
+      manualMetrics: { ...(r.manualMetrics ?? {}), ...patch },
+    }));
+  };
+
+  const pullFromPortal = () => {
+    const v = row.appVersion.trim();
+    if (!v) {
+      setErr('Enter an app version first.');
+      return;
+    }
+    const stats = computePortalStatsForAppVersion(readings, v, workType, dataSource);
+    if (!stats) {
+      setErr(
+        `No sessions found for app version “${v}” with current work type (${workType}) and source (${dataSource}).`,
+      );
+      return;
+    }
+    setErr(null);
+    setRow((r) => ({
+      ...r,
+      portalStats: stats,
+      imageCount: r.imageCount != null ? r.imageCount : stats.totalImages,
+    }));
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    if (!row.pipeline.trim()) {
+      setErr('Pipeline is required.');
+      return;
+    }
+    if (!Number.isFinite(row.iterationNumber) || row.iterationNumber < 1) {
+      setErr('Iteration # must be at least 1.');
+      return;
+    }
+    if (!row.modelId.trim()) {
+      setErr('Model # is required.');
+      return;
+    }
+    if (!row.appVersion.trim()) {
+      setErr('App version is required.');
+      return;
+    }
+    if (!row.startDate.trim()) {
+      setErr('Start date is required.');
+      return;
+    }
+    onSave(row);
+    onClose();
+  };
+
+  if (!open) return null;
+
+  const ps = row.portalStats;
+
+  return (
+    <div
+      className="pipeline-iteration-modal-overlay"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="pipeline-iteration-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pipeline-iteration-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="pipeline-iteration-modal-head">
+          <h2 id="pipeline-iteration-modal-title">Add / edit iteration</h2>
+          <button type="button" className="pipeline-iteration-modal-close" onClick={onClose} aria-label="Close">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form className="pipeline-iteration-modal-body" onSubmit={handleSubmit}>
+          {err ? (
+            <p className="pipeline-iterations-banner pipeline-iterations-banner--error" role="alert">
+              {err}
+            </p>
+          ) : null}
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Iteration plan (manual)</legend>
+            <div className="pipeline-iteration-form-grid">
+              <label>
+                Pipeline <input value={row.pipeline} onChange={(e) => setRow({ ...row, pipeline: e.target.value })} />
+              </label>
+              <label>
+                Iteration #{' '}
+                <input
+                  type="number"
+                  min={1}
+                  value={row.iterationNumber}
+                  onChange={(e) =>
+                    setRow({
+                      ...row,
+                      iterationNumber: Math.max(1, parseInt(e.target.value, 10) || 1),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Model # <input value={row.modelId} onChange={(e) => setRow({ ...row, modelId: e.target.value })} />
+              </label>
+              <label>
+                App version
+                <input
+                  list="pipeline-app-version-options"
+                  value={row.appVersion}
+                  onChange={(e) => setRow({ ...row, appVersion: e.target.value })}
+                  placeholder="e.g. 4.10 (58)"
+                />
+                <datalist id="pipeline-app-version-options">
+                  {versionChoices.map((v) => (
+                    <option key={v} value={v} />
+                  ))}
+                </datalist>
+              </label>
+              <label>
+                Start date{' '}
+                <input
+                  type="date"
+                  value={(row.startDate || '').slice(0, 10)}
+                  onChange={(e) => setRow({ ...row, startDate: e.target.value })}
+                />
+              </label>
+              <label>
+                Planned end{' '}
+                <input
+                  type="date"
+                  value={row.plannedEndDate ? row.plannedEndDate.slice(0, 10) : ''}
+                  onChange={(e) => setRow({ ...row, plannedEndDate: e.target.value })}
+                />
+              </label>
+              <label className="pipeline-iteration-form-span2">
+                Scope{' '}
+                <textarea
+                  rows={2}
+                  value={row.scope}
+                  onChange={(e) => setRow({ ...row, scope: e.target.value })}
+                  placeholder="Training scope / notes"
+                />
+              </label>
+              <label>
+                # of images (override){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={row.imageCount == null ? '' : String(row.imageCount)}
+                  onChange={(e) => {
+                    const t = e.target.value.trim();
+                    setRow({ ...row, imageCount: t === '' ? null : parseInt(t, 10) || 0 });
+                  }}
+                />
+              </label>
+              <label>
+                Images added since last iteration{' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={row.imagesAddedSinceLastIteration == null ? '' : String(row.imagesAddedSinceLastIteration)}
+                  onChange={(e) => {
+                    const t = e.target.value.trim();
+                    setRow({
+                      ...row,
+                      imagesAddedSinceLastIteration: t === '' ? null : parseInt(t, 10) || 0,
+                    });
+                  }}
+                />
+              </label>
+              <label>
+                Current status <input value={row.currentStatus} onChange={(e) => setRow({ ...row, currentStatus: e.target.value })} />
+              </label>
+              <label>
+                Outcome <input value={row.outcome} onChange={(e) => setRow({ ...row, outcome: e.target.value })} />
+              </label>
+            </div>
+            <p className="pipeline-iteration-form-hint">
+              Metrics below use the <strong>current readings list</strong> (work type <code>{workType}</code>, source{' '}
+              <code>{dataSource}</code>). Change those in the portal header / dashboard before refreshing.
+            </p>
+            <button type="button" className="view-button pipeline-iteration-pull-btn" onClick={pullFromPortal}>
+              <RefreshCw size={16} aria-hidden />
+              Load sessions &amp; images from portal
+            </button>
+          </fieldset>
+
+          {ps ? (
+            <fieldset className="pipeline-iteration-form-section pipeline-iteration-form-section--readonly">
+              <legend>From portal (auto)</legend>
+              <p className="pipeline-iteration-form-hint">
+                Snapshot at {new Date(ps.pulledAt).toLocaleString()}. Queue “accuracy” is % of sessions in the{' '}
+                <strong>correct</strong> folder; digit match compares <code>user_correction</code> vs{' '}
+                <code>ml_prediction</code> digits (proxy only).
+              </p>
+              <div className="pipeline-iteration-stats-grid">
+                <div><span className="k">Sessions</span><span className="v">{ps.totalSessions}</span></div>
+                <div><span className="k">Total images</span><span className="v">{ps.totalImages}</span></div>
+                <div><span className="k">Simulator sessions</span><span className="v">{ps.simulatorSessions}</span></div>
+                <div><span className="k">Simulator images</span><span className="v">{ps.simulatorImages}</span></div>
+                <div><span className="k">Field sessions</span><span className="v">{ps.fieldSessions}</span></div>
+                <div><span className="k">Field images</span><span className="v">{ps.fieldImages}</span></div>
+                <div><span className="k">Avg session confidence (app)</span><span className="v">{fmtPct01(ps.avgSessionConfidence)}</span></div>
+                <div><span className="k">Queue correct (all)</span><span className="v">{fmtPct100(ps.queueCorrectRateAll)}</span></div>
+                <div><span className="k">Queue correct (simulator)</span><span className="v">{fmtPct100(ps.queueCorrectRateSimulator)}</span></div>
+                <div><span className="k">Queue correct (field)</span><span className="v">{fmtPct100(ps.queueCorrectRateField)}</span></div>
+                <div><span className="k">Digit match UT (sim)</span><span className="v">{fmtPct100(ps.digitMatchUtPct)}</span></div>
+                <div><span className="k">Dial 1 UT (%)</span><span className="v">{fmtPct100(ps.dial1UtPct)}</span></div>
+                <div><span className="k">Dial 2 UT (%)</span><span className="v">{fmtPct100(ps.dial2UtPct)}</span></div>
+                <div><span className="k">Dial 3 UT (%)</span><span className="v">{fmtPct100(ps.dial3UtPct)}</span></div>
+                <div><span className="k">Dial 4 UT (%)</span><span className="v">{fmtPct100(ps.dial4UtPct)}</span></div>
+                <div><span className="k">Digit match FT (field)</span><span className="v">{fmtPct100(ps.digitMatchFtPct)}</span></div>
+                <div><span className="k">Dial 1 FT (%)</span><span className="v">{fmtPct100(ps.dial1FtPct)}</span></div>
+                <div><span className="k">Dial 2 FT (%)</span><span className="v">{fmtPct100(ps.dial2FtPct)}</span></div>
+                <div><span className="k">Dial 3 FT (%)</span><span className="v">{fmtPct100(ps.dial3FtPct)}</span></div>
+                <div><span className="k">Dial 4 FT (%)</span><span className="v">{fmtPct100(ps.dial4FtPct)}</span></div>
+              </div>
+            </fieldset>
+          ) : (
+            <p className="pipeline-iteration-form-muted">No portal snapshot yet — choose app version and click “Load sessions…”.</p>
+          )}
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Roboflow (manual)</legend>
+            <div className="pipeline-iteration-form-grid">
+              <label>
+                Ave. bbox confidence (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.roboflowAvgBboxConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({
+                      roboflowAvgBboxConfidence: e.target.value === '' ? null : parseFloat(e.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Ave. keypoint confidence (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.roboflowAvgKeypointConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({
+                      roboflowAvgKeypointConfidence: e.target.value === '' ? null : parseFloat(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>App model metrics (manual)</legend>
+            <div className="pipeline-iteration-form-grid">
+              <label>
+                Ave. bbox confidence — app (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.appAvgBboxConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({ appAvgBboxConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Ave. keypoint confidence — app (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.appAvgKeypointConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({ appAvgKeypointConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Read accuracy &amp; dials (manual — eval / notebook)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              <label>
+                Read acc. simulator laptop (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.readAccuracySimulatorLaptop ?? ''}
+                  onChange={(e) =>
+                    setManual({
+                      readAccuracySimulatorLaptop: e.target.value === '' ? null : parseFloat(e.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Read acc. UT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.readAccuracyUt ?? ''}
+                  onChange={(e) =>
+                    setManual({ readAccuracyUt: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Read acc. FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.readAccuracyFt ?? ''}
+                  onChange={(e) =>
+                    setManual({ readAccuracyFt: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 1 UT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial1UtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial1UtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 2 UT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial2UtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial2UtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 3 UT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial3UtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial3UtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 4 UT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial4UtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial4UtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Read acc. FT (row) (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.readAccuracyFtRow ?? ''}
+                  onChange={(e) =>
+                    setManual({ readAccuracyFtRow: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 1 FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial1FtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial1FtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 2 FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial2FtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial2FtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 3 FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial3FtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial3FtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Dial 4 FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.dial4FtPct ?? ''}
+                  onChange={(e) =>
+                    setManual({ dial4FtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <div className="pipeline-iteration-modal-footer">
+            <button type="button" className="back-button" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="save-button">
+              Save row
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default PipelineIterationFormModal;

@@ -53,6 +53,110 @@ export interface S3MeterReading extends MeterReading {
   portalMetadataUpdatedBy?: string;
 }
 
+/** Pulled from portal readings for this row’s app version (work type + data source scope). */
+export interface PipelineIterationPortalStats {
+  pulledAt: string;
+  workType: string;
+  dataSource: 'all' | 'field' | 'simulator';
+  totalSessions: number;
+  totalImages: number;
+  simulatorSessions: number;
+  simulatorImages: number;
+  fieldSessions: number;
+  fieldImages: number;
+  /** 0–1 session-level average when metadata has confidence. */
+  avgSessionConfidence: number | null;
+  /** % sessions in `correct` queue. */
+  queueCorrectRateAll: number | null;
+  queueCorrectRateSimulator: number | null;
+  queueCorrectRateField: number | null;
+  /** Avg per-dial digit match % (expected vs model), simulator sessions only. */
+  digitMatchUtPct: number | null;
+  dial1UtPct: number | null;
+  dial2UtPct: number | null;
+  dial3UtPct: number | null;
+  dial4UtPct: number | null;
+  digitMatchFtPct: number | null;
+  dial1FtPct: number | null;
+  dial2FtPct: number | null;
+  dial3FtPct: number | null;
+  dial4FtPct: number | null;
+}
+
+/** Roboflow / offline eval / extra app metrics — manual entry (typically 0–100 for % fields). */
+export interface PipelineIterationManualMetrics {
+  roboflowAvgBboxConfidence?: number | null;
+  roboflowAvgKeypointConfidence?: number | null;
+  appAvgBboxConfidence?: number | null;
+  appAvgKeypointConfidence?: number | null;
+  readAccuracySimulatorLaptop?: number | null;
+  readAccuracyUt?: number | null;
+  readAccuracyFt?: number | null;
+  dial1UtPct?: number | null;
+  dial2UtPct?: number | null;
+  dial3UtPct?: number | null;
+  dial4UtPct?: number | null;
+  readAccuracyFtRow?: number | null;
+  dial1FtPct?: number | null;
+  dial2FtPct?: number | null;
+  dial3FtPct?: number | null;
+  dial4FtPct?: number | null;
+}
+
+/** One row in the pipeline / model iteration registry (S3 JSON). */
+export interface PipelineIterationRecord {
+  id: string;
+  pipeline: string;
+  iterationNumber: number;
+  modelId: string;
+  appVersion: string;
+  startDate: string;
+  plannedEndDate: string;
+  scope: string;
+  /** Optional override; “Refresh from portal” can set from `portalStats.totalImages`. */
+  imageCount: number | null;
+  imagesAddedSinceLastIteration: number | null;
+  currentStatus: string;
+  outcome: string;
+  portalStats?: PipelineIterationPortalStats | null;
+  manualMetrics?: PipelineIterationManualMetrics | null;
+}
+
+export interface PipelineIterationsDoc {
+  iterations: PipelineIterationRecord[];
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export async function fetchPipelineIterations(): Promise<PipelineIterationsDoc> {
+  const response = await fetch(`${API_BASE_URL}/pipeline-iterations`);
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<PipelineIterationsDoc>(text, response.status);
+}
+
+export async function savePipelineIterations(
+  userEmail: string | undefined,
+  iterations: PipelineIterationRecord[],
+): Promise<PipelineIterationsDoc> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (userEmail) headers['x-user-email'] = userEmail;
+  const response = await fetch(`${API_BASE_URL}/pipeline-iterations`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ iterations }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<PipelineIterationsDoc>(text, response.status);
+}
+
 export interface WorkTypeInfo {
   code: WorkType;
   name: string;
@@ -278,7 +382,7 @@ export async function patchSessionMetadata(
 ): Promise<S3MeterReading> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-portal-work-mode': portalWorkMode,
+    'x-portal-work-mode': portalWorkMode === 'admin' ? 'reviewer' : portalWorkMode,
   };
   if (userEmail) headers['x-user-email'] = userEmail;
   const response = await fetch(`${API_BASE_URL}/readings/${encodeURIComponent(sessionId)}/metadata`, {
