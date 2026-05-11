@@ -42,7 +42,17 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-app.use(express.static(path.join(__dirname, '../dist')));
+const distDir = path.join(__dirname, '../dist');
+app.use(
+  express.static(distDir, {
+    setHeaders(res, filePath) {
+      // Avoid stale SPA shell pointing at old hashed JS after deploy/local rebuild.
+      if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith('/index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      }
+    },
+  }),
+);
 
 const BUCKET_NAME = (process.env.AWS_S3_BUCKET || 'meter-reader-training-feedback').trim();
 const REGION = (process.env.AWS_REGION || 'us-east-1').trim();
@@ -2771,7 +2781,8 @@ app.get('/{*path}', (req, res, next) => {
       error: `No API route for ${req.method} ${req.path}. Restart the Node server after updating so new endpoints are registered.`,
     });
   }
-  res.sendFile(path.join(__dirname, '../dist/index.html'), (err) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(distDir, 'index.html'), (err) => {
     if (err) next(err);
   });
 });

@@ -1,5 +1,5 @@
 import type { DataSource } from '../context/ReadingsContext';
-import type { S3MeterReading, PipelineIterationPortalStats } from '../services/api';
+import type { S3MeterReading, PipelineIterationPortalStats, PipelineIterationRecord } from '../services/api';
 import type { WorkType } from '../types';
 
 function normalizeReadingAppVersion(r: S3MeterReading): string {
@@ -142,4 +142,23 @@ export function uniqueAppVersionsFromReadings(readings: S3MeterReading[]): strin
     s.add(normalizeReadingAppVersion(r));
   }
   return [...s].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+/**
+ * Single Y-value for registry trend charts: admin exact % → manual UT read acc → portal sim queue → portal all-queue.
+ */
+export function effectiveIterationAccuracyPercent(r: PipelineIterationRecord): number | null {
+  const m = r.manualMetrics;
+  if (m?.exactReadingAccuracyPct != null && Number.isFinite(m.exactReadingAccuracyPct)) {
+    return m.exactReadingAccuracyPct;
+  }
+  if (m?.readAccuracyUt != null && Number.isFinite(m.readAccuracyUt)) return m.readAccuracyUt;
+  const ps = r.portalStats;
+  if (ps?.queueCorrectRateSimulator != null && Number.isFinite(ps.queueCorrectRateSimulator)) {
+    return ps.queueCorrectRateSimulator;
+  }
+  if (ps?.queueCorrectRateAll != null && Number.isFinite(ps.queueCorrectRateAll)) {
+    return ps.queueCorrectRateAll;
+  }
+  return null;
 }

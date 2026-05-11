@@ -12,8 +12,6 @@ import {
   Layers,
   ChevronDown,
   Briefcase,
-  TrendingUp,
-  BarChart3,
   Download,
   Cpu,
   ExternalLink,
@@ -25,10 +23,14 @@ import { statusColors, statusLabels, workTypeLabels } from '../types';
 import {
   downloadIncorrectRetrainZip,
   fetchModelAnalytics,
+  fetchPipelineIterations,
   type ModelVersionStats,
+  type PipelineIterationRecord,
   type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
+import { buildImprovementStoryBinsByAppVersion } from '../utils/dashboardImprovementStats';
+import DashboardImprovementChart from './DashboardImprovementChart';
 
 const STATUS_DONUT_ORDER: ReadingStatus[] = [
   'correct',
@@ -250,7 +252,8 @@ const ModelVersionAccuracyBars: FC<{
           </div>
           <p className="chart-explainer">
             Share of sessions in the <strong>correct</strong> queue by on-device <strong>app_version</strong> (same
-            toolbar filters). Open the Models page for tables and exports.
+            toolbar filters). Each row also shows <strong>average session confidence</strong> from metadata when present.
+            Open the Models page for tables and exports.
           </p>
         </div>
         <button type="button" className="dashboard-card-link dashboard-card-link--header" onClick={onOpenModels}>
@@ -290,6 +293,9 @@ const ModelVersionAccuracyBars: FC<{
                   <span className="model-vs-accuracy-meta">
                     {v.sessions.toLocaleString()} sessions
                     {v.imageCount != null ? ` · ${v.imageCount.toLocaleString()} images` : ''}
+                    {v.avgConfidence != null && Number.isFinite(v.avgConfidence)
+                      ? ` · avg conf ${Math.round(v.avgConfidence * 100)}%`
+                      : ''}
                   </span>
                 </div>
                 <div className="model-vs-accuracy-track" role="presentation">
@@ -362,19 +368,6 @@ function getChartRangeSearchSuffix(rangeId: ChartRangeId): string {
   return `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
 }
 
-/** Every calendar day from start through end (inclusive), ISO yyyy-mm-dd. */
-function enumerateIsoDaysInclusive(startIsoDay: string, endIsoDay: string): string[] {
-  const out: string[] = [];
-  const cur = new Date(`${startIsoDay}T12:00:00`);
-  const end = new Date(`${endIsoDay}T12:00:00`);
-  if (Number.isNaN(cur.getTime()) || Number.isNaN(end.getTime()) || cur > end) return out;
-  while (cur <= end) {
-    out.push(cur.toISOString().split('T')[0]);
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
-}
-
 function deriveCountsFromReadings(readings: S3MeterReading[]): DashboardCounts {
   return {
     totalPictures: readings.length,
@@ -387,366 +380,6 @@ function deriveCountsFromReadings(readings: S3MeterReading[]): DashboardCounts {
     notSureCount: readings.filter((r) => r.status === 'not_sure').length,
   };
 }
-
-function computeChartData(readings: S3MeterReading[], rangeId: ChartRangeId) {
-  let days: string[];
-
-  if (rangeId === 'all') {
-    const seen = new Set<string>();
-    for (const r of readings) {
-      const day = r.dateOfReading?.split('T')[0];
-      if (day) seen.add(day);
-    }
-    const sorted = [...seen].sort();
-    if (sorted.length === 0) {
-      return { dailyData: [], activeDays: [] };
-    }
-    days = enumerateIsoDaysInclusive(sorted[0], sorted[sorted.length - 1]);
-  } else {
-    const n = CHART_RANGE_DAY_COUNT[rangeId];
-    const now = new Date();
-    days = [];
-    for (let i = n - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      days.push(d.toISOString().split('T')[0]);
-    }
-  }
-
-  const dayMap = new Map<string, { total: number; correct: number; field: number; simulator: number }>();
-  for (const day of days) {
-    dayMap.set(day, { total: 0, correct: 0, field: 0, simulator: 0 });
-  }
-
-  for (const r of readings) {
-    const day = r.dateOfReading?.split('T')[0];
-    if (!day) continue;
-    const entry = dayMap.get(day);
-    if (entry) {
-      entry.total++;
-      if (r.status === 'correct') entry.correct++;
-      if (r.type === 'field') entry.field++;
-      else entry.simulator++;
-    }
-  }
-
-  const dailyData = days.map((day) => {
-    const d = dayMap.get(day)!;
-    return { date: day, ...d, accuracy: d.total > 0 ? Math.round((d.correct / d.total) * 100) : null };
-  });
-
-  const activeDays = dailyData.filter((d) => d.total > 0);
-
-  return { dailyData, activeDays };
-}
-
-/** When there are more calendar days than this, volume + labeled-share charts use week buckets (Monday start). */
-const CHART_BUCKET_WEEK_THRESHOLD = 45;
-
-type ChartBin = {
-  date: string;
-  drillIso: string;
-  total: number;
-  correct: number;
-  field: number;
-  simulator: number;
-  accuracy: number | null;
-  /** X-axis label under the bar; defaults from `date` when omitted. */
-  barLabel?: string;
-};
-
-function mondayOfWeekContaining(isoDay: string): string {
-  const d = new Date(`${isoDay}T12:00:00`);
-  const dow = d.getDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + offset);
-  return d.toISOString().split('T')[0];
-}
-
-function dailyRowsToChartBins(
-  daily: ReturnType<typeof computeChartData>['dailyData'],
-): ChartBin[] {
-  return daily.map((row) => ({
-    date: row.date,
-    drillIso: row.date,
-    total: row.total,
-    correct: row.correct,
-    field: row.field,
-    simulator: row.simulator,
-    accuracy: row.accuracy,
-  }));
-}
-
-function aggregateDailyBinsToWeeks(daily: ChartBin[]): ChartBin[] {
-  const map = new Map<string, { total: number; correct: number; field: number; simulator: number }>();
-  for (const row of daily) {
-    const mon = mondayOfWeekContaining(row.date);
-    const cur = map.get(mon) ?? { total: 0, correct: 0, field: 0, simulator: 0 };
-    cur.total += row.total;
-    cur.correct += row.correct;
-    cur.field += row.field;
-    cur.simulator += row.simulator;
-    map.set(mon, cur);
-  }
-  const keys = [...map.keys()].sort();
-  return keys.map((mon) => {
-    const w = map.get(mon)!;
-    const accuracy = w.total > 0 ? Math.round((w.correct / w.total) * 100) : null;
-    const barLabel = new Date(`${mon}T12:00:00`).toLocaleDateString('en', { month: 'short', day: 'numeric' });
-    return {
-      date: mon,
-      drillIso: mon,
-      total: w.total,
-      correct: w.correct,
-      field: w.field,
-      simulator: w.simulator,
-      accuracy,
-      barLabel,
-    };
-  });
-}
-
-function buildChartBinsFromDaily(dailyData: ReturnType<typeof computeChartData>['dailyData']): {
-  bucket: 'day' | 'week';
-  volumeBars: ChartBin[];
-  accuracySeries: ChartBin[];
-} {
-  if (dailyData.length <= CHART_BUCKET_WEEK_THRESHOLD) {
-    const bins = dailyRowsToChartBins(dailyData);
-    return {
-      bucket: 'day',
-      volumeBars: bins,
-      accuracySeries: bins.filter((b) => b.total > 0),
-    };
-  }
-  const weekly = aggregateDailyBinsToWeeks(dailyRowsToChartBins(dailyData));
-  return {
-    bucket: 'week',
-    volumeBars: weekly,
-    accuracySeries: weekly.filter((b) => b.total > 0),
-  };
-}
-
-const DailyVolumeChart: FC<{
-  data: ChartBin[];
-  bucket: 'day' | 'week';
-  onDayClick?: (isoDay: string) => void;
-  hero?: boolean;
-  timeRangeLabel: string;
-}> = ({ data, bucket, onDayClick, hero, timeRangeLabel }) => {
-  const maxCount = Math.max(...data.map((d) => d.total), 1);
-  const dense = data.length > 14;
-  const title = bucket === 'week' ? 'Weekly upload volume' : 'Daily upload volume';
-  const drillHint =
-    bucket === 'week'
-      ? 'weekly totals · bar opens list filtered to that Monday (week start)'
-      : 'click a bar to open that day';
-
-  return (
-    <div className={hero ? 'chart-card chart-card--hero' : 'chart-card'}>
-      <div className="chart-header">
-        <BarChart3 size={18} />
-        <h3>{title}</h3>
-        <span className="chart-subtitle">
-          {timeRangeLabel} · {drillHint}
-        </span>
-      </div>
-      <div className={`chart-bar-area ${dense ? 'chart-bar-area--dense' : ''}`}>
-        {data.map((day) => {
-          const canDrill = Boolean(onDayClick && day.total > 0);
-          const label =
-            day.barLabel ??
-            new Date(`${day.date}T12:00:00`).toLocaleDateString('en', { month: 'short', day: 'numeric' });
-          const inner = (
-            <>
-              <div className="chart-bar-track">
-                {day.total > 0 && <div className="chart-bar-tooltip">{day.total}</div>}
-                <div
-                  className="chart-bar-fill"
-                  style={{ height: `${(day.total / maxCount) * 100}%` }}
-                >
-                  {day.field > 0 && (
-                    <div
-                      className="chart-bar-segment field"
-                      style={{ height: `${(day.field / day.total) * 100}%` }}
-                    />
-                  )}
-                  {day.simulator > 0 && (
-                    <div
-                      className="chart-bar-segment simulator"
-                      style={{ height: `${(day.simulator / day.total) * 100}%` }}
-                    />
-                  )}
-                </div>
-              </div>
-              <span className="chart-bar-label">{label}</span>
-            </>
-          );
-          return (
-            <div key={day.date} className="chart-bar-col">
-              {canDrill ? (
-                <button
-                  type="button"
-                  className="chart-bar-hit"
-                  onClick={() => onDayClick!(day.drillIso)}
-                  title={
-                    bucket === 'week'
-                      ? `Open sessions for week starting ${day.drillIso}`
-                      : `Open sessions uploaded on ${day.drillIso}`
-                  }
-                >
-                  {inner}
-                </button>
-              ) : (
-                <div className="chart-bar-hit chart-bar-hit--disabled">{inner}</div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div className="chart-legend-row">
-        <span className="chart-legend-item"><span className="chart-dot" style={{ background: '#3fb950' }} /> Field</span>
-        <span className="chart-legend-item"><span className="chart-dot" style={{ background: '#58a6ff' }} /> Simulator</span>
-      </div>
-    </div>
-  );
-};
-
-const AccuracyChart: FC<{
-  data: ChartBin[];
-  bucket: 'day' | 'week';
-  onDayClick?: (isoDay: string) => void;
-  hero?: boolean;
-  timeRangeLabel: string;
-}> = ({ data, bucket, onDayClick, hero, timeRangeLabel }) => {
-  const recentDays = data;
-
-  if (recentDays.length === 0) {
-    return (
-      <div className={hero ? 'chart-card chart-card--hero' : 'chart-card'}>
-        <div className="chart-header chart-header--stack">
-          <div className="chart-header-titles">
-            <div className="chart-header-row">
-              <TrendingUp size={18} />
-              <h3>{bucket === 'week' ? 'Labeled share by week' : 'Labeled share by day'}</h3>
-            </div>
-            <p className="chart-explainer chart-explainer--inline">{timeRangeLabel}</p>
-          </div>
-        </div>
-        <div className="chart-empty">No data with readings available</div>
-      </div>
-    );
-  }
-
-  const points = recentDays.map((d, i) => ({
-    x: (i / Math.max(recentDays.length - 1, 1)) * 100,
-    y: d.accuracy ?? 0,
-    date: d.date,
-    drillIso: d.drillIso,
-    total: d.total,
-    correct: d.correct,
-  }));
-
-  const polyline = points.map(p => `${p.x},${100 - p.y}`).join(' ');
-  const areaPath = `M ${points[0].x},100 ` + points.map(p => `L ${p.x},${100 - p.y}`).join(' ') + ` L ${points[points.length - 1].x},100 Z`;
-
-  const overallCorrect = recentDays.reduce((s, d) => s + d.correct, 0);
-  const overallTotal = recentDays.reduce((s, d) => s + d.total, 0);
-  const overallAccuracy = overallTotal > 0 ? ((overallCorrect / overallTotal) * 100).toFixed(1) : '0';
-
-  return (
-    <div className={hero ? 'chart-card chart-card--hero' : 'chart-card'}>
-      <div className="chart-header chart-header--stack">
-        <div className="chart-header-titles">
-          <div className="chart-header-row">
-            <TrendingUp size={18} />
-            <h3>{bucket === 'week' ? 'Labeled share by week' : 'Labeled share by day'}</h3>
-            <span className="chart-accuracy-badge">{overallAccuracy}%</span>
-          </div>
-          <p className="chart-explainer">
-            Window: <strong>{timeRangeLabel}</strong>. Each point is{' '}
-            <strong>
-              {bucket === 'week'
-                ? 'correct ÷ all sessions uploaded in that week (Mon–Sun bucket)'
-                : 'correct ÷ all sessions uploaded that day'}
-            </strong>{' '}
-            (human labels vs total volume — not model precision until most items are reviewed).
-          </p>
-          <p className="chart-drill-hint">
-            {bucket === 'week'
-              ? 'Click a point to open the list for that week (Monday).'
-              : 'Click a point to open that day in the list.'}
-          </p>
-        </div>
-      </div>
-      <div className="chart-svg-area">
-        <svg viewBox="-2 -5 104 115" preserveAspectRatio="none" className="accuracy-svg">
-          {[0, 25, 50, 75, 100].map(y => (
-            <line key={y} x1="0" y1={100 - y} x2="100" y2={100 - y} stroke="var(--border-color)" strokeWidth="0.5" />
-          ))}
-          <path d={areaPath} fill="url(#accuracyGradient)" />
-          <polyline points={polyline} fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          {points.map((p, i) => {
-            const canDrill = Boolean(onDayClick && p.total > 0);
-            return (
-              <circle
-                key={i}
-                cx={p.x}
-                cy={100 - p.y}
-                r={canDrill ? 4 : 2.5}
-                fill="#10b981"
-                stroke="var(--bg-tertiary)"
-                strokeWidth="1"
-                className={canDrill ? 'accuracy-hit' : ''}
-                onClick={canDrill ? () => onDayClick!(p.drillIso) : undefined}
-                onKeyDown={
-                  canDrill
-                    ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onDayClick!(p.drillIso);
-                        }
-                      }
-                    : undefined
-                }
-                tabIndex={canDrill ? 0 : undefined}
-                role={canDrill ? 'button' : undefined}
-                aria-label={
-                  canDrill
-                    ? bucket === 'week'
-                      ? `Open readings for week starting ${p.drillIso}`
-                      : `Open readings for ${p.drillIso}`
-                    : undefined
-                }
-              />
-            );
-          })}
-          <defs>
-            <linearGradient id="accuracyGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
-            </linearGradient>
-          </defs>
-        </svg>
-        <div className="chart-y-labels">
-          <span>100%</span>
-          <span>75%</span>
-          <span>50%</span>
-          <span>25%</span>
-          <span>0%</span>
-        </div>
-      </div>
-      <div className="chart-x-labels">
-        {recentDays.length > 0 && (
-          <>
-            <span>{new Date(recentDays[0].date + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span>
-            <span>{new Date(recentDays[recentDays.length - 1].date + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span>
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
 
 const Dashboard: FC = () => {
   const {
@@ -764,6 +397,7 @@ const Dashboard: FC = () => {
   const [chartRange, setChartRange] = useState<ChartRangeId>('all');
   const [modelVersions, setModelVersions] = useState<ModelVersionStats[]>([]);
   const [modelAnalyticsLoading, setModelAnalyticsLoading] = useState(false);
+  const [registryIterations, setRegistryIterations] = useState<PipelineIterationRecord[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -783,22 +417,52 @@ const Dashboard: FC = () => {
     };
   }, [dataSource, workType]);
 
-  const chartData = useMemo(
-    () => computeChartData(filteredReadings, chartRange),
-    [filteredReadings, chartRange],
-  );
-
-  const chartBins = useMemo(() => buildChartBinsFromDaily(chartData.dailyData), [chartData.dailyData]);
-
   const rangeReadings = useMemo(
     () => filterReadingsByChartRange(filteredReadings, chartRange),
     [filteredReadings, chartRange],
   );
   const rangeCounts = useMemo(() => deriveCountsFromReadings(rangeReadings), [rangeReadings]);
 
+  const improvementBins = useMemo(
+    () => buildImprovementStoryBinsByAppVersion(rangeReadings, { maxVersions: 16 }),
+    [rangeReadings],
+  );
+
+  const registryStoryHint = useMemo(() => {
+    const rows = registryIterations.filter(
+      (r) =>
+        r.manualMetrics?.exactReadingAccuracyPct != null &&
+        Number.isFinite(r.manualMetrics.exactReadingAccuracyPct),
+    );
+    if (!rows.length) return null;
+    const sorted = [...rows].sort((a, b) => {
+      const ta = new Date(a.startDate || 0).getTime();
+      const tb = new Date(b.startDate || 0).getTime();
+      return tb - ta;
+    });
+    const top = sorted[0];
+    const pct = top.manualMetrics!.exactReadingAccuracyPct!;
+    const pipe = top.pipeline.trim() || '—';
+    return `Latest pipeline registry: ${pipe} · ${pct.toFixed(1)}% exact reading · app ${top.appVersion || '—'}.`;
+  }, [registryIterations]);
+
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const isReviewerMode = outletCtx?.workMode !== 'labeler';
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPipelineIterations()
+      .then((doc) => {
+        if (!cancelled) setRegistryIterations(doc.iterations ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setRegistryIterations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const todayDrillIso = new Date().toISOString().split('T')[0];
   const todayHintDisplay = new Date(`${todayDrillIso}T12:00:00`).toLocaleDateString(undefined, {
@@ -832,6 +496,12 @@ const Dashboard: FC = () => {
 
   const handleDrillByDay = (isoDay: string) => {
     navigate(`/readings/all?date=${encodeURIComponent(isoDay)}`);
+  };
+
+  const handleDrillImprovementByAppVersion = (appVersion: string) => {
+    const suffix = getChartRangeSearchSuffix(chartRange);
+    const conn = suffix ? `${suffix}&` : '?';
+    navigate(`/readings/all${conn}appVersion=${encodeURIComponent(appVersion)}`);
   };
 
   const labeledSharePct =
@@ -994,23 +664,69 @@ const Dashboard: FC = () => {
       ) : null}
 
       <main className="dashboard-content dashboard-content--visual">
+        {filteredReadings.length > 0 && (
+          <section className="dashboard-section dashboard-section--viz dashboard-section--improvement">
+            <div className="dashboard-section-head dashboard-section-head--range-top">
+              <div>
+                <h2 className="section-title">Are we improving?</h2>
+              </div>
+              <div className="dashboard-chart-range" role="group" aria-label="Chart time range">
+                {CHART_RANGE_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`dashboard-range-chip ${chartRange === id ? 'dashboard-range-chip--active' : ''}`}
+                    onClick={() => setChartRange(id)}
+                  >
+                    {CHART_RANGE_LABELS[id]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="dashboard-charts-hero dashboard-charts-hero--single">
+              <DashboardImprovementChart
+                bins={improvementBins}
+                onDrill={handleDrillImprovementByAppVersion}
+                loading={false}
+                registryHint={registryStoryHint}
+              />
+            </div>
+            {outletCtx?.workMode === 'admin' ? (
+              <p className="dashboard-improvement-admin-link">
+                <button type="button" className="training-hub-text-btn" onClick={() => navigate('/pipeline-iterations')}>
+                  Open pipeline iterations registry
+                </button>{' '}
+                to edit eval rows that power the registry hint.
+              </p>
+            ) : null}
+          </section>
+        )}
+
         <section className="dashboard-section dashboard-section--glance dashboard-section--action-first">
-          <div className="dashboard-section-head dashboard-section-head--range-top">
+          <div
+            className={
+              filteredReadings.length === 0
+                ? 'dashboard-section-head dashboard-section-head--range-top'
+                : 'dashboard-section-head'
+            }
+          >
             <div>
               <h2 className="section-title">At a glance</h2>
             </div>
-            <div className="dashboard-chart-range" role="group" aria-label="Chart time range">
-              {CHART_RANGE_IDS.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`dashboard-range-chip ${chartRange === id ? 'dashboard-range-chip--active' : ''}`}
-                  onClick={() => setChartRange(id)}
-                >
-                  {CHART_RANGE_LABELS[id]}
-                </button>
-              ))}
-            </div>
+            {filteredReadings.length === 0 ? (
+              <div className="dashboard-chart-range" role="group" aria-label="Chart time range">
+                {CHART_RANGE_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`dashboard-range-chip ${chartRange === id ? 'dashboard-range-chip--active' : ''}`}
+                    onClick={() => setChartRange(id)}
+                  >
+                    {CHART_RANGE_LABELS[id]}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="dashboard-kpi-grid">
             <KpiMiniCard
@@ -1098,41 +814,6 @@ const Dashboard: FC = () => {
             </div>
             <div className="dashboard-donut-solo">
               <StatusDonutChart counts={rangeCounts} onSegment={handleCardClick} soloLayout />
-            </div>
-          </section>
-        )}
-
-        {filteredReadings.length > 0 && (
-          <section className="dashboard-section dashboard-section--viz">
-            <div className="dashboard-section-head">
-              <h2 className="section-title">Volume & labeled share</h2>
-              <p className="section-lead">
-                Window: <strong>{CHART_RANGE_LABELS[chartRange]}</strong> (chips on the At a glance row).{' '}
-                {chartBins.bucket === 'week' ? (
-                  <>
-                    This span has more than {CHART_BUCKET_WEEK_THRESHOLD} days, so charts use <strong>weekly</strong>{' '}
-                    buckets (Monday start). Click a bar or point to open the list for that week (Monday filter).
-                  </>
-                ) : (
-                  <>Click a bar or point to open that day in the list.</>
-                )}
-              </p>
-            </div>
-            <div className="dashboard-charts-hero">
-              <DailyVolumeChart
-                data={chartBins.volumeBars}
-                bucket={chartBins.bucket}
-                onDayClick={handleDrillByDay}
-                hero
-                timeRangeLabel={CHART_RANGE_LABELS[chartRange]}
-              />
-              <AccuracyChart
-                data={chartBins.accuracySeries}
-                bucket={chartBins.bucket}
-                onDayClick={handleDrillByDay}
-                hero
-                timeRangeLabel={CHART_RANGE_LABELS[chartRange]}
-              />
             </div>
           </section>
         )}

@@ -26,6 +26,31 @@ function emptyManual(): PipelineIterationManualMetrics {
   return {};
 }
 
+function manualNumInput(
+  mm: PipelineIterationManualMetrics,
+  setManual: (p: Partial<PipelineIterationManualMetrics>) => void,
+  key: keyof PipelineIterationManualMetrics,
+  label: string,
+) {
+  const v = mm[key];
+  const num = typeof v === 'number' && Number.isFinite(v) ? v : null;
+  return (
+    <label>
+      {label}{' '}
+      <input
+        type="number"
+        step="0.1"
+        value={num == null ? '' : String(num)}
+        onChange={(e) =>
+          setManual({
+            [key]: e.target.value === '' ? null : parseFloat(e.target.value),
+          } as Partial<PipelineIterationManualMetrics>)
+        }
+      />
+    </label>
+  );
+}
+
 type Props = {
   open: boolean;
   initial: PipelineIterationRecord;
@@ -507,6 +532,109 @@ const PipelineIterationFormModal: FC<Props> = ({
                   }
                 />
               </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Admin — dataset splits &amp; eval summary</legend>
+            <p className="pipeline-iteration-form-hint">
+              Optional fields aligned with the iteration spreadsheet (UT laptop vs gallery/screen vs field counts;
+              exact-reading accuracy; manual review rate).
+            </p>
+            <div className="pipeline-iteration-form-grid">
+              <label>
+                UT images — laptop (#){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={mm.unitTestImagesLaptop == null ? '' : String(mm.unitTestImagesLaptop)}
+                  onChange={(e) =>
+                    setManual({
+                      unitTestImagesLaptop: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                UT images — gallery / screen (#){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={mm.unitTestImagesGalleryOrScreen == null ? '' : String(mm.unitTestImagesGalleryOrScreen)}
+                  onChange={(e) =>
+                    setManual({
+                      unitTestImagesGalleryOrScreen: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Field test images (#){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={mm.fieldTestImageCount == null ? '' : String(mm.fieldTestImageCount)}
+                  onChange={(e) =>
+                    setManual({
+                      fieldTestImageCount: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Exact reading accuracy (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.exactReadingAccuracyPct ?? ''}
+                  onChange={(e) =>
+                    setManual({
+                      exactReadingAccuracyPct: e.target.value === '' ? null : parseFloat(e.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Manual review rate (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.manualReviewRatePct ?? ''}
+                  onChange={(e) =>
+                    setManual({
+                      manualReviewRatePct: e.target.value === '' ? null : parseFloat(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Admin — per-dial accuracy (%)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              {manualNumInput(mm, setManual, 'simDial1AccuracyPct', 'Sim dial 1 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial2AccuracyPct', 'Sim dial 2 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial3AccuracyPct', 'Sim dial 3 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial4AccuracyPct', 'Sim dial 4 acc. (%)')}
+              {manualNumInput(mm, setManual, 'appDial1AccuracyPct', 'App dial 1 acc. (%)')}
+              {manualNumInput(mm, setManual, 'appDial2AccuracyPct', 'App dial 2 acc. (%)')}
+              {manualNumInput(mm, setManual, 'appDial3AccuracyPct', 'App dial 3 acc. (%)')}
+              {manualNumInput(mm, setManual, 'appDial4AccuracyPct', 'App dial 4 acc. (%)')}
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Admin — per-dial confidence (%)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              {manualNumInput(mm, setManual, 'simDial1ConfidencePct', 'Sim dial 1 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial2ConfidencePct', 'Sim dial 2 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial3ConfidencePct', 'Sim dial 3 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial4ConfidencePct', 'Sim dial 4 conf. (%)')}
+              {manualNumInput(mm, setManual, 'appDial1ConfidencePct', 'App dial 1 conf. (%)')}
+              {manualNumInput(mm, setManual, 'appDial2ConfidencePct', 'App dial 2 conf. (%)')}
+              {manualNumInput(mm, setManual, 'appDial3ConfidencePct', 'App dial 3 conf. (%)')}
+              {manualNumInput(mm, setManual, 'appDial4ConfidencePct', 'App dial 4 conf. (%)')}
             </div>
           </fieldset>
 

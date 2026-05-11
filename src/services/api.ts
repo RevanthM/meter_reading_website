@@ -101,6 +101,40 @@ export interface PipelineIterationManualMetrics {
   dial2FtPct?: number | null;
   dial3FtPct?: number | null;
   dial4FtPct?: number | null;
+
+  /** Admin: UT images on laptop eval set. */
+  unitTestImagesLaptop?: number | null;
+  /** Admin: UT images from gallery or screen capture. */
+  unitTestImagesGalleryOrScreen?: number | null;
+  /** Admin: field test image count for this iteration. */
+  fieldTestImageCount?: number | null;
+
+  /** Admin: full-meter exact reading accuracy % (golden / eval). */
+  exactReadingAccuracyPct?: number | null;
+  /** Admin: % of sessions manually reviewed (operational metric). */
+  manualReviewRatePct?: number | null;
+
+  /** Admin: per-dial accuracy % — on-device app eval. */
+  appDial1AccuracyPct?: number | null;
+  appDial2AccuracyPct?: number | null;
+  appDial3AccuracyPct?: number | null;
+  appDial4AccuracyPct?: number | null;
+  /** Admin: per-dial accuracy % — simulator / laptop (distinct from portal auto UT if you need both). */
+  simDial1AccuracyPct?: number | null;
+  simDial2AccuracyPct?: number | null;
+  simDial3AccuracyPct?: number | null;
+  simDial4AccuracyPct?: number | null;
+
+  /** Admin: per-dial mean confidence % — app. */
+  appDial1ConfidencePct?: number | null;
+  appDial2ConfidencePct?: number | null;
+  appDial3ConfidencePct?: number | null;
+  appDial4ConfidencePct?: number | null;
+  /** Admin: per-dial mean confidence % — simulator. */
+  simDial1ConfidencePct?: number | null;
+  simDial2ConfidencePct?: number | null;
+  simDial3ConfidencePct?: number | null;
+  simDial4ConfidencePct?: number | null;
 }
 
 /** One row in the pipeline / model iteration registry (S3 JSON). */
