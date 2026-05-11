@@ -12,18 +12,17 @@ type Props = {
 };
 
 const W = 640;
-const H = 318;
+const H = 300;
 const padL = 52;
 const padR = 28;
 const padT = 8;
-const padB = 102;
+const padB = 96;
 const innerW = W - padL - padR;
 const innerH = H - padT - padB;
 
 const COL_CONF = '#3b82f6';
-const COL_MODEL = '#0d9488';
-const COL_BAR = 'color-mix(in srgb, var(--text-muted, #64748b) 35%, transparent)';
-/** Shared goal line for confidence + reading-accuracy trends */
+const COL_ACCURACY = '#0d9488';
+/** Shared goal line */
 const QUALITY_TARGET_PCT = 80;
 
 const DashboardImprovementChart: FC<Props> = ({
@@ -36,71 +35,24 @@ const DashboardImprovementChart: FC<Props> = ({
 
   const summary = useMemo(() => {
     let sessions = 0;
-    let images = 0;
     let confW = 0;
     let confSessions = 0;
-    let modelW = 0;
-    let modelSessions = 0;
-    let awaitR = 0;
-    let funnel = 0;
+    let accW = 0;
+    let accSessions = 0;
     for (const b of bins) {
       sessions += b.totalSessions;
-      images += b.totalImages;
       if (b.avgConfidencePct != null && b.confidenceSessions > 0) {
         confW += b.avgConfidencePct * b.confidenceSessions;
         confSessions += b.confidenceSessions;
       }
       if (b.modelVsCorrectionPct != null && b.modelVsCorrectionSessions > 0) {
-        modelW += b.modelVsCorrectionPct * b.modelVsCorrectionSessions;
-        modelSessions += b.modelVsCorrectionSessions;
+        accW += b.modelVsCorrectionPct * b.modelVsCorrectionSessions;
+        accSessions += b.modelVsCorrectionSessions;
       }
-      awaitR += b.awaitingReview;
-      funnel += b.inTrainingFunnel;
     }
     const confOverall = confSessions > 0 ? confW / confSessions : null;
-    const modelOverall = modelSessions > 0 ? modelW / modelSessions : null;
-    let blendSum = 0;
-    let blendN = 0;
-    if (confOverall != null) {
-      blendSum += confOverall;
-      blendN += 1;
-    }
-    if (modelOverall != null) {
-      blendSum += modelOverall;
-      blendN += 1;
-    }
-    const blendOverall = blendN > 0 ? blendSum / blendN : null;
-    return {
-      sessions,
-      images,
-      confOverall,
-      modelOverall,
-      blendOverall,
-      awaitR,
-      funnel,
-      modelSessions,
-      confSessions,
-    };
-  }, [bins]);
-
-  const maxImages = useMemo(() => Math.max(...bins.map((b) => b.totalImages), 1), [bins]);
-
-  /** Per-bin running maximum of each metric (left → right); never decreases. Not accuracy-based. */
-  const runningMaxByBin = useMemo(() => {
-    let mc: number | null = null;
-    let mm: number | null = null;
-    return bins.map((b) => {
-      if (b.totalSessions === 0) {
-        return { conf: mc, model: mm };
-      }
-      if (b.avgConfidencePct != null) {
-        mc = mc === null ? b.avgConfidencePct : Math.max(mc, b.avgConfidencePct);
-      }
-      if (b.modelVsCorrectionPct != null) {
-        mm = mm === null ? b.modelVsCorrectionPct : Math.max(mm, b.modelVsCorrectionPct);
-      }
-      return { conf: mc, model: mm };
-    });
+    const accuracyOverall = accSessions > 0 ? accW / accSessions : null;
+    return { sessions, confOverall, accuracyOverall, accSessions };
   }, [bins]);
 
   const xAt = (i: number, n: number) => {
@@ -123,23 +75,7 @@ const DashboardImprovementChart: FC<Props> = ({
   };
 
   const pathConf = linePath((b) => b.avgConfidencePct);
-  const pathModel = linePath((b) => b.modelVsCorrectionPct);
-
-  /** Running max underlay (non-decreasing); raw lines on top show real week-to-week movement. */
-  const linePathFromRunningMax = (which: 'conf' | 'model') => {
-    const pts: string[] = [];
-    for (let i = 0; i < bins.length; i++) {
-      const b = bins[i];
-      if (b.totalSessions === 0) continue;
-      const v = which === 'conf' ? runningMaxByBin[i]!.conf : runningMaxByBin[i]!.model;
-      if (v == null) continue;
-      pts.push(`${xAt(i, bins.length)},${yPct(v)}`);
-    }
-    return pts.length >= 2 ? `M ${pts.join(' L ')}` : '';
-  };
-
-  const pathConfMonotone = linePathFromRunningMax('conf');
-  const pathModelMonotone = linePathFromRunningMax('model');
+  const pathAccuracy = linePath((b) => b.modelVsCorrectionPct);
 
   if (loading) {
     return (
@@ -160,7 +96,7 @@ const DashboardImprovementChart: FC<Props> = ({
     );
   }
 
-  const barW = Math.min(28, innerW / Math.max(bins.length, 1) - 4);
+  const wHit = Math.max(24, Math.min(48, innerW / Math.max(bins.length, 1) - 2));
   const yTarget = yPct(QUALITY_TARGET_PCT);
 
   return (
@@ -179,41 +115,18 @@ const DashboardImprovementChart: FC<Props> = ({
           <span className="dashboard-improvement-summary-v">{summary.sessions.toLocaleString()}</span>
         </div>
         <div>
-          <span className="dashboard-improvement-summary-k">Images</span>
-          <span className="dashboard-improvement-summary-v">{summary.images.toLocaleString()}</span>
-        </div>
-        <div>
           <span className="dashboard-improvement-summary-k">Avg confidence</span>
           <span className="dashboard-improvement-summary-v">
             {summary.confOverall != null ? `${summary.confOverall.toFixed(1)}%` : '—'}
           </span>
         </div>
         <div>
-          <span className="dashboard-improvement-summary-k">Reading match</span>
+          <span className="dashboard-improvement-summary-k">Accuracy</span>
           <span
             className="dashboard-improvement-summary-v"
-            title={`${summary.modelSessions.toLocaleString()} sessions with model + correction digits`}
+            title={`Model vs correction digits · ${summary.accSessions.toLocaleString()} sessions`}
           >
-            {summary.modelOverall != null ? `${summary.modelOverall.toFixed(1)}%` : '—'}
-          </span>
-        </div>
-        <div>
-          <span className="dashboard-improvement-summary-k">Blend (window)</span>
-          <span
-            className="dashboard-improvement-summary-v"
-            title="Average of avg confidence and reading match when each is available"
-          >
-            {summary.blendOverall != null ? `${summary.blendOverall.toFixed(1)}%` : '—'}
-          </span>
-        </div>
-        <div>
-          <span className="dashboard-improvement-summary-k">Awaiting review</span>
-          <span className="dashboard-improvement-summary-v">{summary.awaitR.toLocaleString()}</span>
-        </div>
-        <div>
-          <span className="dashboard-improvement-summary-k">In training path</span>
-          <span className="dashboard-improvement-summary-v" title="Analyzed + labeled + in training dataset">
-            {summary.funnel.toLocaleString()}
+            {summary.accuracyOverall != null ? `${summary.accuracyOverall.toFixed(1)}%` : '—'}
           </span>
         </div>
       </div>
@@ -222,7 +135,7 @@ const DashboardImprovementChart: FC<Props> = ({
         className="dashboard-improvement-svg"
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label="Per app version: image volume, step confidence and reading match, with high-trace underlay"
+        aria-label="Confidence and accuracy by app version"
       >
         {[0, 25, 50, 75, 100].map((pct) => (
           <g key={pct}>
@@ -262,54 +175,6 @@ const DashboardImprovementChart: FC<Props> = ({
           {QUALITY_TARGET_PCT}% target
         </text>
 
-        {bins.map((b, i) => {
-          if (b.totalSessions === 0) return null;
-          const cx = xAt(i, bins.length);
-          const bh = (b.totalImages / maxImages) * (innerH * 0.35);
-          const y0 = padT + innerH;
-          const x0 = cx - barW / 2;
-          return (
-            <rect
-              key={`bar-${b.date}`}
-              x={x0}
-              y={y0 - bh}
-              width={barW}
-              height={Math.max(bh, 1)}
-              fill={COL_BAR}
-              rx={2}
-            >
-              <title>{`${b.barLabel ?? b.date}: ${b.totalImages} images · ${b.totalSessions} sessions`}</title>
-            </rect>
-          );
-        })}
-
-        {pathConfMonotone ? (
-          <path
-            d={pathConfMonotone}
-            fill="none"
-            stroke={COL_CONF}
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray="5 4"
-            opacity={0.42}
-            aria-hidden
-          />
-        ) : null}
-        {pathModelMonotone ? (
-          <path
-            d={pathModelMonotone}
-            fill="none"
-            stroke={COL_MODEL}
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray="5 4"
-            opacity={0.42}
-            aria-hidden
-          />
-        ) : null}
-
         {pathConf ? (
           <path
             d={pathConf}
@@ -320,11 +185,11 @@ const DashboardImprovementChart: FC<Props> = ({
             strokeLinejoin="round"
           />
         ) : null}
-        {pathModel ? (
+        {pathAccuracy ? (
           <path
-            d={pathModel}
+            d={pathAccuracy}
             fill="none"
-            stroke={COL_MODEL}
+            stroke={COL_ACCURACY}
             strokeWidth={2.2}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -334,18 +199,15 @@ const DashboardImprovementChart: FC<Props> = ({
         {bins.map((b, i) => {
           if (b.totalSessions === 0) return null;
           const cx = xAt(i, bins.length);
-          const wHit = Math.max(barW + 8, 22);
           const x0 = cx - wHit / 2;
-          const rmC = runningMaxByBin[i]?.conf;
-          const rmM = runningMaxByBin[i]?.model;
-          const tip = `${b.barLabel ?? b.date}: step conf ${b.avgConfidencePct?.toFixed(1) ?? '—'}% · step match ${b.modelVsCorrectionPct?.toFixed(1) ?? '—'}% · trace conf ${rmC != null ? `${rmC.toFixed(1)}%` : '—'} · trace match ${rmM != null ? `${rmM.toFixed(1)}%` : '—'}`;
+          const tip = `${b.barLabel ?? b.date}: confidence ${b.avgConfidencePct?.toFixed(1) ?? '—'}% · accuracy ${b.modelVsCorrectionPct?.toFixed(1) ?? '—'}%`;
           return (
             <rect
               key={`hit-${b.date}`}
               x={x0}
               y={padT}
               width={wHit}
-              height={innerH + 36}
+              height={innerH + 28}
               fill="transparent"
               className="dashboard-improvement-hit"
               onClick={() => onDrill(b.drillIso)}
@@ -389,30 +251,12 @@ const DashboardImprovementChart: FC<Props> = ({
 
       <ul className="dashboard-improvement-legend" aria-hidden>
         <li>
-          <span className="dashboard-improvement-legend-swatch" style={{ background: COL_BAR }} />
-          Images
-        </li>
-        <li title="Solid = this step’s average. Dashed underlay = running high from the first step (never goes down).">
           <span className="dashboard-improvement-legend-line" style={{ borderColor: COL_CONF }} />
-          Avg confidence
+          Confidence
         </li>
-        <li title="Running high of confidence (non-decreasing reference).">
-          <span
-            className="dashboard-improvement-legend-line dashboard-improvement-legend-line--dashed"
-            style={{ borderColor: COL_CONF, opacity: 0.55 }}
-          />
-          Confidence trace
-        </li>
-        <li title="Solid = this step’s match rate. Dashed underlay = running high from the first step.">
-          <span className="dashboard-improvement-legend-line" style={{ borderColor: COL_MODEL }} />
-          Reading match
-        </li>
-        <li title="Running high of reading match (non-decreasing reference).">
-          <span
-            className="dashboard-improvement-legend-line dashboard-improvement-legend-line--dashed"
-            style={{ borderColor: COL_MODEL, opacity: 0.55 }}
-          />
-          Match trace
+        <li>
+          <span className="dashboard-improvement-legend-line" style={{ borderColor: COL_ACCURACY }} />
+          Accuracy
         </li>
         <li>
           <span
