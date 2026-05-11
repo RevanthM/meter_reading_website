@@ -240,7 +240,10 @@ const ModelVersionAccuracyBars: FC<{
   /** Open all-readings list filtered to this metadata app_version (respects chart time window). */
   onBrowseVersion?: (appVersion: string) => void;
 }> = ({ versions, loading, onOpenModels, onBrowseVersion }) => {
-  const rows = useMemo(() => versions.slice(0, 10), [versions]);
+  const rows = useMemo(
+    () => versions.filter((v) => v.appVersion !== 'unknown').slice(0, 10),
+    [versions],
+  );
 
   return (
     <div className="chart-card chart-card--hero chart-card--model-bars">

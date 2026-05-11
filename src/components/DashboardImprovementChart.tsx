@@ -85,6 +85,24 @@ const DashboardImprovementChart: FC<Props> = ({
 
   const maxImages = useMemo(() => Math.max(...bins.map((b) => b.totalImages), 1), [bins]);
 
+  /** Per-bin running maximum of each metric (left → right); never decreases. Not accuracy-based. */
+  const runningMaxByBin = useMemo(() => {
+    let mc: number | null = null;
+    let mm: number | null = null;
+    return bins.map((b) => {
+      if (b.totalSessions === 0) {
+        return { conf: mc, model: mm };
+      }
+      if (b.avgConfidencePct != null) {
+        mc = mc === null ? b.avgConfidencePct : Math.max(mc, b.avgConfidencePct);
+      }
+      if (b.modelVsCorrectionPct != null) {
+        mm = mm === null ? b.modelVsCorrectionPct : Math.max(mm, b.modelVsCorrectionPct);
+      }
+      return { conf: mc, model: mm };
+    });
+  }, [bins]);
+
   const xAt = (i: number, n: number) => {
     if (n <= 1) return padL + innerW / 2;
     return padL + (i / (n - 1)) * innerW;
@@ -106,6 +124,22 @@ const DashboardImprovementChart: FC<Props> = ({
 
   const pathConf = linePath((b) => b.avgConfidencePct);
   const pathModel = linePath((b) => b.modelVsCorrectionPct);
+
+  /** Running max underlay (non-decreasing); raw lines on top show real week-to-week movement. */
+  const linePathFromRunningMax = (which: 'conf' | 'model') => {
+    const pts: string[] = [];
+    for (let i = 0; i < bins.length; i++) {
+      const b = bins[i];
+      if (b.totalSessions === 0) continue;
+      const v = which === 'conf' ? runningMaxByBin[i]!.conf : runningMaxByBin[i]!.model;
+      if (v == null) continue;
+      pts.push(`${xAt(i, bins.length)},${yPct(v)}`);
+    }
+    return pts.length >= 2 ? `M ${pts.join(' L ')}` : '';
+  };
+
+  const pathConfMonotone = linePathFromRunningMax('conf');
+  const pathModelMonotone = linePathFromRunningMax('model');
 
   if (loading) {
     return (
@@ -188,7 +222,7 @@ const DashboardImprovementChart: FC<Props> = ({
         className="dashboard-improvement-svg"
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label="Per app version: image volume, confidence and reading match"
+        aria-label="Per app version: image volume, step confidence and reading match, with high-trace underlay"
       >
         {[0, 25, 50, 75, 100].map((pct) => (
           <g key={pct}>
@@ -249,6 +283,33 @@ const DashboardImprovementChart: FC<Props> = ({
           );
         })}
 
+        {pathConfMonotone ? (
+          <path
+            d={pathConfMonotone}
+            fill="none"
+            stroke={COL_CONF}
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="5 4"
+            opacity={0.42}
+            aria-hidden
+          />
+        ) : null}
+        {pathModelMonotone ? (
+          <path
+            d={pathModelMonotone}
+            fill="none"
+            stroke={COL_MODEL}
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="5 4"
+            opacity={0.42}
+            aria-hidden
+          />
+        ) : null}
+
         {pathConf ? (
           <path
             d={pathConf}
@@ -275,7 +336,9 @@ const DashboardImprovementChart: FC<Props> = ({
           const cx = xAt(i, bins.length);
           const wHit = Math.max(barW + 8, 22);
           const x0 = cx - wHit / 2;
-          const tip = `${b.barLabel ?? b.date}: conf ${b.avgConfidencePct?.toFixed(1) ?? '—'}% · match ${b.modelVsCorrectionPct?.toFixed(1) ?? '—'}%`;
+          const rmC = runningMaxByBin[i]?.conf;
+          const rmM = runningMaxByBin[i]?.model;
+          const tip = `${b.barLabel ?? b.date}: step conf ${b.avgConfidencePct?.toFixed(1) ?? '—'}% · step match ${b.modelVsCorrectionPct?.toFixed(1) ?? '—'}% · trace conf ${rmC != null ? `${rmC.toFixed(1)}%` : '—'} · trace match ${rmM != null ? `${rmM.toFixed(1)}%` : '—'}`;
           return (
             <rect
               key={`hit-${b.date}`}
@@ -329,13 +392,27 @@ const DashboardImprovementChart: FC<Props> = ({
           <span className="dashboard-improvement-legend-swatch" style={{ background: COL_BAR }} />
           Images
         </li>
-        <li>
+        <li title="Solid = this step’s average. Dashed underlay = running high from the first step (never goes down).">
           <span className="dashboard-improvement-legend-line" style={{ borderColor: COL_CONF }} />
           Avg confidence
         </li>
-        <li>
+        <li title="Running high of confidence (non-decreasing reference).">
+          <span
+            className="dashboard-improvement-legend-line dashboard-improvement-legend-line--dashed"
+            style={{ borderColor: COL_CONF, opacity: 0.55 }}
+          />
+          Confidence trace
+        </li>
+        <li title="Solid = this step’s match rate. Dashed underlay = running high from the first step.">
           <span className="dashboard-improvement-legend-line" style={{ borderColor: COL_MODEL }} />
           Reading match
+        </li>
+        <li title="Running high of reading match (non-decreasing reference).">
+          <span
+            className="dashboard-improvement-legend-line dashboard-improvement-legend-line--dashed"
+            style={{ borderColor: COL_MODEL, opacity: 0.55 }}
+          />
+          Match trace
         </li>
         <li>
           <span

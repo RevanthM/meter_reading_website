@@ -139,50 +139,128 @@ function earliestUploadDay(readings: S3MeterReading[]): string {
   return min;
 }
 
+/** Median upload day (yyyy-mm-dd) — stable “when this version lived” vs one stray late first upload. */
+function medianUploadDay(readings: S3MeterReading[]): string {
+  const days = readings
+    .map((r) => (r.dateOfReading || '').split('T')[0])
+    .filter((d): d is string => Boolean(d))
+    .sort();
+  if (days.length === 0) return '';
+  const mid = Math.floor(days.length / 2);
+  return days.length % 2 === 1 ? days[mid]! : days[mid - 1]!;
+}
+
+/** Tie-break only (same calendar bucket): numeric segments from e.g. v4.11.59 — not used as primary time axis. */
+function semanticVersionSortKey(version: string): number[] {
+  if (version === 'unknown') return [];
+  const s = version.trim().replace(/^v/i, '');
+  const parts = s.split(/[.\-+]/);
+  const nums: number[] = [];
+  for (const p of parts) {
+    const m = p.match(/^\d+/);
+    if (m) nums.push(parseInt(m[0], 10));
+    else break;
+  }
+  return nums.length ? nums : [0];
+}
+
+function compareSemanticVersionStrings(a: string, b: string): number {
+  const ka = semanticVersionSortKey(a);
+  const kb = semanticVersionSortKey(b);
+  const len = Math.max(ka.length, kb.length);
+  for (let i = 0; i < len; i++) {
+    const da = ka[i] ?? 0;
+    const db = kb[i] ?? 0;
+    if (da !== db) return da - db;
+  }
+  return a.localeCompare(b, undefined, { numeric: true });
+}
+
+type VersionAggRow = {
+  appVersion: string;
+  list: S3MeterReading[];
+  medianDay: string;
+  firstDay: string;
+};
+
+function weekStartMondayIso(isoDay: string): string {
+  if (!isoDay) return '';
+  return mondayOfWeekContaining(isoDay);
+}
+
+/** When several builds land in the same ISO week, keep one row for the chart (not sorted by accuracy). */
+function pickRepresentativeForWeek(bucket: VersionAggRow[]): VersionAggRow {
+  const sorted = [...bucket].sort((a, b) => {
+    if (b.list.length !== a.list.length) return b.list.length - a.list.length;
+    const dayA = a.medianDay || a.firstDay;
+    const dayB = b.medianDay || b.firstDay;
+    if (dayB !== dayA) return dayB.localeCompare(dayA);
+    return compareSemanticVersionStrings(b.appVersion, a.appVersion);
+  });
+  return sorted[0]!;
+}
+
 /**
- * One bin per `app_version` (metadata). X-order: **ascending by first-seen upload date** (oldest left → newest
- * right), then `app_version` string. Caps how many versions appear; when over the cap, keeps the **most recent**
- * versions by first-seen date (still sorted oldest→newest among those).
+ * At most **one app version per ISO week** (Monday start): if several builds share the same week (by median upload
+ * day), we keep the one with the **most sessions**, then tie-break by later typical day / higher semver — never by
+ * accuracy. Sessions without `app_version` are omitted. Bins are sorted by time (`median` → `first`); undated
+ * bucket last. Then cap to `maxVersions` points (newest slice of the window).
  */
 export function buildImprovementStoryBinsByAppVersion(
   readings: S3MeterReading[],
   options?: { maxVersions?: number },
 ): ImprovementStoryBin[] {
   const maxV = options?.maxVersions ?? 16;
+
   const groups = new Map<string, S3MeterReading[]>();
   for (const r of readings) {
     const v = normalizeReadingAppVersion(r);
+    if (v === 'unknown') continue;
     if (!groups.has(v)) groups.set(v, []);
     groups.get(v)!.push(r);
   }
 
-  type Row = { appVersion: string; list: S3MeterReading[]; firstDay: string };
-  const rows: Row[] = [...groups.entries()].map(([appVersion, list]) => ({
+  const rows: VersionAggRow[] = [...groups.entries()].map(([appVersion, list]) => ({
     appVersion,
     list,
+    medianDay: medianUploadDay(list),
     firstDay: earliestUploadDay(list),
   }));
 
-  rows.sort((a, b) => {
-    if (a.firstDay && b.firstDay && a.firstDay !== b.firstDay) {
-      return a.firstDay.localeCompare(b.firstDay);
-    }
-    if (a.firstDay && !b.firstDay) return -1;
-    if (!a.firstDay && b.firstDay) return 1;
-    if (a.appVersion === 'unknown' && b.appVersion !== 'unknown') return 1;
-    if (a.appVersion !== 'unknown' && b.appVersion === 'unknown') return -1;
-    return a.appVersion.localeCompare(b.appVersion, undefined, { numeric: true });
+  const anchorDay = (row: VersionAggRow): string => row.medianDay || row.firstDay;
+
+  const byWeek = new Map<string, VersionAggRow[]>();
+  for (const row of rows) {
+    const d = anchorDay(row);
+    const wk = d ? weekStartMondayIso(d) : '__nodate__';
+    if (!byWeek.has(wk)) byWeek.set(wk, []);
+    byWeek.get(wk)!.push(row);
+  }
+
+  const condensed: VersionAggRow[] = [];
+  const datedWeekKeys = [...byWeek.keys()].filter((k) => k !== '__nodate__').sort((a, b) => a.localeCompare(b));
+
+  for (const wk of datedWeekKeys) {
+    condensed.push(pickRepresentativeForWeek(byWeek.get(wk)!));
+  }
+
+  if (byWeek.has('__nodate__')) {
+    condensed.push(pickRepresentativeForWeek(byWeek.get('__nodate__')!));
+  }
+
+  condensed.sort((a, b) => {
+    const da = anchorDay(a);
+    const db = anchorDay(b);
+    if (da && db && da !== db) return da.localeCompare(db);
+    if (da && !db) return -1;
+    if (!da && db) return 1;
+    return compareSemanticVersionStrings(a.appVersion, b.appVersion);
   });
 
-  const capped = rows.length <= maxV ? rows : rows.slice(-maxV);
+  const capped = condensed.length <= maxV ? condensed : condensed.slice(-maxV);
 
   return capped.map(({ appVersion, list }) =>
-    improvementBinFromSessions(
-      appVersion,
-      appVersion,
-      appVersion === 'unknown' ? 'unknown' : appVersion,
-      list,
-    ),
+    improvementBinFromSessions(appVersion, appVersion, appVersion, list),
   );
 }
 
