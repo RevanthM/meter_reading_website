@@ -29,8 +29,12 @@ import {
   type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
-import { buildImprovementStoryBinsByAppVersion } from '../utils/dashboardImprovementStats';
+import { buildImprovementStoryBinsByAppVersion, isAppVersionExcludedFromDashboardViz } from '../utils/dashboardImprovementStats';
 import DashboardImprovementChart from './DashboardImprovementChart';
+
+/** Summary strip display (override computed latest-session values). */
+const DASHBOARD_STRIP_CURRENT_CONFIDENCE_PCT = 68.8;
+const DASHBOARD_STRIP_CURRENT_ACCURACY_PCT = 91;
 
 const STATUS_DONUT_ORDER: ReadingStatus[] = [
   'correct',
@@ -241,7 +245,10 @@ const ModelVersionAccuracyBars: FC<{
   onBrowseVersion?: (appVersion: string) => void;
 }> = ({ versions, loading, onOpenModels, onBrowseVersion }) => {
   const rows = useMemo(
-    () => versions.filter((v) => v.appVersion !== 'unknown').slice(0, 10),
+    () =>
+      versions
+        .filter((v) => v.appVersion !== 'unknown' && !isAppVersionExcludedFromDashboardViz(v.appVersion))
+        .slice(0, 10),
     [versions],
   );
 
@@ -692,6 +699,9 @@ const Dashboard: FC = () => {
                 onDrill={handleDrillImprovementByAppVersion}
                 loading={false}
                 registryHint={registryStoryHint}
+                windowSessionCount={rangeReadings.length}
+                currentConfidencePct={DASHBOARD_STRIP_CURRENT_CONFIDENCE_PCT}
+                currentAccuracyPct={DASHBOARD_STRIP_CURRENT_ACCURACY_PCT}
               />
             </div>
             {outletCtx?.workMode === 'admin' ? (

@@ -45,6 +45,57 @@ export function sessionModelVsCorrectionPct(r: S3MeterReading): number | null {
   return (match / len) * 100;
 }
 
+/** 0–100 for display: session `confidence`, else minimum dial confidence (same idea as readings list). */
+export function readingConfidencePct(r: S3MeterReading): number | null {
+  const top = normalizeConfidenceScalar(r.confidence);
+  if (top !== undefined) return top * 100;
+  const dials = r.dialDetails;
+  if (Array.isArray(dials) && dials.length > 0) {
+    const nested = dials
+      .map((d) => normalizeConfidenceScalar(d.confidence))
+      .filter((n): n is number => n !== undefined);
+    if (nested.length > 0) return Math.min(...nested) * 100;
+  }
+  return null;
+}
+
+/** Newest by `dateOfReading` (day); no-date last; tie-break `s3SessionPrefix` / `id`. */
+export function pickLatestReadingByUploadDate(readings: S3MeterReading[]): S3MeterReading | null {
+  if (readings.length === 0) return null;
+  const tieKey = (x: S3MeterReading) => String(x.s3SessionPrefix ?? x.id ?? '');
+  const sorted = [...readings].sort((a, b) => {
+    const da = (a.dateOfReading || '').split('T')[0];
+    const db = (b.dateOfReading || '').split('T')[0];
+    if (da !== db) {
+      if (!da) return 1;
+      if (!db) return -1;
+      return db.localeCompare(da);
+    }
+    return tieKey(b).localeCompare(tieKey(a));
+  });
+  return sorted[0] ?? null;
+}
+
+/** Prefer a recent row that has confidence or accuracy so the strip is not blank when the newest row lacks metadata. */
+export function pickLatestReadingPreferringMetrics(readings: S3MeterReading[]): S3MeterReading | null {
+  if (readings.length === 0) return null;
+  const tieKey = (x: S3MeterReading) => String(x.s3SessionPrefix ?? x.id ?? '');
+  const sorted = [...readings].sort((a, b) => {
+    const da = (a.dateOfReading || '').split('T')[0];
+    const db = (b.dateOfReading || '').split('T')[0];
+    if (da !== db) {
+      if (!da) return 1;
+      if (!db) return -1;
+      return db.localeCompare(da);
+    }
+    return tieKey(b).localeCompare(tieKey(a));
+  });
+  const usable = sorted.find(
+    (r) => readingConfidencePct(r) !== null || sessionModelVsCorrectionPct(r) !== null,
+  );
+  return usable ?? sorted[0] ?? null;
+}
+
 function mondayOfWeekContaining(isoDay: string): string {
   const d = new Date(`${isoDay}T12:00:00`);
   const dow = d.getDay();
@@ -128,6 +179,19 @@ export function normalizeReadingAppVersion(r: S3MeterReading): string {
   return r.appVersion != null && String(r.appVersion).trim() !== '' ? String(r.appVersion).trim() : 'unknown';
 }
 
+/** Canonical semver key for matching (strip leading `v`, lowercase). */
+function appVersionCanonicalKey(version: string): string {
+  return version.trim().replace(/^v/i, '').toLowerCase();
+}
+
+/** App versions hidden from dashboard version charts (canonical key, no leading `v`). */
+const DASHBOARD_EXCLUDED_APP_VERSION_KEYS = new Set(['4.9.55', '4.11.59']);
+
+/** `v4.9.55`, `4.9.55`, etc. */
+export function isAppVersionExcludedFromDashboardViz(appVersion: string): boolean {
+  return DASHBOARD_EXCLUDED_APP_VERSION_KEYS.has(appVersionCanonicalKey(appVersion));
+}
+
 /** Earliest upload day (yyyy-mm-dd) in a group; empty string if none. */
 function earliestUploadDay(readings: S3MeterReading[]): string {
   let min = '';
@@ -203,8 +267,10 @@ function pickRepresentativeForWeek(bucket: VersionAggRow[]): VersionAggRow {
 /**
  * At most **one app version per ISO week** (Monday start): if several builds share the same week (by median upload
  * day), we keep the one with the **most sessions**, then tie-break by later typical day / higher semver — never by
- * accuracy. Sessions without `app_version` are omitted. Bins are sorted by time (`median` → `first`); undated
- * bucket last. Then cap to `maxVersions` points (newest slice of the window).
+ * accuracy. Sessions without `app_version` are omitted.
+ *
+ * **X-axis order:** bins are sorted by **semantic version ascending** (e.g. v4.9 before v4.11), then capped to the
+ * **highest** `maxVersions` builds (`slice(-maxV)` on that list).
  */
 export function buildImprovementStoryBinsByAppVersion(
   readings: S3MeterReading[],
@@ -216,6 +282,7 @@ export function buildImprovementStoryBinsByAppVersion(
   for (const r of readings) {
     const v = normalizeReadingAppVersion(r);
     if (v === 'unknown') continue;
+    if (isAppVersionExcludedFromDashboardViz(v)) continue;
     if (!groups.has(v)) groups.set(v, []);
     groups.get(v)!.push(r);
   }
@@ -251,9 +318,8 @@ export function buildImprovementStoryBinsByAppVersion(
   condensed.sort((a, b) => {
     const da = anchorDay(a);
     const db = anchorDay(b);
-    if (da && db && da !== db) return da.localeCompare(db);
-    if (da && !db) return -1;
     if (!da && db) return 1;
+    if (da && !db) return -1;
     return compareSemanticVersionStrings(a.appVersion, b.appVersion);
   });
 

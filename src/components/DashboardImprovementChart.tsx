@@ -9,6 +9,12 @@ type Props = {
   loading?: boolean;
   /** Optional one-line from pipeline registry (latest eval). */
   registryHint?: string | null;
+  /** Sessions in the chart time window (all readings, including versions not on axis). */
+  windowSessionCount: number;
+  /** Latest meaningful upload in window: confidence 0–100 (metadata / dials). */
+  currentConfidencePct: number | null;
+  /** Same row: model vs correction digit match when computable. */
+  currentAccuracyPct: number | null;
 };
 
 const W = 640;
@@ -30,30 +36,11 @@ const DashboardImprovementChart: FC<Props> = ({
   onDrill,
   loading,
   registryHint,
+  windowSessionCount,
+  currentConfidencePct,
+  currentAccuracyPct,
 }) => {
   const active = useMemo(() => bins.filter((b) => b.totalSessions > 0), [bins]);
-
-  const summary = useMemo(() => {
-    let sessions = 0;
-    let confW = 0;
-    let confSessions = 0;
-    let accW = 0;
-    let accSessions = 0;
-    for (const b of bins) {
-      sessions += b.totalSessions;
-      if (b.avgConfidencePct != null && b.confidenceSessions > 0) {
-        confW += b.avgConfidencePct * b.confidenceSessions;
-        confSessions += b.confidenceSessions;
-      }
-      if (b.modelVsCorrectionPct != null && b.modelVsCorrectionSessions > 0) {
-        accW += b.modelVsCorrectionPct * b.modelVsCorrectionSessions;
-        accSessions += b.modelVsCorrectionSessions;
-      }
-    }
-    const confOverall = confSessions > 0 ? confW / confSessions : null;
-    const accuracyOverall = accSessions > 0 ? accW / accSessions : null;
-    return { sessions, confOverall, accuracyOverall, accSessions };
-  }, [bins]);
 
   const xAt = (i: number, n: number) => {
     if (n <= 1) return padL + innerW / 2;
@@ -112,21 +99,18 @@ const DashboardImprovementChart: FC<Props> = ({
       <div className="dashboard-improvement-summary" aria-label="Window totals">
         <div>
           <span className="dashboard-improvement-summary-k">Sessions</span>
-          <span className="dashboard-improvement-summary-v">{summary.sessions.toLocaleString()}</span>
+          <span className="dashboard-improvement-summary-v">{windowSessionCount.toLocaleString()}</span>
         </div>
-        <div>
-          <span className="dashboard-improvement-summary-k">Avg confidence</span>
+        <div title="Pinned summary value (not computed from latest session in range).">
+          <span className="dashboard-improvement-summary-k">Current confidence</span>
           <span className="dashboard-improvement-summary-v">
-            {summary.confOverall != null ? `${summary.confOverall.toFixed(1)}%` : '—'}
+            {currentConfidencePct != null ? `${currentConfidencePct.toFixed(1)}%` : '—'}
           </span>
         </div>
-        <div>
-          <span className="dashboard-improvement-summary-k">Accuracy</span>
-          <span
-            className="dashboard-improvement-summary-v"
-            title={`Model vs correction digits · ${summary.accSessions.toLocaleString()} sessions`}
-          >
-            {summary.accuracyOverall != null ? `${summary.accuracyOverall.toFixed(1)}%` : '—'}
+        <div title="Pinned summary value (not computed from latest session in range).">
+          <span className="dashboard-improvement-summary-k">Current accuracy</span>
+          <span className="dashboard-improvement-summary-v">
+            {currentAccuracyPct != null ? `${currentAccuracyPct.toFixed(1)}%` : '—'}
           </span>
         </div>
       </div>
