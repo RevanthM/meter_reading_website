@@ -182,7 +182,12 @@ function fmtBBox(b: DialDetailRow['bounding_box'] | undefined): string {
   return `x ${f(b.x)} · y ${f(b.y)} · w ${f(b.w)} · h ${f(b.h)}`;
 }
 
-const DialPipelineModalBody: FC<{ row: DialDetailRow; modelReading: string }> = ({ row, modelReading }) => {
+const DialPipelineModalBody: FC<{
+  row: DialDetailRow;
+  modelReading: string;
+  /** 0-based index into `modelReading` for this dial crop (Dial 1 → 0). */
+  dialIndexZeroBased: number;
+}> = ({ row, modelReading, dialIndexZeroBased }) => {
   if (!dialRowHasExtendedPipeline(row)) {
     return (
       <div className="dial-pipeline-modal-empty">
@@ -248,7 +253,23 @@ const DialPipelineModalBody: FC<{ row: DialDetailRow; modelReading: string }> = 
         <h3 className="dial-pipeline-stage-card-title">Stage 4 — Full meter reading</h3>
         <dl className="dial-pipeline-kv">
           <dt>Model reading</dt>
-          <dd className="dial-pipeline-kv-highlight">{modelReading.trim() !== '' ? modelReading : '—'}</dd>
+          <dd className="dial-pipeline-kv-reading-row">
+            {modelReading.trim() === '' ? (
+              '—'
+            ) : (
+              Array.from(modelReading.trim()).map((ch, i) => {
+                const isThisDialDigit = i === dialIndexZeroBased && /\d/.test(ch);
+                return (
+                  <span
+                    key={`${i}-${ch}`}
+                    className={isThisDialDigit ? 'dial-pipeline-stage4-digit' : 'dial-pipeline-stage4-ch'}
+                  >
+                    {ch}
+                  </span>
+                );
+              })
+            )}
+          </dd>
         </dl>
       </section>
     </div>
@@ -463,6 +484,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
                       <DialPipelineModalBody
                         row={dialDetail}
                         modelReading={reading.meterValue != null ? String(reading.meterValue) : ''}
+                        dialIndexZeroBased={image.metadata.dialIndex ?? 0}
                       />
                     </div>
                   </div>

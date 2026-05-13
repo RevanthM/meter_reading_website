@@ -29,6 +29,7 @@ import {
   isDateRangePresetId,
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
+import { calendarDayKeyInPortalTz, PORTAL_DISPLAY_TIME_ZONE } from '../utils/readingDisplayDates';
 
 interface UploadEntry {
   id: string;
@@ -76,7 +77,7 @@ function matchesDatePreset(upload: UploadEntry, preset: DatePresetFilter): boole
   if (preset === 'all') return true;
   if (!isDateRangePresetId(preset)) return true;
   const { from, to } = getDateRangeFromPreset(preset);
-  const day = (upload.timestamp || '').split('T')[0];
+  const day = calendarDayKeyInPortalTz(upload.timestamp || '');
   return Boolean(day && day >= from && day <= to);
 }
 
@@ -203,7 +204,7 @@ const UploadsTable: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `uploads-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `uploads-${calendarDayKeyInPortalTz(new Date().toISOString())}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -461,7 +462,8 @@ const UploadsTable: React.FC = () => {
                     <td>
                       <span className="cell-with-icon">
                         <Calendar size={14} className="cell-icon" />
-                        {new Date(upload.timestamp).toLocaleString(undefined, {
+                        {new Date(upload.timestamp).toLocaleString('en-US', {
+                          timeZone: PORTAL_DISPLAY_TIME_ZONE,
                           month: 'short',
                           day: 'numeric',
                           year: 'numeric',

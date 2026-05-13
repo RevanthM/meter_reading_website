@@ -1,42 +1,34 @@
-/** Calendar quick ranges in the viewer's local timezone (YYYY-MM-DD inclusive). */
+/** Calendar quick ranges in Pacific time (YYYY-MM-DD inclusive). */
+
+import { addPortalCalendarDays, calendarDayKeyInPortalTz } from './readingDisplayDates';
 
 export type DateRangePresetId = 'today' | 'yesterday' | 'last7' | 'last30';
 
+/** Pacific calendar yyyy-mm-dd for an instant. */
 export function localYmd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return calendarDayKeyInPortalTz(d.toISOString());
 }
 
 export function isDateRangePresetId(s: string): s is DateRangePresetId {
   return s === 'today' || s === 'yesterday' || s === 'last7' || s === 'last30';
 }
 
-/** Inclusive [from, to] using local calendar days. */
+/** Inclusive [from, to] using Pacific calendar days. */
 export function getDateRangeFromPreset(preset: DateRangePresetId): { from: string; to: string } {
-  const now = new Date();
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayYmd = localYmd(startToday);
+  const todayYmd = calendarDayKeyInPortalTz(new Date().toISOString());
 
   if (preset === 'today') return { from: todayYmd, to: todayYmd };
 
   if (preset === 'yesterday') {
-    const y = new Date(startToday);
-    y.setDate(y.getDate() - 1);
-    const ymd = localYmd(y);
+    const ymd = addPortalCalendarDays(todayYmd, -1);
     return { from: ymd, to: ymd };
   }
 
   if (preset === 'last7') {
-    const from = new Date(startToday);
-    from.setDate(from.getDate() - 6);
-    return { from: localYmd(from), to: todayYmd };
+    return { from: addPortalCalendarDays(todayYmd, -6), to: todayYmd };
   }
 
-  const from = new Date(startToday);
-  from.setDate(from.getDate() - 29);
-  return { from: localYmd(from), to: todayYmd };
+  return { from: addPortalCalendarDays(todayYmd, -29), to: todayYmd };
 }
 
 export function formatPresetLabel(preset: DateRangePresetId): string {

@@ -30,6 +30,11 @@ import {
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { buildImprovementStoryBinsByAppVersion, isAppVersionExcludedFromDashboardViz } from '../utils/dashboardImprovementStats';
+import {
+  calendarDayKeyInPortalTz,
+  formatPortalWeekdayMedium,
+  portalDayKeysRollingWindow,
+} from '../utils/readingDisplayDates';
 import DashboardImprovementChart from './DashboardImprovementChart';
 
 /** Summary strip display (override computed latest-session values). */
@@ -349,15 +354,9 @@ const CHART_RANGE_LABELS: Record<ChartRangeId, string> = {
 function filterReadingsByChartRange(readings: S3MeterReading[], rangeId: ChartRangeId): S3MeterReading[] {
   if (rangeId === 'all') return readings;
   const n = CHART_RANGE_DAY_COUNT[rangeId];
-  const now = new Date();
-  const daySet = new Set<string>();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    daySet.add(d.toISOString().split('T')[0]);
-  }
+  const daySet = new Set(portalDayKeysRollingWindow(n));
   return readings.filter((r) => {
-    const day = (r.dateOfReading || '').split('T')[0];
+    const day = calendarDayKeyInPortalTz(r.dateOfReading || '');
     return Boolean(day && daySet.has(day));
   });
 }
@@ -366,13 +365,7 @@ function filterReadingsByChartRange(readings: S3MeterReading[], rangeId: ChartRa
 function getChartRangeSearchSuffix(rangeId: ChartRangeId): string {
   if (rangeId === 'all') return '';
   const n = CHART_RANGE_DAY_COUNT[rangeId];
-  const now = new Date();
-  const days: string[] = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    days.push(d.toISOString().split('T')[0]);
-  }
+  const days = portalDayKeysRollingWindow(n);
   const from = days[0];
   const to = days[days.length - 1];
   return `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
@@ -474,17 +467,12 @@ const Dashboard: FC = () => {
     };
   }, []);
 
-  const todayDrillIso = new Date().toISOString().split('T')[0];
-  const todayHintDisplay = new Date(`${todayDrillIso}T12:00:00`).toLocaleDateString(undefined, {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  const todayDrillIso = calendarDayKeyInPortalTz(new Date().toISOString());
+  const todayHintDisplay = formatPortalWeekdayMedium(new Date().toISOString());
 
   const todayUploadTotal = useMemo(() => {
-    const key = new Date().toISOString().split('T')[0];
-    return filteredReadings.filter((r) => (r.dateOfReading || '').split('T')[0] === key).length;
+    const key = calendarDayKeyInPortalTz(new Date().toISOString());
+    return filteredReadings.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === key).length;
   }, [filteredReadings]);
 
   const incorrectQueuesTotal = useMemo(

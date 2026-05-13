@@ -1,5 +1,11 @@
 import type { S3MeterReading } from '../services/api';
 import type { ReadingStatus } from '../types';
+import {
+  addPortalCalendarDays,
+  calendarDayKeyInPortalTz,
+  PORTAL_DISPLAY_TIME_ZONE,
+  utcMillisForZonedPortalMidnight,
+} from './readingDisplayDates';
 
 /** Sessions past initial incorrect — reviewer / labeler / training path. */
 const TRAINING_FUNNEL_STATUSES: ReadingStatus[] = [
@@ -64,8 +70,8 @@ export function pickLatestReadingByUploadDate(readings: S3MeterReading[]): S3Met
   if (readings.length === 0) return null;
   const tieKey = (x: S3MeterReading) => String(x.s3SessionPrefix ?? x.id ?? '');
   const sorted = [...readings].sort((a, b) => {
-    const da = (a.dateOfReading || '').split('T')[0];
-    const db = (b.dateOfReading || '').split('T')[0];
+    const da = calendarDayKeyInPortalTz(a.dateOfReading || '');
+    const db = calendarDayKeyInPortalTz(b.dateOfReading || '');
     if (da !== db) {
       if (!da) return 1;
       if (!db) return -1;
@@ -81,8 +87,8 @@ export function pickLatestReadingPreferringMetrics(readings: S3MeterReading[]): 
   if (readings.length === 0) return null;
   const tieKey = (x: S3MeterReading) => String(x.s3SessionPrefix ?? x.id ?? '');
   const sorted = [...readings].sort((a, b) => {
-    const da = (a.dateOfReading || '').split('T')[0];
-    const db = (b.dateOfReading || '').split('T')[0];
+    const da = calendarDayKeyInPortalTz(a.dateOfReading || '');
+    const db = calendarDayKeyInPortalTz(b.dateOfReading || '');
     if (da !== db) {
       if (!da) return 1;
       if (!db) return -1;
@@ -96,16 +102,24 @@ export function pickLatestReadingPreferringMetrics(readings: S3MeterReading[]): 
   return usable ?? sorted[0] ?? null;
 }
 
-function mondayOfWeekContaining(isoDay: string): string {
-  const d = new Date(`${isoDay}T12:00:00`);
-  const dow = d.getDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + offset);
-  return d.toISOString().split('T')[0];
+function mondayOfWeekContaining(portalYmd: string): string {
+  if (!portalYmd || !/^\d{4}-\d{2}-\d{2}$/.test(portalYmd)) return '';
+  let ymd = portalYmd;
+  for (let guard = 0; guard < 8; guard += 1) {
+    const ms = utcMillisForZonedPortalMidnight(ymd);
+    const probe = ms != null ? new Date(ms + 2 * 60 * 60 * 1000) : new Date(`${ymd}T12:00:00Z`);
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: PORTAL_DISPLAY_TIME_ZONE,
+      weekday: 'short',
+    }).format(probe);
+    if (weekday === 'Mon') return ymd;
+    ymd = addPortalCalendarDays(ymd, -1);
+  }
+  return portalYmd;
 }
 
 export function binKeyForReading(dateOfReading: string | undefined, bucket: 'day' | 'week'): string {
-  const day = (dateOfReading || '').split('T')[0];
+  const day = calendarDayKeyInPortalTz(dateOfReading || '');
   if (!day) return '';
   return bucket === 'week' ? mondayOfWeekContaining(day) : day;
 }
@@ -196,7 +210,7 @@ export function isAppVersionExcludedFromDashboardViz(appVersion: string): boolea
 function earliestUploadDay(readings: S3MeterReading[]): string {
   let min = '';
   for (const r of readings) {
-    const d = (r.dateOfReading || '').split('T')[0];
+    const d = calendarDayKeyInPortalTz(r.dateOfReading || '');
     if (!d) continue;
     if (!min || d < min) min = d;
   }
@@ -206,7 +220,7 @@ function earliestUploadDay(readings: S3MeterReading[]): string {
 /** Median upload day (yyyy-mm-dd) — stable “when this version lived” vs one stray late first upload. */
 function medianUploadDay(readings: S3MeterReading[]): string {
   const days = readings
-    .map((r) => (r.dateOfReading || '').split('T')[0])
+    .map((r) => calendarDayKeyInPortalTz(r.dateOfReading || ''))
     .filter((d): d is string => Boolean(d))
     .sort();
   if (days.length === 0) return '';

@@ -142,8 +142,10 @@ const UsageSummary: React.FC = () => {
             <code>metadata.json</code> per folder). Each <strong>session</strong> is one upload; <strong>images</strong>{' '}
             is the number of image files in that folder. <strong>Users</strong> come from{' '}
             <code>user_name</code> / <code>user_email</code> in metadata when the app fills them in — otherwise they
-            appear as &quot;Unknown&quot;. Days use <strong>UTC</strong> from the session timestamp.             When you move to
-            DynamoDB, you can point this view at pre-aggregated rows instead of scanning.
+            appear as &quot;Unknown&quot;. In the <strong>readings list</strong> and <strong>dashboard</strong>, each
+            session is grouped by <strong>Pacific</strong> calendar day (<code>America/Los_Angeles</code>) from its
+            timestamp. The tables below still use the server&apos;s UTC day buckets until aggregation is moved. When
+            you move to DynamoDB, you can point this view at pre-aggregated rows instead of scanning.
           </p>
         </section>
 

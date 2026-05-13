@@ -2855,11 +2855,28 @@ body {
   line-height: 1.4;
 }
 
-.dial-pipeline-kv-highlight {
-  font-weight: 700 !important;
-  font-size: clamp(1.15rem, 2.5vw, 1.45rem) !important;
-  letter-spacing: 0.06em;
-  color: var(--accent-amber, #d97706) !important;
+.dial-pipeline-kv-reading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.06em;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.dial-pipeline-stage4-ch {
+  font-size: 4.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+
+.dial-pipeline-stage4-digit {
+  font-size: 4.25rem;
+  font-weight: 900;
+  color: #dc2626;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 /* Lightbox */

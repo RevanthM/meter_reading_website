@@ -39,7 +39,7 @@ import {
   isDateRangePresetId,
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
-import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import { calendarDayKeyInPortalTz, formatReadingShortDate } from '../utils/readingDisplayDates';
 
 /** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
@@ -265,17 +265,17 @@ const ReadingsList: FC = () => {
     const base = getReadingsByStatus(filterKey);
     let filtered = base;
     if (ISO_DAY.test(dateFilter)) {
-      filtered = base.filter((r) => (r.dateOfReading || '').split('T')[0] === dateFilter);
+      filtered = base.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === dateFilter);
     } else if (ISO_DAY.test(fromFilter) && ISO_DAY.test(toFilter)) {
       const lo = fromFilter <= toFilter ? fromFilter : toFilter;
       const hi = fromFilter <= toFilter ? toFilter : fromFilter;
       filtered = base.filter((r) => {
-        const day = (r.dateOfReading || '').split('T')[0];
+        const day = calendarDayKeyInPortalTz(r.dateOfReading || '');
         return Boolean(day && day >= lo && day <= hi);
       });
     } else if (presetWindow) {
       filtered = base.filter((r) => {
-        const day = (r.dateOfReading || '').split('T')[0];
+        const day = calendarDayKeyInPortalTz(r.dateOfReading || '');
         return Boolean(day && day >= presetWindow.from && day <= presetWindow.to);
       });
     }
