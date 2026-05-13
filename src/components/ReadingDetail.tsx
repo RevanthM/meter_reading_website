@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type FC } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import { useAuth } from '../context/AuthContext';
@@ -11,7 +12,7 @@ import {
   labelerPipelineStatusLabels,
   isIncorrectPipelineStatus,
 } from '../types';
-import type { S3MeterReading } from '../services/api';
+import type { DialDetailFromMetadata, DialPoint, S3MeterReading } from '../services/api';
 import {
   ArrowLeft,
   MapPin,
@@ -91,7 +92,7 @@ function partitionMeterImages(images: MeterImage[]): {
   return { fullMeter, dialImages, otherImages };
 }
 
-type DialDetailRow = NonNullable<S3MeterReading['dialDetails']>[number];
+type DialDetailRow = DialDetailFromMetadata;
 
 /** When `metadata.json` has no `dial_details`, still give reviewers one row per dial crop (digits from model reading). */
 function dialRowsFromDialCropImages(
@@ -121,12 +122,7 @@ function dialRowsFromDialCropImages(
 /** Baseline dial editor rows from the server session (explicit dial_details or inferred from dial images). */
 function baselineDialRowsForReading(reading: S3MeterReading): DialDetailRow[] {
   if (reading.dialDetails && reading.dialDetails.length > 0) {
-    return reading.dialDetails.map((d) => ({
-      dial: d.dial,
-      prediction: d.prediction,
-      direction: d.direction,
-      confidence: d.confidence,
-    }));
+    return reading.dialDetails.map((d) => ({ ...d }));
   }
   return dialRowsFromDialCropImages(reading.images, reading.meterValue);
 }
@@ -143,6 +139,121 @@ function concatDialDigitsFromRows(rows: DialDetailRow[]): string {
     })
     .join('');
 }
+
+function dialRowHasExtendedPipeline(row: DialDetailRow | undefined): boolean {
+  if (!row || typeof row !== 'object') return false;
+  if (row.bounding_box != null && typeof row.bounding_box === 'object') return true;
+  if (row.stage_1 != null && typeof row.stage_1 === 'object') return true;
+  if (row.stage_2 != null && typeof row.stage_2 === 'object') return true;
+  if (row.stage_3 != null && typeof row.stage_3 === 'object') return true;
+  return false;
+}
+
+function fmtDialPt(p: DialPoint | undefined): string {
+  if (!p || (p.x == null && p.y == null)) return '—';
+  const x = p.x != null && Number.isFinite(p.x) ? String(Math.round(p.x * 10) / 10) : '—';
+  const y = p.y != null && Number.isFinite(p.y) ? String(Math.round(p.y * 10) / 10) : '—';
+  return `${x}, ${y}`;
+}
+
+/** Confidence shown as %; values in metadata are usually 0–1. */
+function fmtConf01(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const pct = n > 1 ? n : n * 100;
+  return `${Math.round(pct * 10) / 10}%`;
+}
+
+function fmtDeg(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${(Math.round(n * 100) / 100).toFixed(2)}°`;
+}
+
+function fmtVec(v: { dx?: number; dy?: number } | undefined): string {
+  if (!v) return '—';
+  const dx = v.dx != null && Number.isFinite(v.dx) ? (Math.round(v.dx * 10) / 10).toFixed(1) : '—';
+  const dy = v.dy != null && Number.isFinite(v.dy) ? (Math.round(v.dy * 10) / 10).toFixed(1) : '—';
+  return `(${dx}, ${dy})`;
+}
+
+function fmtBBox(b: DialDetailRow['bounding_box'] | undefined): string {
+  if (!b) return '—';
+  const f = (x: number | undefined) =>
+    x != null && Number.isFinite(x) ? (Math.round(x * 1000) / 1000).toFixed(3) : '—';
+  return `x ${f(b.x)} · y ${f(b.y)} · w ${f(b.w)} · h ${f(b.h)}`;
+}
+
+const DialPipelineModalBody: FC<{ row: DialDetailRow; modelReading: string }> = ({ row, modelReading }) => {
+  if (!dialRowHasExtendedPipeline(row)) {
+    return (
+      <div className="dial-pipeline-modal-empty">
+        <p>No details found</p>
+      </div>
+    );
+  }
+
+  const s1 = row.stage_1;
+  const s2 = row.stage_2;
+  const s3 = row.stage_3;
+  const bbox = s1?.bounding_box ?? s2?.bounding_box ?? row.bounding_box;
+
+  return (
+    <div className="dial-pipeline-modal-stages">
+      <section className="dial-pipeline-stage-card" aria-label="Stage 1">
+        <h3 className="dial-pipeline-stage-card-title">Stage 1 — Detection</h3>
+        <dl className="dial-pipeline-kv">
+          <dt>Bounding box</dt>
+          <dd>{fmtBBox(bbox)}</dd>
+          <dt>Detection confidence</dt>
+          <dd>{fmtConf01(s1?.detection_confidence)}</dd>
+        </dl>
+      </section>
+
+      <section className="dial-pipeline-stage-card" aria-label="Stage 2">
+        <h3 className="dial-pipeline-stage-card-title">Stage 2 — Keypoints</h3>
+        <dl className="dial-pipeline-kv">
+          <dt>Dial center</dt>
+          <dd>{fmtDialPt(s2?.dial_center)}</dd>
+          <dt>Needle tip</dt>
+          <dd>{fmtDialPt(s2?.needle_tip)}</dd>
+          <dt>Zero mark</dt>
+          <dd>{fmtDialPt(s2?.zero_mark)}</dd>
+          <dt>Keypoint confidence</dt>
+          <dd>{fmtConf01(s2?.keypoint_confidence)}</dd>
+        </dl>
+      </section>
+
+      <section className="dial-pipeline-stage-card" aria-label="Stage 3">
+        <h3 className="dial-pipeline-stage-card-title">Stage 3 — Angles & vectors</h3>
+        <dl className="dial-pipeline-kv">
+          <dt>Vector center → tip</dt>
+          <dd>{fmtVec(s3?.vector_center_to_tip)}</dd>
+          <dt>Vector center → zero</dt>
+          <dd>{fmtVec(s3?.vector_center_to_zero)}</dd>
+          <dt>Angular offset</dt>
+          <dd>{fmtDeg(s3?.angular_offset_deg)}</dd>
+          <dt>Normalized dial angle</dt>
+          <dd>{fmtDeg(s3?.normalized_dial_angle_deg)}</dd>
+          <dt>Angle to digit</dt>
+          <dd>
+            {s3?.angle_to_digit != null && Number.isFinite(s3.angle_to_digit)
+              ? (Math.round(s3.angle_to_digit * 1000) / 1000).toFixed(3)
+              : '—'}
+          </dd>
+          <dt>Stage 3 digit</dt>
+          <dd>{s3?.digit != null && Number.isFinite(s3.digit) ? String(s3.digit) : '—'}</dd>
+        </dl>
+      </section>
+
+      <section className="dial-pipeline-stage-card" aria-label="Stage 4">
+        <h3 className="dial-pipeline-stage-card-title">Stage 4 — Full meter reading</h3>
+        <dl className="dial-pipeline-kv">
+          <dt>Model reading</dt>
+          <dd className="dial-pipeline-kv-highlight">{modelReading.trim() !== '' ? modelReading : '—'}</dd>
+        </dl>
+      </section>
+    </div>
+  );
+};
 
 type StripDialEditProps = {
   onDigitChange: (digit: number) => void;
@@ -182,6 +293,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   stripReviewerEdit,
 }) => {
   const [stripDialEditorOpen, setStripDialEditorOpen] = useState(false);
+  const [dialPipelineModalOpen, setDialPipelineModalOpen] = useState(false);
 
   const dialDetail =
     image.metadata.dialIndex !== undefined && reading.dialDetails
@@ -196,6 +308,17 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
 
   const isSelected = selectedImage === image.id;
   const stripEdit = strip && stripReviewerEdit ? stripReviewerEdit : undefined;
+
+  const dialTitleId = `dial-pipeline-modal-title-${image.id}`;
+
+  useEffect(() => {
+    if (!dialPipelineModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDialPipelineModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dialPipelineModalOpen]);
 
   return (
     <div
@@ -294,6 +417,59 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
               {(dialDetail.confidence * 100).toFixed(0)}% confidence
             </div>
           ) : null}
+          <button
+            type="button"
+            className="dial-pipeline-more-btn"
+            aria-haspopup="dialog"
+            aria-expanded={dialPipelineModalOpen}
+            aria-controls={dialPipelineModalOpen ? `dial-pipeline-dialog-${image.id}` : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDialPipelineModalOpen(true);
+            }}
+          >
+            More details
+          </button>
+          {dialPipelineModalOpen
+            ? createPortal(
+                <div
+                  className="dial-pipeline-modal-overlay"
+                  role="presentation"
+                  onClick={() => setDialPipelineModalOpen(false)}
+                >
+                  <div
+                    className="dial-pipeline-modal"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={dialTitleId}
+                    id={`dial-pipeline-dialog-${image.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="dial-pipeline-modal-head">
+                      <div className="dial-pipeline-modal-head-text">
+                        <h2 id={dialTitleId}>Dial {(image.metadata.dialIndex ?? 0) + 1}</h2>
+                        <p className="dial-pipeline-modal-sub">Pipeline details</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="dial-pipeline-modal-close"
+                        onClick={() => setDialPipelineModalOpen(false)}
+                        aria-label="Close"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="dial-pipeline-modal-body">
+                      <DialPipelineModalBody
+                        row={dialDetail}
+                        modelReading={reading.meterValue != null ? String(reading.meterValue) : ''}
+                      />
+                    </div>
+                  </div>
+                </div>,
+                document.body,
+              )
+            : null}
         </div>
       )}
     </div>
@@ -569,12 +745,14 @@ const ReadingDetail: React.FC = () => {
           }
           const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
           if (localDialRows.length > 0) {
-            patch.dial_details = localDialRows.map((row) => ({
-              dial: Math.round(Number(row.dial)) || 1,
-              prediction: Number(row.prediction),
-              direction: String(row.direction || 'clockwise').slice(0, 40),
-              confidence: Math.min(1, Math.max(0, Number(row.confidence))),
-            }));
+            patch.dial_details = localDialRows.map((row) => {
+              const dial = Math.round(Number(row.dial)) || 1;
+              const prediction = Number(row.prediction);
+              const direction = String(row.direction || 'clockwise').slice(0, 40);
+              const confidence = Math.min(1, Math.max(0, Number(row.confidence)));
+              const { dial: _d, prediction: _p, direction: _dir, confidence: _c, ...rest } = row;
+              return { ...rest, dial, prediction, direction, confidence };
+            });
           } else if (hadDialDetails) {
             patch.dial_details = [];
           }

@@ -21,6 +21,45 @@ function parseJsonBody<T>(text: string, httpStatus: number): T {
   }
 }
 
+/** Normalized bbox in 0–1 space (metadata `dial_details`). */
+export type DialBoundingBox = { x?: number; y?: number; w?: number; h?: number };
+
+export type DialStage1Info = {
+  bounding_box?: DialBoundingBox;
+  detection_confidence?: number;
+};
+
+export type DialPoint = { x?: number; y?: number };
+
+export type DialStage2Info = {
+  bounding_box?: DialBoundingBox;
+  dial_center?: DialPoint;
+  needle_tip?: DialPoint;
+  zero_mark?: DialPoint;
+  keypoint_confidence?: number;
+};
+
+export type DialStage3Info = {
+  vector_center_to_tip?: { dx?: number; dy?: number };
+  vector_center_to_zero?: { dx?: number; dy?: number };
+  angular_offset_deg?: number;
+  normalized_dial_angle_deg?: number;
+  angle_to_digit?: number;
+  digit?: number;
+};
+
+/** One row of `metadata.json` `dial_details` (core fields + optional pipeline stages). */
+export type DialDetailFromMetadata = {
+  dial: number;
+  prediction: number;
+  direction: string;
+  confidence: number;
+  bounding_box?: DialBoundingBox;
+  stage_1?: DialStage1Info;
+  stage_2?: DialStage2Info;
+  stage_3?: DialStage3Info;
+};
+
 export interface S3MeterReading extends MeterReading {
   /** Exact S3 session prefix (…/sessionId/) for server-side moves. */
   s3SessionPrefix?: string;
@@ -29,12 +68,8 @@ export interface S3MeterReading extends MeterReading {
   confidence?: number;
   processingTimeMs?: number;
   dialCount?: number;
-  dialDetails?: Array<{
-    dial: number;
-    prediction: number;
-    direction: string;
-    confidence: number;
-  }>;
+  /** Per-dial model diagnostics; optional nested stages from `metadata.json` (newer captures). */
+  dialDetails?: DialDetailFromMetadata[];
   bucket?: string;
   /** App work-type code from metadata (e.g. METR) or portal filter code. */
   workType?: string;
@@ -389,12 +424,7 @@ export type SessionMetadataPatch = {
   ml_prediction?: string;
   ml_raw_prediction?: string | null;
   dial_count?: number;
-  dial_details?: Array<{
-    dial: number;
-    prediction: number;
-    direction: string;
-    confidence: number;
-  }>;
+  dial_details?: DialDetailFromMetadata[];
   is_correct?: boolean;
   condition_code?: string | null;
   portal_review_notes?: string;

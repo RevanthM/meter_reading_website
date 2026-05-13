@@ -2684,6 +2684,184 @@ body {
   margin-top: var(--spacing-sm);
 }
 
+.dial-pipeline-more-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: var(--spacing-sm);
+  padding: 0.4rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-blue, #3b82f6);
+  background: var(--bg-secondary, #f8fafc);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 6px);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.dial-pipeline-more-btn:hover {
+  background: var(--bg-hover, #f1f5f9);
+  border-color: var(--accent-blue, #3b82f6);
+}
+
+/* Dial pipeline — modal (above session “more” modal z-index) */
+.dial-pipeline-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(var(--spacing-sm), 2vh) max(var(--spacing-sm), 2vw);
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.15s ease;
+}
+
+.dial-pipeline-modal {
+  width: min(96vw, 1200px);
+  max-width: 100%;
+  max-height: min(92vh, 960px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.dial-pipeline-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  background: linear-gradient(180deg, var(--bg-secondary, #f8fafc) 0%, var(--bg-primary) 100%);
+}
+
+.dial-pipeline-modal-head-text h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.5vw, 1.5rem);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dial-pipeline-modal-sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.dial-pipeline-modal-close {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dial-pipeline-modal-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.dial-pipeline-modal-body {
+  padding: var(--spacing-xl);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.dial-pipeline-modal-empty {
+  text-align: center;
+  padding: clamp(2rem, 8vh, 4rem) var(--spacing-md);
+  color: var(--text-muted);
+}
+
+.dial-pipeline-modal-empty p {
+  margin: 0;
+  font-size: clamp(1rem, 2vw, 1.15rem);
+}
+
+.dial-pipeline-modal-stages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+@media (min-width: 880px) {
+  .dial-pipeline-modal-stages {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+    align-items: start;
+  }
+
+  .dial-pipeline-stage-card:last-of-type {
+    grid-column: 1 / -1;
+  }
+}
+
+.dial-pipeline-stage-card {
+  margin: 0;
+  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, #f8fafc);
+}
+
+.dial-pipeline-stage-card-title {
+  margin: 0 0 var(--spacing-md);
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.dial-pipeline-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 38%) minmax(0, 62%);
+  gap: 0.55rem 1rem;
+  align-items: baseline;
+}
+
+.dial-pipeline-kv dt {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.dial-pipeline-kv dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.dial-pipeline-kv-highlight {
+  font-weight: 700 !important;
+  font-size: clamp(1.15rem, 2.5vw, 1.45rem) !important;
+  letter-spacing: 0.06em;
+  color: var(--accent-amber, #d97706) !important;
+}
+
 /* Lightbox */
 .lightbox {
   position: fixed;
