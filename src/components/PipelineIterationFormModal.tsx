@@ -4,6 +4,11 @@ import type { WorkType } from '../types';
 import type { DataSource } from '../context/ReadingsContext';
 import type { S3MeterReading, PipelineIterationRecord, PipelineIterationManualMetrics } from '../services/api';
 import {
+  PIPELINE_ITERATION_PRIMARY_STATUSES,
+  PIPELINE_ITERATION_SUB_STATUSES,
+  normalizePipelineIterationPrimaryStatus,
+} from '../constants/pipelineIterationRegistry';
+import {
   computePortalStatsForAppVersion,
   uniqueAppVersionsFromReadings,
 } from '../utils/pipelineIterationStats';
@@ -159,7 +164,11 @@ const PipelineIterationFormModal: FC<Props> = ({
       setErr('Start date is required.');
       return;
     }
-    onSave(row);
+    const normalized = {
+      ...row,
+      currentStatus: normalizePipelineIterationPrimaryStatus(row.currentStatus),
+    };
+    onSave(normalized);
     onClose();
   };
 
@@ -284,7 +293,38 @@ const PipelineIterationFormModal: FC<Props> = ({
                 />
               </label>
               <label>
-                Current status <input value={row.currentStatus} onChange={(e) => setRow({ ...row, currentStatus: e.target.value })} />
+                Current status{' '}
+                <input
+                  list="pipeline-primary-status-options"
+                  value={row.currentStatus}
+                  onChange={(e) => setRow({ ...row, currentStatus: e.target.value })}
+                  onBlur={() =>
+                    setRow((r) => ({
+                      ...r,
+                      currentStatus: normalizePipelineIterationPrimaryStatus(r.currentStatus),
+                    }))
+                  }
+                  placeholder="e.g. In Process"
+                />
+                <datalist id="pipeline-primary-status-options">
+                  {PIPELINE_ITERATION_PRIMARY_STATUSES.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </label>
+              <label>
+                Sub-status (optional){' '}
+                <input
+                  list="pipeline-sub-status-options"
+                  value={row.subStatus ?? ''}
+                  onChange={(e) => setRow({ ...row, subStatus: e.target.value })}
+                  placeholder="e.g. In Training"
+                />
+                <datalist id="pipeline-sub-status-options">
+                  {PIPELINE_ITERATION_SUB_STATUSES.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
               </label>
               <label>
                 Outcome <input value={row.outcome} onChange={(e) => setRow({ ...row, outcome: e.target.value })} />

@@ -9,6 +9,7 @@ import {
   type PipelineIterationRecord,
 } from '../services/api';
 import PipelineIterationFormModal from './PipelineIterationFormModal';
+import PipelineIterationsCharts from './PipelineIterationsCharts';
 
 function newEmptyRow(): PipelineIterationRecord {
   const id =
@@ -27,6 +28,7 @@ function newEmptyRow(): PipelineIterationRecord {
     imageCount: null,
     imagesAddedSinceLastIteration: null,
     currentStatus: '',
+    subStatus: '',
     outcome: '',
     portalStats: null,
     manualMetrics: {},
@@ -58,6 +60,7 @@ function iterationsToCsv(rows: PipelineIterationRecord[]): string {
     '# of Images',
     'Images Added Since Last Iteration',
     'Current Status',
+    'Sub Status',
     'Outcome',
     'Portal_PulledAt',
     'Portal_TotalSessions',
@@ -134,6 +137,7 @@ function iterationsToCsv(rows: PipelineIterationRecord[]): string {
         ncsv(r.imageCount),
         ncsv(r.imagesAddedSinceLastIteration),
         escCsv(r.currentStatus),
+        escCsv(r.subStatus ?? ''),
         escCsv(r.outcome),
         ps ? escCsv(ps.pulledAt) : '',
         ps ? String(ps.totalSessions) : '',
@@ -324,8 +328,8 @@ const PipelineIterationsPage: FC = () => {
             <div>
               <h1>Pipeline iterations</h1>
               <p>
-                Add iterations in a grouped form: portal metrics from the selected app version, plus manual Roboflow and
-                eval fields. Save the sheet to S3 when done.
+                Registry in S3: portal metrics by app version, manual Roboflow / eval fields, and optional sub-status.
+                Charts reflect the current filter when a pipeline is selected. Save changes with <strong>Save to S3</strong>.
               </p>
             </div>
           </div>
@@ -365,13 +369,13 @@ const PipelineIterationsPage: FC = () => {
               <Download size={16} />
               Export CSV (filtered)
             </button>
-            <button type="button" className="view-button" onClick={openAdd}>
-              <Plus size={16} />
+            <button type="button" className="view-button" onClick={openAdd} disabled={loading}>
+              <Plus size={16} aria-hidden />
               Add iteration…
             </button>
             <button
               type="button"
-              className="save-button"
+              className="save-button pipeline-iterations-save-s3"
               onClick={() => void handleSaveS3()}
               disabled={saving || loading}
             >
@@ -395,6 +399,14 @@ const PipelineIterationsPage: FC = () => {
           </div>
         ) : (
           <>
+            <PipelineIterationsCharts
+              rows={filteredRows}
+              onIterationClick={(id) => {
+                const r = filteredRows.find((x) => x.id === id);
+                if (r) openEdit(r);
+              }}
+            />
+
             <div className="table-container pipeline-iterations-table-wrap">
               <table className="readings-table pipeline-iterations-table pipeline-iterations-table--compact">
                 <thead>
@@ -404,9 +416,17 @@ const PipelineIterationsPage: FC = () => {
                     <th>Model</th>
                     <th>App</th>
                     <th>Start</th>
-                    <th># Img</th>
-                    <th>Portal</th>
+                    <th title="Manual override or, if empty, same as portal snapshot image total when loaded.">
+                      # Img
+                    </th>
+                    <th
+                      scope="col"
+                      title="Snapshot from portal readings for this row’s app version: how many sessions and images match the current work type and data source (set in the header). Filled when you use “Load from portal” in the iteration editor."
+                    >
+                      Portal
+                    </th>
                     <th>Status</th>
+                    <th>Sub</th>
                     <th>Outcome</th>
                     <th>List</th>
                     <th>Edit</th>
@@ -434,6 +454,7 @@ const PipelineIterationsPage: FC = () => {
                           )}
                         </td>
                         <td>{r.currentStatus || '—'}</td>
+                        <td>{r.subStatus?.trim() ? r.subStatus : '—'}</td>
                         <td className="pipeline-iterations-td-scope">{r.outcome || '—'}</td>
                         <td>
                           {r.appVersion.trim() ? (

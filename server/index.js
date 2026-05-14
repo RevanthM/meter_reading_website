@@ -170,6 +170,7 @@ function normalizePipelineIterationRow(raw, fallbackId) {
   const imagesAddedSinceLastIteration =
     raw?.imagesAddedSinceLastIteration ?? raw?.images_added_since_last_iteration;
   const currentStatus = String(raw?.currentStatus ?? raw?.current_status ?? '').trim();
+  const subStatus = String(raw?.subStatus ?? raw?.sub_status ?? '').trim();
   const outcome = String(raw?.outcome ?? '').trim();
 
   const numOrNull = (v) => {
@@ -190,6 +191,7 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     imageCount: numOrNull(imageCount),
     imagesAddedSinceLastIteration: numOrNull(imagesAddedSinceLastIteration),
     currentStatus,
+    subStatus,
     outcome,
     portalStats: cloneJsonObject(raw?.portalStats),
     manualMetrics: cloneJsonObject(raw?.manualMetrics),

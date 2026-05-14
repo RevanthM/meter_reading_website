@@ -9100,8 +9100,99 @@ label.training-hub-filter-card-title--input {
   background: color-mix(in srgb, var(--danger-border, #c62828) 12%, var(--bg-secondary));
 }
 
+.pipeline-iterations-page .pipeline-iterations-banner--info {
+  border-color: var(--status-correct, #16a34a);
+  background: color-mix(in srgb, var(--status-correct, #16a34a) 12%, var(--bg-secondary));
+}
+
 .pipeline-iterations-page .pipeline-iterations-banner--muted {
   color: var(--text-muted);
+}
+
+.pipeline-iterations-charts {
+  margin-bottom: var(--spacing-xl);
+}
+
+.pipeline-iterations-charts > h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--spacing-sm);
+}
+
+.pipeline-iterations-charts-hint,
+.pipeline-iterations-charts-empty {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--spacing-md);
+  line-height: 1.45;
+}
+
+.pipeline-iterations-charts-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.pipeline-iterations-charts-top-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(280px, 1.25fr);
+  gap: var(--spacing-lg);
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .pipeline-iterations-charts-top-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pipeline-iterations-chart-card--pie .pipeline-iterations-chart-inner--pie {
+  min-height: 240px;
+}
+
+.pipeline-iterations-chart-card--images .pipeline-iterations-chart-inner--image-bars {
+  min-height: 260px;
+}
+
+.pipeline-iterations-chart-card-placeholder {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: var(--spacing-md) 0;
+  line-height: 1.45;
+}
+
+.pipeline-iterations-chart-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.pipeline-iterations-chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.pipeline-iterations-chart-card h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--spacing-sm);
+}
+
+.pipeline-iterations-chart-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: -0.25rem 0 var(--spacing-sm);
+}
+
+.pipeline-iterations-chart-inner {
+  width: 100%;
+  min-height: 260px;
+}
+
+.pipeline-iterations-chart-inner--tall {
+  min-height: 300px;
 }
 
 .pipeline-iterations-toolbar {
@@ -9111,6 +9202,12 @@ label.training-hub-filter-card-title--input {
   justify-content: space-between;
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-md);
+}
+
+@media (min-width: 720px) {
+  .pipeline-iterations-toolbar {
+    align-items: center;
+  }
 }
 
 .pipeline-iterations-filter {
@@ -9133,8 +9230,23 @@ label.training-hub-filter-card-title--input {
 .pipeline-iterations-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-sm);
   align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+/* One row: export + add (outline) + save (primary). Save is not full-width here. */
+.pipeline-iterations-toolbar-actions .view-button {
+  padding: 0.65rem 1rem;
+  font-size: 0.875rem;
+  min-height: 2.75rem;
+}
+
+.pipeline-iterations-toolbar-actions .pipeline-iterations-save-s3.save-button {
+  width: auto;
+  min-height: 2.75rem;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.875rem;
 }
 
 .pipeline-iterations-meta {

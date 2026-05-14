@@ -186,6 +186,8 @@ export interface PipelineIterationRecord {
   imageCount: number | null;
   imagesAddedSinceLastIteration: number | null;
   currentStatus: string;
+  /** Optional workflow detail (e.g. In Training, Annotation). */
+  subStatus?: string;
   outcome: string;
   portalStats?: PipelineIterationPortalStats | null;
   manualMetrics?: PipelineIterationManualMetrics | null;
