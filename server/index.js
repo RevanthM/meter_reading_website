@@ -7,6 +7,8 @@ import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, De
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import admin from 'firebase-admin';
 import { registerRoboflowRoutes } from './roboflow.js';
+import { registerApiDocs } from './apiDocs.js';
+import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -1630,6 +1632,129 @@ app.get('/api/activity-log', async (req, res) => {
   res.json(activityLog);
 });
 
+/**
+ * Capture history for one collector — matches iOS `metadata.user_name` (Settings name).
+ * Query `userName` or header `x-user-email` (exact match, case-insensitive).
+ */
+app.get('/api/captures/history', async (req, res) => {
+  try {
+    const userName =
+      (typeof req.query.userName === 'string' && req.query.userName.trim()) ||
+      String(req.headers['x-user-email'] || '').trim();
+    if (!userName) {
+      return res.status(400).json({
+        error: 'userName query (or x-user-email header) is required — must match iOS metadata.user_name.',
+      });
+    }
+
+    const source = req.query.source || 'all';
+    const workType =
+      typeof req.query.workType === 'string' && req.query.workType.trim()
+        ? req.query.workType.trim()
+        : '1000';
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+
+    const needle = userName.toLowerCase();
+    const all = await getAllReadings(source, workType);
+    const matched = all.filter((r) => {
+      const name = (r.userName || '').trim().toLowerCase();
+      return name === needle;
+    });
+
+    matched.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
+    const total = matched.length;
+    const captures = matched.slice(offset, offset + limit);
+
+    res.json({
+      userName,
+      workType,
+      source,
+      total,
+      offset,
+      limit,
+      captures,
+    });
+  } catch (error) {
+    console.error('GET /api/captures/history:', error);
+    res.status(500).json({ error: 'Failed to fetch capture history' });
+  }
+});
+
+/** List iOS unit-test CSV exports under `{workType}/unit_test_results/`. */
+app.get('/api/unit-test/runs', async (req, res) => {
+  try {
+    const workType =
+      typeof req.query.workType === 'string' && req.query.workType.trim()
+        ? req.query.workType.trim()
+        : '1000';
+    const folderRoots = getS3FolderRootsForPortalWorkType(workType);
+    const prefix = withS3Base(`${folderRoots[0]}/unit_test_results/`);
+    const runs = await listUnitTestResultCsvKeys(s3Client, BUCKET_NAME, prefix);
+    res.json({ workType, prefix, runs });
+  } catch (error) {
+    console.error('GET /api/unit-test/runs:', error);
+    res.status(500).json({ error: 'Failed to list unit test runs' });
+  }
+});
+
+/** Parse unit-test CSV summary + optional per-image rows. */
+app.get('/api/unit-test/runs/:s3Key', async (req, res) => {
+  try {
+    let key = req.params.s3Key || '';
+    try {
+      key = decodeURIComponent(key);
+    } catch {
+      /* use raw */
+    }
+    if (!key.endsWith('.csv') || key.includes('..')) {
+      return res.status(400).json({ error: 'Invalid s3Key' });
+    }
+
+    const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+    const csvText = await streamToString(out.Body);
+    const parsed = parseUnitTestCsvSummary(csvText);
+    const includeRows = req.query.includeRows !== 'false';
+
+    res.json({
+      key,
+      summary: parsed.summary,
+      perImageCount: parsed.perImageCount,
+      perImageRows: includeRows ? parsed.perImageRows : undefined,
+    });
+  } catch (error) {
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ error: 'CSV not found' });
+    }
+    console.error('GET /api/unit-test/runs/:s3Key:', error);
+    res.status(500).json({ error: 'Failed to parse unit test CSV' });
+  }
+});
+
+/** Presigned download URL for a unit-test CSV. */
+app.get('/api/unit-test/runs/:s3Key/download-url', async (req, res) => {
+  try {
+    let key = req.params.s3Key || '';
+    try {
+      key = decodeURIComponent(key);
+    } catch {
+      /* use raw */
+    }
+    if (!key.endsWith('.csv') || key.includes('..')) {
+      return res.status(400).json({ error: 'Invalid s3Key' });
+    }
+    const url = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }),
+      { expiresIn: 3600 },
+    );
+    res.json({ url, expiresInSeconds: 3600 });
+  } catch (error) {
+    console.error('GET /api/unit-test/runs/download-url:', error);
+    res.status(500).json({ error: 'Failed to create download URL' });
+  }
+});
+
 app.get('/api/uploads', async (req, res) => {
   try {
     const email = req.query.email;
@@ -2773,6 +2898,8 @@ app.put('/api/pipeline-iterations', async (req, res) => {
   }
 });
 
+registerApiDocs(app);
+
 /**
  * SPA fallback — must not return HTML for `/api/*` or the client shows "API returned HTML instead of JSON"
  * (e.g. old Node process without a newer route, or typo). Unknown API routes get JSON 404 instead.
@@ -2796,6 +2923,7 @@ app.listen(PORT, async () => {
   console.log(`📂 S3 base prefix: ${S3_BASE_PREFIX || '(none — keys at bucket root)'}`);
   console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
   console.log(`🔎 S3 layout debug: GET http://localhost:${PORT}/api/s3-discover`);
+  console.log(`📖 API docs (Swagger): http://localhost:${PORT}/api/docs`);
   await loadActivityLog();
   console.log('');
 });

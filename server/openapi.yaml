@@ -1,0 +1,324 @@
+openapi: 3.0.3
+info:
+  title: AMR Meter Reading Portal API
+  description: |
+    REST API for the meter reading web portal and mobile app integrations.
+
+    **Data store:** Amazon S3 bucket `meter-reader-training-feedback` (configurable via `AWS_S3_BUCKET`).
+
+    **Capture identity:** iOS uploads set `metadata.json` → `user_name` (collector name from app Settings).
+    Filter history with `GET /api/captures/history?userName=...` (case-insensitive exact match).
+
+    **Unit test CSVs:** iOS batch runs upload to `{workType}/unit_test_results/results_<UTC>_<pipeline>_<appVersion>_export.csv`.
+    Summary block uses two-column rows (`section=UNIT_TEST_RUN_SUMMARY`); per-image rows follow.
+
+    **Auth:** Portal UI uses Firebase / Anica login. API routes do not validate JWT today — pass
+    `x-user-email` on writes for audit. Mobile should send the same `userName` as iOS `metadata.user_name`.
+
+  version: 1.1.0
+servers:
+  - url: http://localhost:3001
+    description: Local dev (Express)
+  - url: /
+    description: Same host as deployed portal
+
+tags:
+  - name: Health
+  - name: WorkTypes
+  - name: Readings
+  - name: Captures
+    description: Per-user capture history (S3 sessions)
+  - name: UnitTest
+    description: iOS S3 unit-test CSV exports
+  - name: Dashboard
+  - name: Auth
+  - name: Training
+  - name: Export
+
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+
+  /api/work-types:
+    get:
+      tags: [WorkTypes]
+      summary: List portal work type codes
+      responses:
+        '200':
+          description: Work types 1000–5000
+
+  /api/readings:
+    get:
+      tags: [Readings]
+      summary: List meter reading sessions
+      parameters:
+        - $ref: '#/components/parameters/source'
+        - $ref: '#/components/parameters/workType'
+      responses:
+        '200':
+          description: Array of sessions with presigned image URLs
+
+  /api/readings/{id}:
+    get:
+      tags: [Readings]
+      summary: Get one session by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/workType'
+      responses:
+        '200':
+          description: Session detail
+        '404':
+          description: Not found
+
+  /api/captures/history:
+    get:
+      tags: [Captures]
+      summary: Capture history for a collector (by user name)
+      description: |
+        Returns S3 sessions where `metadata.user_name` matches `userName` (case-insensitive).
+        Falls back to header `x-user-email` when `userName` query is omitted.
+        Same shape as `/api/readings` items — includes presigned `original.jpg` and dial crops.
+      parameters:
+        - name: userName
+          in: query
+          description: iOS Settings name / metadata.user_name
+          schema: { type: string }
+        - name: x-user-email
+          in: header
+          schema: { type: string }
+        - $ref: '#/components/parameters/workType'
+        - $ref: '#/components/parameters/source'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Filtered captures
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureHistoryResponse'
+        '400':
+          description: userName required
+
+  /api/unit-test/runs:
+    get:
+      tags: [UnitTest]
+      summary: List unit-test result CSV files on S3
+      parameters:
+        - $ref: '#/components/parameters/workType'
+      responses:
+        '200':
+          description: CSV index (newest first)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitTestRunListResponse'
+
+  /api/unit-test/runs/{s3Key}:
+    get:
+      tags: [UnitTest]
+      summary: Parsed CSV summary + per-image rows
+      description: |
+        `s3Key` must be URL-encoded full key, e.g. `1000%2Funit_test_results%2Fresults_....csv`
+      parameters:
+        - name: s3Key
+          in: path
+          required: true
+          schema: { type: string }
+        - name: includeRows
+          in: query
+          schema: { type: boolean, default: true }
+          description: Set false for summary-only (faster)
+      responses:
+        '200':
+          description: Parsed export
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitTestRunDetailResponse'
+        '404':
+          description: CSV not found
+
+  /api/unit-test/runs/{s3Key}/download-url:
+    get:
+      tags: [UnitTest]
+      summary: Presigned URL to download raw CSV
+      parameters:
+        - name: s3Key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expiresInSeconds: { type: integer, example: 3600 }
+
+  /api/counts:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard status counts
+      parameters:
+        - $ref: '#/components/parameters/source'
+        - $ref: '#/components/parameters/workType'
+      responses:
+        '200':
+          description: Counts by status
+
+  /api/usage-summary:
+    get:
+      tags: [Dashboard]
+      summary: Usage aggregates (includes byUser from user_name)
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30 }
+        - $ref: '#/components/parameters/source'
+        - $ref: '#/components/parameters/workType'
+      responses:
+        '200':
+          description: Usage summary
+
+  /api/uploads:
+    get:
+      tags: [Readings]
+      summary: Upload list (all users — filter client-side by userName)
+      parameters:
+        - $ref: '#/components/parameters/workType'
+        - $ref: '#/components/parameters/source'
+      responses:
+        '200':
+          description: Lightweight upload rows
+
+  /api/auth/verify-email-link:
+    post:
+      tags: [Auth]
+      summary: Verify Firebase email link → custom token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, oobCode]
+              properties:
+                email: { type: string }
+                oobCode: { type: string }
+      responses:
+        '200':
+          description: customToken issued
+
+components:
+  parameters:
+    workType:
+      name: workType
+      in: query
+      schema: { type: string, default: '1000', enum: ['1000', '2000', '3000', '4000', '5000'] }
+    source:
+      name: source
+      in: query
+      schema: { type: string, default: all, enum: [all, field, simulator] }
+
+  schemas:
+    CaptureHistoryResponse:
+      type: object
+      properties:
+        userName: { type: string }
+        workType: { type: string }
+        source: { type: string }
+        total: { type: integer }
+        offset: { type: integer }
+        limit: { type: integer }
+        captures:
+          type: array
+          items:
+            $ref: '#/components/schemas/MeterReadingSession'
+
+    MeterReadingSession:
+      type: object
+      properties:
+        id: { type: string }
+        s3SessionPrefix: { type: string }
+        dateOfReading: { type: string, format: date-time }
+        userName: { type: string, description: From metadata.user_name }
+        meterValue: { type: string }
+        expectedValue: { type: string }
+        status: { type: string }
+        type: { type: string, enum: [field, simulator] }
+        workType: { type: string }
+        confidence: { type: number }
+        appVersion: { type: string }
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              url: { type: string }
+              label: { type: string }
+              fileName: { type: string }
+
+    UnitTestRunListResponse:
+      type: object
+      properties:
+        workType: { type: string }
+        prefix: { type: string, example: '1000/unit_test_results/' }
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/UnitTestRunIndexItem'
+
+    UnitTestRunIndexItem:
+      type: object
+      properties:
+        key: { type: string }
+        fileName: { type: string }
+        size: { type: integer }
+        lastModified: { type: string, format: date-time }
+
+    UnitTestRunDetailResponse:
+      type: object
+      properties:
+        key: { type: string }
+        summary:
+          $ref: '#/components/schemas/UnitTestCsvSummary'
+        perImageCount: { type: integer }
+        perImageRows:
+          type: array
+          items:
+            type: object
+            additionalProperties: { type: string }
+
+    UnitTestCsvSummary:
+      type: object
+      description: Parsed UNIT_TEST_RUN_SUMMARY section (matches iOS export)
+      properties:
+        pipeline_display_name: { type: string }
+        pipeline_id: { type: string }
+        pipeline_version: { type: string }
+        detector_bundle_stage_a: { type: string }
+        keypoint_bundle_stage_b: { type: string }
+        work_type_segment: { type: string }
+        s3_bucket: { type: string }
+        generated_utc: { type: string }
+        images_processed: { type: integer }
+        with_filename_ground_truth: { type: integer }
+        correct_readings: { type: integer }
+        accuracy_percent: { type: number, nullable: true }
