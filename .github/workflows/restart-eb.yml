@@ -65,11 +65,31 @@ jobs:
             aws elasticbeanstalk abort-environment-update \
               --environment-name "${{ inputs.target_env }}" \
               --region "${AWS_REGION}"
-            echo "Waiting 90s for abort to settle…"
-            sleep 90
           else
             echo "Not Updating — skip abort."
           fi
+
+      - name: Wait until Ready (before restart)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "Polling until Status=Ready (max ~15 min)…"
+          for i in $(seq 1 45); do
+            STATUS=$(aws elasticbeanstalk describe-environments \
+              --region "${AWS_REGION}" \
+              --environment-names "${{ inputs.target_env }}" \
+              --query "Environments[0].Status" \
+              --output text)
+            echo "[$i] Status=$STATUS"
+            if [ "$STATUS" = "Ready" ]; then
+              echo "Environment is Ready — safe to restart."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for Ready before restart." >&2
+          exit 1
 
       - name: Restart application servers
         env:
