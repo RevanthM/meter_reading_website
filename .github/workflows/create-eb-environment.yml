@@ -86,20 +86,53 @@ jobs:
             --environment-name "${{ inputs.template_env }}" \
             --output json > /tmp/config.json
 
-          # Only clone app env vars + IAM instance profile (avoid VPC/SG conflicts from dev).
+          # App env vars only (avoid VPC/SG clone issues).
           jq '
             .ConfigurationSettings[0].OptionSettings
             | map(select(
                 .ResourceName == null
-                and (
-                  .Namespace == "aws:elasticbeanstalk:application:environment"
-                  or (.Namespace == "aws:autoscaling:launchconfiguration" and .OptionName == "IamInstanceProfile")
-                )
+                and .Namespace == "aws:elasticbeanstalk:application:environment"
                 and (.Value != null)
                 and (.Value | type == "string")
               ))
             | map({Namespace, OptionName, Value})
           ' /tmp/config.json > /tmp/option-settings.json
+
+          # Instance profile is required; copy from template (any namespace/option name).
+          PROFILE=$(jq -r '
+            .ConfigurationSettings[0].OptionSettings
+            | map(select(.OptionName | test("IamInstanceProfile|InstanceProfile"; "i")))
+            | map(select(.Value != null and (.Value | type == "string") and (.Value | length > 0)))
+            | .[0].Value // empty
+          ' /tmp/config.json)
+
+          if [ -z "$PROFILE" ] || [ "$PROFILE" = "null" ]; then
+            echo "No IamInstanceProfile in template config — reading from running instance…" >&2
+            INSTANCE_ID=$(aws elasticbeanstalk describe-environment-resources \
+              --region "${AWS_REGION}" \
+              --environment-name "${{ inputs.template_env }}" \
+              --query "EnvironmentResources.Instances[0].Id" \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+              PROFILE=$(aws ec2 describe-instances \
+                --region "${AWS_REGION}" \
+                --instance-ids "$INSTANCE_ID" \
+                --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" \
+                --output text | awk -F/ '{print $NF}')
+            fi
+          fi
+          if [ -z "$PROFILE" ] || [ "$PROFILE" = "None" ]; then
+            echo "Could not resolve IamInstanceProfile from ${{ inputs.template_env }}." >&2
+            jq '[.ConfigurationSettings[0].OptionSettings[] | select(.OptionName | test("Profile|Role"; "i"))]' \
+              /tmp/config.json >&2 || true
+            exit 1
+          fi
+
+          echo "Using IamInstanceProfile: $PROFILE"
+          jq --arg profile "$PROFILE" \
+            '. + [{Namespace: "aws:autoscaling:launchconfiguration", OptionName: "IamInstanceProfile", Value: $profile}]' \
+            /tmp/option-settings.json > /tmp/option-settings-with-iam.json
+          mv /tmp/option-settings-with-iam.json /tmp/option-settings.json
 
           COUNT=$(jq length /tmp/option-settings.json)
           echo "Cloned $COUNT option settings from ${{ inputs.template_env }}"
