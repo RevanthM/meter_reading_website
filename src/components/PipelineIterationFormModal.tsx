@@ -1,4 +1,4 @@
-import { useEffect, useState, type FC, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FC, type FormEvent } from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import type { WorkType } from '../types';
 import type { DataSource } from '../context/ReadingsContext';
@@ -14,6 +14,7 @@ import {
 } from '../utils/pipelineIterationStats';
 import PipelineIterationUnitTestLinker from './PipelineIterationUnitTestLinker';
 import FactoryFormExtras from './FactoryFormExtras';
+import { inferFactoryStage } from '../constants/factoryStages';
 
 function deepCloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
   return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
@@ -62,7 +63,9 @@ type Props = {
   open: boolean;
   initial: PipelineIterationRecord;
   onClose: () => void;
-  onSave: (row: PipelineIterationRecord) => void;
+  onSave: (row: PipelineIterationRecord) => void | Promise<void>;
+  /** When set, shows Delete (existing row only). Should persist removal to S3. */
+  onDelete?: () => void | Promise<void>;
   readings: S3MeterReading[];
   workType: WorkType;
   dataSource: DataSource;
@@ -75,6 +78,7 @@ const PipelineIterationFormModal: FC<Props> = ({
   initial,
   onClose,
   onSave,
+  onDelete,
   readings,
   workType,
   dataSource,
@@ -82,11 +86,23 @@ const PipelineIterationFormModal: FC<Props> = ({
 }) => {
   const [row, setRow] = useState<PipelineIterationRecord>(() => deepCloneRow(initial));
   const [err, setErr] = useState<string | null>(null);
+  const [metricsHighlight, setMetricsHighlight] = useState(false);
+  const manualMetricsAnchorRef = useRef<HTMLFieldSetElement>(null);
+  const modalBodyRef = useRef<HTMLFormElement>(null);
+
+  const scrollModalBodyTo = (el: HTMLElement | null) => {
+    const body = modalBodyRef.current;
+    if (!body || !el) return;
+    const offset = el.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTo({ top: body.scrollTop + offset - 12, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     if (open) {
       setRow(deepCloneRow(initial));
       setErr(null);
+      setSubmitting(false);
+      setDeleting(false);
     }
   }, [open, initial]);
 
@@ -146,36 +162,73 @@ const PipelineIterationFormModal: FC<Props> = ({
     }));
   };
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    setErr(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const buildNormalizedRow = (): PipelineIterationRecord | null => {
     if (!row.pipeline.trim()) {
       setErr('Pipeline is required.');
-      return;
+      return null;
     }
     if (!Number.isFinite(row.iterationNumber) || row.iterationNumber < 1) {
       setErr('Iteration # must be at least 1.');
-      return;
-    }
-    if (!row.modelId.trim()) {
-      setErr('Model # is required.');
-      return;
-    }
-    if (!row.appVersion.trim()) {
-      setErr('App version is required.');
-      return;
+      return null;
     }
     if (!row.startDate.trim()) {
       setErr('Start date is required.');
-      return;
+      return null;
     }
-    const normalized = {
+    const factoryStage = factoryMode
+      ? row.factoryStage?.trim() || inferFactoryStage(row)
+      : row.factoryStage?.trim() || null;
+    return {
       ...row,
       currentStatus: normalizePipelineIterationPrimaryStatus(row.currentStatus),
+      factoryStage: factoryStage || null,
+      linkedUnitTests: row.linkedUnitTests ?? [],
+      manualMetrics: row.manualMetrics ?? {},
     };
-    onSave(normalized);
-    onClose();
   };
+
+  const handleSave = async () => {
+    setErr(null);
+    const normalized = buildNormalizedRow();
+    if (!normalized) return;
+    setSubmitting(true);
+    try {
+      await onSave(normalized);
+      onClose();
+    } catch (saveErr) {
+      setErr(saveErr instanceof Error ? saveErr.message : 'Failed to save iteration.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    setErr(null);
+    setDeleting(true);
+    try {
+      await onDelete();
+    } catch (deleteErr) {
+      setErr(deleteErr instanceof Error ? deleteErr.message : 'Failed to delete iteration.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    void handleSave();
+  };
+
+  const busy = submitting || deleting;
+  const saveLabel = submitting ? 'Saving…' : 'Save';
+  const rowLabel =
+    row.pipeline.trim() || row.modelId.trim()
+      ? `${row.pipeline.trim() || 'Iteration'}${row.iterationNumber ? ` #${row.iterationNumber}` : ''}`
+      : null;
 
   if (!open) return null;
 
@@ -194,20 +247,66 @@ const PipelineIterationFormModal: FC<Props> = ({
         aria-labelledby="pipeline-iteration-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="pipeline-iteration-modal-head">
-          <h2 id="pipeline-iteration-modal-title">Add / edit iteration</h2>
-          <button type="button" className="pipeline-iteration-modal-close" onClick={onClose} aria-label="Close">
+        <div className="pipeline-iteration-modal-chrome">
+          <div className="pipeline-iteration-modal-head">
+            <h2 id="pipeline-iteration-modal-title">Add / edit iteration</h2>
+          <button
+            type="button"
+            className="pipeline-iteration-modal-close"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={busy}
+          >
             <X size={20} />
           </button>
         </div>
 
-        <form className="pipeline-iteration-modal-body" onSubmit={handleSubmit}>
+        <div className="pipeline-iteration-modal-sticky-actions" aria-label="Iteration actions">
+          <div className="pipeline-iteration-modal-sticky-left">
+            {rowLabel ? <span className="pipeline-iteration-modal-sticky-label">{rowLabel}</span> : null}
+            {onDelete ? (
+              <button
+                type="button"
+                className="view-button pipeline-iteration-modal-delete"
+                disabled={busy}
+                onClick={() => void handleDelete()}
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            ) : null}
+          </div>
+          <div className="pipeline-iteration-modal-sticky-right">
+            <button type="button" className="back-button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="pipeline-iteration-form"
+              className="save-button"
+              disabled={busy}
+              title="Save iteration and sync to S3"
+            >
+              {saveLabel}
+            </button>
+          </div>
+          </div>
+
           {err ? (
-            <p className="pipeline-iterations-banner pipeline-iterations-banner--error" role="alert">
+            <p
+              className="pipeline-iterations-banner pipeline-iterations-banner--error pipeline-iteration-modal-sticky-error"
+              role="alert"
+            >
               {err}
             </p>
           ) : null}
+        </div>
 
+        <form
+          id="pipeline-iteration-form"
+          ref={modalBodyRef}
+          className="pipeline-iteration-modal-body"
+          onSubmit={handleSubmit}
+        >
           {factoryMode ? <FactoryFormExtras row={row} setRow={setRow} /> : null}
 
           <fieldset className="pipeline-iteration-form-section">
@@ -231,10 +330,15 @@ const PipelineIterationFormModal: FC<Props> = ({
                 />
               </label>
               <label>
-                Model # <input value={row.modelId} onChange={(e) => setRow({ ...row, modelId: e.target.value })} />
+                Model # <span className="pipeline-iteration-optional">(optional)</span>{' '}
+                <input
+                  value={row.modelId}
+                  onChange={(e) => setRow({ ...row, modelId: e.target.value })}
+                  placeholder="e.g. anica.p2"
+                />
               </label>
               <label>
-                App version
+                App version <span className="pipeline-iteration-optional">(optional)</span>
                 <input
                   list="pipeline-app-version-options"
                   value={row.appVersion}
@@ -299,40 +403,44 @@ const PipelineIterationFormModal: FC<Props> = ({
                   }}
                 />
               </label>
-              <label>
-                Current status{' '}
-                <input
-                  list="pipeline-primary-status-options"
-                  value={row.currentStatus}
-                  onChange={(e) => setRow({ ...row, currentStatus: e.target.value })}
-                  onBlur={() =>
-                    setRow((r) => ({
-                      ...r,
-                      currentStatus: normalizePipelineIterationPrimaryStatus(r.currentStatus),
-                    }))
-                  }
-                  placeholder="e.g. In Process"
-                />
-                <datalist id="pipeline-primary-status-options">
-                  {PIPELINE_ITERATION_PRIMARY_STATUSES.map((s) => (
-                    <option key={s} value={s} />
-                  ))}
-                </datalist>
-              </label>
-              <label>
-                Sub-status (optional){' '}
-                <input
-                  list="pipeline-sub-status-options"
-                  value={row.subStatus ?? ''}
-                  onChange={(e) => setRow({ ...row, subStatus: e.target.value })}
-                  placeholder="e.g. In Training"
-                />
-                <datalist id="pipeline-sub-status-options">
-                  {PIPELINE_ITERATION_SUB_STATUSES.map((s) => (
-                    <option key={s} value={s} />
-                  ))}
-                </datalist>
-              </label>
+              {!factoryMode ? (
+                <>
+                  <label>
+                    Current status{' '}
+                    <input
+                      list="pipeline-primary-status-options"
+                      value={row.currentStatus}
+                      onChange={(e) => setRow({ ...row, currentStatus: e.target.value })}
+                      onBlur={() =>
+                        setRow((r) => ({
+                          ...r,
+                          currentStatus: normalizePipelineIterationPrimaryStatus(r.currentStatus),
+                        }))
+                      }
+                      placeholder="e.g. In Process"
+                    />
+                    <datalist id="pipeline-primary-status-options">
+                      {PIPELINE_ITERATION_PRIMARY_STATUSES.map((s) => (
+                        <option key={s} value={s} />
+                      ))}
+                    </datalist>
+                  </label>
+                  <label>
+                    Sub-status (optional){' '}
+                    <input
+                      list="pipeline-sub-status-options"
+                      value={row.subStatus ?? ''}
+                      onChange={(e) => setRow({ ...row, subStatus: e.target.value })}
+                      placeholder="e.g. In Training"
+                    />
+                    <datalist id="pipeline-sub-status-options">
+                      {PIPELINE_ITERATION_SUB_STATUSES.map((s) => (
+                        <option key={s} value={s} />
+                      ))}
+                    </datalist>
+                  </label>
+                </>
+              ) : null}
               <label>
                 Outcome <input value={row.outcome} onChange={(e) => setRow({ ...row, outcome: e.target.value })} />
               </label>
@@ -387,12 +495,14 @@ const PipelineIterationFormModal: FC<Props> = ({
             modelId={row.modelId}
             linked={row.linkedUnitTests ?? []}
             onLinkedChange={(linkedUnitTests) => setRow((r) => ({ ...r, linkedUnitTests }))}
-            onApplyManualMetrics={(patch) =>
-              setRow((r) => ({
-                ...r,
-                manualMetrics: { ...(r.manualMetrics ?? {}), ...patch },
-              }))
-            }
+            onApplyManualMetrics={(metrics) => {
+              setRow((r) => ({ ...r, manualMetrics: metrics }));
+              setMetricsHighlight(true);
+              window.setTimeout(() => setMetricsHighlight(false), 2600);
+            }}
+            onAfterApply={() => {
+              scrollModalBodyTo(manualMetricsAnchorRef.current);
+            }}
             onSuggestAppVersion={(appVersion) => {
               if (!row.appVersion.trim()) {
                 setRow((r) => ({ ...r, appVersion }));
@@ -460,7 +570,11 @@ const PipelineIterationFormModal: FC<Props> = ({
             </div>
           </fieldset>
 
-          <fieldset className="pipeline-iteration-form-section">
+          <fieldset
+            ref={manualMetricsAnchorRef}
+            id="pipeline-manual-metrics-read"
+            className={`pipeline-iteration-form-section${metricsHighlight ? ' pipeline-metrics--applied' : ''}`}
+          >
             <legend>Read accuracy &amp; dials (manual — eval / notebook)</legend>
             <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
               <label>
@@ -703,14 +817,6 @@ const PipelineIterationFormModal: FC<Props> = ({
             </div>
           </fieldset>
 
-          <div className="pipeline-iteration-modal-footer">
-            <button type="button" className="back-button" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="save-button">
-              Save row
-            </button>
-          </div>
         </form>
       </div>
     </div>

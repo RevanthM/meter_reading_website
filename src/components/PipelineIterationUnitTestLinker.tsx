@@ -4,7 +4,7 @@ import type { WorkType } from '../types';
 import type { PipelineIterationUnitTestLink, PipelineIterationManualMetrics } from '../services/api';
 import { fetchUnitTestRunDetail, fetchUnitTestRuns } from '../services/api';
 import {
-  applyUnitTestSummaryToManualMetrics,
+  applyUnitTestDetailToManualMetrics,
   modelIdMatchesUnitTest,
   parseUnitTestFileName,
   pickNewestLink,
@@ -18,6 +18,8 @@ type Props = {
   onLinkedChange: (links: PipelineIterationUnitTestLink[]) => void;
   onApplyManualMetrics: (metrics: PipelineIterationManualMetrics) => void;
   onSuggestAppVersion?: (appVersion: string) => void;
+  /** Scroll the modal to manual metric fields after apply. */
+  onAfterApply?: () => void;
 };
 
 function fmtWhen(iso: string | null | undefined): string {
@@ -39,6 +41,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
   onLinkedChange,
   onApplyManualMetrics,
   onSuggestAppVersion,
+  onAfterApply,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -116,9 +119,13 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
     setApplyBusy(true);
     setLocalMsg(null);
     try {
-      const detail = await fetchUnitTestRunDetail(target.s3Key, { includeRows: false });
-      const metrics = applyUnitTestSummaryToManualMetrics(detail.summary);
+      const detail = await fetchUnitTestRunDetail(target.s3Key, { includeRows: true });
+      const { metrics, appliedLabels } = applyUnitTestDetailToManualMetrics(
+        detail.summary,
+        detail.perImageRows,
+      );
       onApplyManualMetrics(metrics);
+      onAfterApply?.();
       const appHint =
         detail.summary.app_version?.trim() ||
         target.appVersionHint?.trim() ||
@@ -126,8 +133,12 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
       if (appHint && onSuggestAppVersion) {
         onSuggestAppVersion(appHint);
       }
+      const fields =
+        appliedLabels.length > 0
+          ? appliedLabels.join(', ')
+          : 'summary only (no per-dial rows in CSV)';
       setLocalMsg(
-        `Applied metrics from ${target.fileName || 'CSV'} (accuracy ${fmtPct(target.accuracyPercent)}, ${target.imagesProcessed ?? '—'} images).`,
+        `Applied from ${target.fileName || 'CSV'}: ${fields}. Accuracy ${fmtPct(target.accuracyPercent)}, ${target.imagesProcessed ?? detail.perImageCount ?? '—'} images. Scroll down to review fields.`,
       );
     } catch (e) {
       setLocalMsg(e instanceof Error ? e.message : 'Failed to apply metrics from CSV.');
@@ -158,7 +169,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
       <legend>Unit test CSV (S3)</legend>
       <p className="pipeline-iteration-form-hint">
         Link exports from <code>{workType}/unit_test_results/</code> on the training bucket. Saves with{' '}
-        <strong>Save row</strong> then <strong>Save to S3</strong> on the list page.
+        Use <strong>Save &amp; sync to S3</strong> in the modal to persist links and metrics.
       </p>
 
       <div className="pipeline-iteration-ut-actions">

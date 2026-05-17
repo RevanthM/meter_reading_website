@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Download, Layers, Loader2, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,12 @@ import {
 } from '../services/api';
 import PipelineIterationFormModal from './PipelineIterationFormModal';
 import PipelineIterationsCharts from './PipelineIterationsCharts';
+import {
+  iterationDeleteConfirmMessage,
+  removePipelineIterationRow,
+  touchIterationUpdatedAt,
+  upsertPipelineIterationRow,
+} from '../utils/pipelineIterationRows';
 
 function newEmptyRow(): PipelineIterationRecord {
   const id =
@@ -221,13 +227,17 @@ const PipelineIterationsPage: FC = () => {
   const [pipelineFilter, setPipelineFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDraft, setModalDraft] = useState<PipelineIterationRecord>(() => newEmptyRow());
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
       const doc = await fetchPipelineIterations();
-      setRows(doc.iterations.length ? doc.iterations : []);
+      const list = doc.iterations.length ? doc.iterations : [];
+      setRows(list);
+      rowsRef.current = list;
       setMeta({ updatedAt: doc.updatedAt, updatedBy: doc.updatedBy });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load');
@@ -268,10 +278,6 @@ const PipelineIterationsPage: FC = () => {
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [rows]);
 
-  const removeRow = (id: string) => {
-    setRows((prev) => prev.filter((r) => r.id !== id));
-  };
-
   const openAdd = () => {
     setModalDraft(newEmptyRow());
     setModalOpen(true);
@@ -282,27 +288,57 @@ const PipelineIterationsPage: FC = () => {
     setModalOpen(true);
   };
 
-  const commitModalRow = (row: PipelineIterationRecord) => {
-    setRows((prev) => {
-      const ix = prev.findIndex((x) => x.id === row.id);
-      if (ix === -1) return [...prev, row];
-      const next = [...prev];
-      next[ix] = row;
-      return next;
-    });
+  const persistIterations = useCallback(
+    async (iterations: PipelineIterationRecord[]) => {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const doc = await savePipelineIterations(userEmail || undefined, iterations);
+        setRows(doc.iterations);
+        rowsRef.current = doc.iterations;
+        setMeta({ updatedAt: doc.updatedAt, updatedBy: doc.updatedBy });
+        return doc;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Save failed';
+        setSaveError(msg);
+        throw new Error(msg);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [userEmail],
+  );
+
+  const commitModalRow = async (row: PipelineIterationRecord) => {
+    const next = upsertPipelineIterationRow(
+      rowsRef.current,
+      touchIterationUpdatedAt(row),
+    );
+    setRows(next);
+    rowsRef.current = next;
+    await persistIterations(next);
   };
 
   const handleSaveS3 = async () => {
-    setSaving(true);
-    setSaveError(null);
     try {
-      const doc = await savePipelineIterations(userEmail || undefined, rows);
-      setRows(doc.iterations);
-      setMeta({ updatedAt: doc.updatedAt, updatedBy: doc.updatedBy });
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
+      await persistIterations(rowsRef.current);
+    } catch {
+      /* saveError banner */
+    }
+  };
+
+  const deleteIteration = async (row: PipelineIterationRecord) => {
+    if (!window.confirm(iterationDeleteConfirmMessage(row))) return;
+    const next = removePipelineIterationRow(rowsRef.current, row.id);
+    setRows(next);
+    rowsRef.current = next;
+    if (modalOpen && modalDraft.id === row.id) {
+      setModalOpen(false);
+    }
+    try {
+      await persistIterations(next);
+    } catch {
+      /* saveError banner */
     }
   };
 
@@ -500,9 +536,10 @@ const PipelineIterationsPage: FC = () => {
                           <button
                             type="button"
                             className="pipeline-iterations-icon-btn"
-                            title="Remove row"
-                            aria-label="Remove row"
-                            onClick={() => removeRow(r.id)}
+                            title="Delete iteration"
+                            aria-label="Delete iteration"
+                            onClick={() => void deleteIteration(r)}
+                            disabled={saving}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -557,6 +594,11 @@ const PipelineIterationsPage: FC = () => {
         initial={modalDraft}
         onClose={() => setModalOpen(false)}
         onSave={commitModalRow}
+        onDelete={
+          rows.some((x) => x.id === modalDraft.id)
+            ? () => deleteIteration(modalDraft)
+            : undefined
+        }
         readings={filteredReadings}
         workType={workType}
         dataSource={dataSource}

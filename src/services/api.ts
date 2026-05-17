@@ -276,6 +276,8 @@ export interface PipelineIterationRecord {
   roboflowLinks?: PipelineIterationRoboflowLinks | null;
   /** YOLO .pt weights stored in S3 for this iteration. */
   modelWeights?: PipelineIterationModelWeights | null;
+  /** ISO timestamp — last time this row was saved from the portal. */
+  updatedAt?: string | null;
 }
 
 export interface PipelineIterationWeightMeta {

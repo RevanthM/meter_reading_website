@@ -211,7 +211,18 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     modelShip: normalizePipelineIterationModelShip(raw?.modelShip ?? raw?.model_ship),
     roboflowLinks: normalizePipelineIterationRoboflowLinks(raw?.roboflowLinks ?? raw?.roboflow_links),
     modelWeights: normalizePipelineIterationModelWeights(raw?.modelWeights ?? raw?.model_weights),
+    updatedAt: String(raw?.updatedAt ?? raw?.updated_at ?? '').trim() || null,
   };
+}
+
+function iterationRowContentFingerprint(row) {
+  if (!row || typeof row !== 'object') return '';
+  const { updatedAt: _u, ...rest } = row;
+  try {
+    return JSON.stringify(rest);
+  } catch {
+    return '';
+  }
 }
 
 function sanitizePipelineIterationId(id) {
@@ -482,8 +493,6 @@ function validatePipelineIterationsPayload(iterations) {
     if (!Number.isFinite(row.iterationNumber) || row.iterationNumber < 1) {
       return `iterations[${i}]: iterationNumber must be a positive integer`;
     }
-    if (!row.modelId?.trim()) return `iterations[${i}]: modelId is required`;
-    if (!row.appVersion?.trim()) return `iterations[${i}]: appVersion is required`;
     if (!row.startDate?.trim()) return `iterations[${i}]: startDate is required`;
     const dedupe = `${row.pipeline.trim().toLowerCase()}\t${row.iterationNumber}`;
     if (seen.has(dedupe)) {
@@ -3416,7 +3425,27 @@ app.put('/api/pipeline-iterations', async (req, res) => {
     if (!Array.isArray(rawList)) {
       return res.status(400).json({ error: 'Body must include iterations array' });
     }
-    const iterations = rawList.map((r) => normalizePipelineIterationRow(r, randomUUID()));
+    const prevDoc = await readPipelineIterationsDoc();
+    const prevById = new Map();
+    for (const pr of Array.isArray(prevDoc.iterations) ? prevDoc.iterations : []) {
+      if (pr?.id) prevById.set(String(pr.id), pr);
+    }
+    const saveNow = new Date().toISOString();
+    const iterations = rawList.map((r) => {
+      const row = normalizePipelineIterationRow(r, randomUUID());
+      const prev = prevById.get(row.id);
+      const clientUpdated = String(r?.updatedAt ?? r?.updated_at ?? '').trim();
+      if (clientUpdated && Number.isFinite(Date.parse(clientUpdated))) {
+        row.updatedAt = clientUpdated;
+      } else if (!prev) {
+        row.updatedAt = saveNow;
+      } else if (iterationRowContentFingerprint(prev) !== iterationRowContentFingerprint(row)) {
+        row.updatedAt = saveNow;
+      } else {
+        row.updatedAt = prev.updatedAt || row.updatedAt || null;
+      }
+      return row;
+    });
     const err = validatePipelineIterationsPayload(iterations);
     if (err) return res.status(400).json({ error: err });
 

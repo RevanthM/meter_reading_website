@@ -57,21 +57,79 @@ export function modelIdMatchesUnitTest(
   return fn.includes(mid);
 }
 
-export function applyUnitTestSummaryToManualMetrics(
+function parseBoolish(raw: string | undefined): boolean | null {
+  const t = (raw ?? '').trim().toLowerCase();
+  if (!t) return null;
+  if (t === 'true' || t === '1' || t === 'yes') return true;
+  if (t === 'false' || t === '0' || t === 'no') return false;
+  return null;
+}
+
+/** Per-dial digit match rate from iOS `dialN_digit_match` columns (%). */
+function dialDigitMatchPct(rows: Record<string, string>[] | undefined, dial: number): number | null {
+  if (!rows?.length) return null;
+  const key = `dial${dial}_digit_match`;
+  let n = 0;
+  let hit = 0;
+  for (const row of rows) {
+    const b = parseBoolish(row[key]);
+    if (b == null) continue;
+    n += 1;
+    if (b) hit += 1;
+  }
+  if (n === 0) return null;
+  return Math.round((1000 * hit) / n) / 10;
+}
+
+export type ApplyUnitTestMetricsResult = {
+  metrics: PipelineIterationManualMetrics;
+  appliedLabels: string[];
+};
+
+export function applyUnitTestDetailToManualMetrics(
   summary: UnitTestCsvSummary,
+  perImageRows?: Record<string, string>[] | null,
   existing?: PipelineIterationManualMetrics | null,
-): PipelineIterationManualMetrics {
+): ApplyUnitTestMetricsResult {
   const next: PipelineIterationManualMetrics = { ...(existing ?? {}) };
+  const appliedLabels: string[] = [];
+
   const acc = summary.accuracyPercent;
   if (acc != null && Number.isFinite(acc)) {
     next.exactReadingAccuracyPct = acc;
     next.readAccuracyUt = acc;
+    appliedLabels.push('Exact reading accuracy', 'Read acc. UT');
   }
+
   const n = summary.imagesProcessed;
   if (n != null && Number.isFinite(n) && n > 0) {
     next.unitTestImagesLaptop = n;
+    appliedLabels.push('UT images (laptop)');
   }
-  return next;
+
+  const dialKeys: (keyof PipelineIterationManualMetrics)[] = [
+    'dial1UtPct',
+    'dial2UtPct',
+    'dial3UtPct',
+    'dial4UtPct',
+  ];
+  for (let d = 1; d <= 4; d += 1) {
+    const pct = dialDigitMatchPct(perImageRows ?? undefined, d);
+    if (pct != null) {
+      next[dialKeys[d - 1]!] = pct;
+      appliedLabels.push(`Dial ${d} UT`);
+    }
+  }
+
+  return { metrics: next, appliedLabels };
+}
+
+/** @deprecated Use applyUnitTestDetailToManualMetrics */
+export function applyUnitTestSummaryToManualMetrics(
+  summary: UnitTestCsvSummary,
+  existing?: PipelineIterationManualMetrics | null,
+): PipelineIterationManualMetrics {
+  return applyUnitTestDetailToManualMetrics(summary, null, existing).metrics;
 }
 
 export function pickNewestLink(links: PipelineIterationUnitTestLink[]): PipelineIterationUnitTestLink | null {
