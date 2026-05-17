@@ -126,6 +126,10 @@ const RoboflowHub: React.FC = () => {
               <span>
                 Set <code className="roboflow-hub-code">ROBOFLOW_API_KEY</code> (and optionally{' '}
                 <code className="roboflow-hub-code">ROBOFLOW_WORKSPACE</code>) on the Node server, then restart.
+                Locally: <code className="roboflow-hub-code">src/.env</code>. Production: Elastic Beanstalk environment
+                properties (deploy does not ship <code className="roboflow-hub-code">.env</code> files). Check{' '}
+                <code className="roboflow-hub-code">/api/health</code> — <code className="roboflow-hub-code">roboflow</code>{' '}
+                should be <code className="roboflow-hub-code">true</code>.
               </span>
             </div>
           )}

@@ -44,7 +44,9 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
       try {
         const st = await fetchRoboflowStatus();
         if (!st.configured) {
-          setRfErr('Set ROBOFLOW_API_KEY on the server.');
+          setRfErr(
+            'Roboflow is not configured on the server. Local: add ROBOFLOW_API_KEY to src/.env and restart npm run dev:all. Production: Elastic Beanstalk → Configuration → Environment properties → ROBOFLOW_API_KEY (deploy excludes .env files).',
+          );
           return;
         }
         const data = await fetchRoboflowProjects();

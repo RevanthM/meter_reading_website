@@ -1,0 +1,67 @@
+# One-time or on-demand: set ROBOFLOW_* on Elastic Beanstalk (prod/dev).
+# Requires repo secret ROBOFLOW_API_KEY (same value as local src/.env).
+# Uses the same AWS deploy credentials as deploy-eb.yml.
+name: Sync Roboflow EB environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: Elastic Beanstalk environment
+        required: true
+        default: meter-reading-prod
+        type: choice
+        options:
+          - meter-reading-prod
+          - meter-reading-dev
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-west-2
+
+    steps:
+      - name: Sync Roboflow environment variables
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ROBOFLOW_API_KEY: ${{ secrets.ROBOFLOW_API_KEY }}
+          ROBOFLOW_WORKSPACE: ${{ secrets.ROBOFLOW_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          ENV_NAME="${{ github.event.inputs.target_env }}"
+          if [ -z "${ROBOFLOW_API_KEY:-}" ]; then
+            echo "::error::Add repository secret ROBOFLOW_API_KEY (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          WORKSPACE="${ROBOFLOW_WORKSPACE:-analoggasmeter}"
+          echo "Updating ${ENV_NAME} (workspace=${WORKSPACE})…"
+          aws elasticbeanstalk update-environment \
+            --region "$AWS_REGION" \
+            --environment-name "$ENV_NAME" \
+            --option-settings \
+              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_API_KEY,Value=${ROBOFLOW_API_KEY}" \
+              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_WORKSPACE,Value=${WORKSPACE}"
+          echo "Waiting for environment update…"
+          aws elasticbeanstalk wait environment-updated \
+            --region "$AWS_REGION" \
+            --environment-names "$ENV_NAME"
+          echo "Verifying /api/health…"
+          CNAME=$(aws elasticbeanstalk describe-environments \
+            --region "$AWS_REGION" \
+            --environment-names "$ENV_NAME" \
+            --query 'Environments[0].CNAME' --output text)
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf "http://${CNAME}/api/health" | grep -q '"roboflow":true'; then
+              echo "Roboflow is configured on ${ENV_NAME}."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::warning::Environment updated but /api/health still shows roboflow:false — check app logs."
+          curl -sS "http://${CNAME}/api/health" || true

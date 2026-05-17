@@ -57,6 +57,26 @@ Set in the EB console → **Configuration** → **Software** → **Environment p
 
 - `AWS_S3_BUCKET`, `AWS_REGION`, `AWS_S3_BASE_PREFIX` (if used)
 - `FIREBASE_SERVICE_ACCOUNT_BASE64`, `VITE_*` Firebase client vars as required by `server/index.js` / the SPA
+- **`ROBOFLOW_API_KEY`** — required for Model Factory / Roboflow Hub (`/api/roboflow/*`). Use the same private key as local `src/.env`. **Never** prefix with `VITE_` (the browser must not see it).
+- **`ROBOFLOW_WORKSPACE`** (optional) — e.g. `analoggasmeter` if auto-resolve from the API key fails.
+
+Deploy zips **exclude** `.env` and `src/.env` (see `.github/workflows/deploy-eb.yml`), so Roboflow works locally but stays off in EB until you set these properties.
+
+Verify after an environment restart:
+
+```bash
+curl -sS "https://<your-prod-host>/api/health" | jq .roboflow
+curl -sS "https://<your-prod-host>/api/roboflow/status"
+```
+
+Expect `"roboflow": true` and `{ "configured": true, "workspace": "..." }`.
+
+CLI (same account/region as the environment):
+
+```bash
+eb use meter-reading-prod
+eb setenv ROBOFLOW_API_KEY='your_key' ROBOFLOW_WORKSPACE='analoggasmeter'
+```
 
 Do **not** commit real `.env` files; configure secrets only in EB or AWS Secrets Manager.
 
