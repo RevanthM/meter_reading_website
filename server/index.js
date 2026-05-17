@@ -631,6 +631,36 @@ function normalizeSessionConfidenceValue(raw) {
   return undefined;
 }
 
+/** Normalize iOS `metadata.capture_location` for API consumers. */
+function normalizeCaptureLocation(metadata) {
+  const loc = metadata?.capture_location;
+  if (!loc || typeof loc !== 'object') return null;
+  const latitude = typeof loc.latitude === 'number' && Number.isFinite(loc.latitude) ? loc.latitude : null;
+  const longitude = typeof loc.longitude === 'number' && Number.isFinite(loc.longitude) ? loc.longitude : null;
+  const placeLabel = typeof loc.place_label === 'string' ? loc.place_label.trim() || null : null;
+  const coordinateLabel =
+    typeof loc.coordinate_label === 'string' ? loc.coordinate_label.trim() || null : null;
+  const accuracyM =
+    typeof loc.accuracy_m === 'number' && Number.isFinite(loc.accuracy_m) ? loc.accuracy_m : null;
+  const capturedAt = typeof loc.captured_at === 'string' ? loc.captured_at.trim() || null : null;
+  if (!placeLabel && !coordinateLabel && latitude == null && longitude == null) return null;
+  return { placeLabel, coordinateLabel, latitude, longitude, accuracyM, capturedAt };
+}
+
+/** Short list label: place name or coordinates (not field vs simulator). */
+function formatCaptureLocationFromMetadata(metadata) {
+  const loc = normalizeCaptureLocation(metadata);
+  if (!loc) return null;
+  if (loc.placeLabel) return loc.placeLabel;
+  if (loc.coordinateLabel) return loc.coordinateLabel;
+  if (loc.latitude != null && loc.longitude != null) {
+    const latH = loc.latitude >= 0 ? 'N' : 'S';
+    const lonH = loc.longitude >= 0 ? 'E' : 'W';
+    return `${Math.abs(loc.latitude).toFixed(5)}° ${latH}, ${Math.abs(loc.longitude).toFixed(5)}° ${lonH}`;
+  }
+  return null;
+}
+
 async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER') {
   try {
     const metadataCommand = new GetObjectCommand({
@@ -691,7 +721,8 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       /** Full S3 prefix for this session (trailing slash). Used for status moves. */
       s3SessionPrefix: prefix,
       dateOfReading: metadata.timestamp,
-      location: sourceType === 'simulator' ? 'Simulator' : 'Field Capture',
+      location: formatCaptureLocationFromMetadata(metadata) || 'Location unavailable',
+      captureLocation: normalizeCaptureLocation(metadata),
       type: sourceType,
       status,
       workType: metadata.work_type || workType,
@@ -1234,15 +1265,18 @@ function validateDialDetailsForPatch(dialDetails) {
  * Merge reviewer edits into session `metadata.json` (same bucket). Does not move the session folder.
  * Body: { workType?: string, s3SessionPrefix?: string, patch: { user_correction?, ml_prediction?, dial_details?, ... } }
  */
+const MOBILE_COLLECTOR_PATCHABLE = new Set([
+  'user_correction',
+  'ml_prediction',
+  'ml_raw_prediction',
+  'dial_details',
+  'dial_count',
+]);
+
 app.patch('/api/readings/:id/metadata', async (req, res) => {
   try {
     const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-    if (portalMode !== 'reviewer') {
-      return res.status(403).json({
-        error:
-          'Metadata edits are only allowed in reviewer mode. Send header x-portal-work-mode: reviewer from the portal.',
-      });
-    }
+    const collectorId = String(req.headers['x-user-email'] || '').trim();
 
     const sessionId = req.params.id;
     const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
@@ -1262,17 +1296,36 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       return res.status(400).json({ error: 'patch must be an object with at least one allowed field' });
     }
 
-    for (const k of Object.keys(patch)) {
-      if (!METADATA_PATCHABLE.has(k)) {
-        return res.status(400).json({ error: `Field not allowed in patch: ${k}` });
-      }
-    }
-
     const metaKey = `${serverPrefix}metadata.json`;
     const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
     const meta = JSON.parse(await streamToString(getOut.Body));
     if (String(meta.session_id) !== String(sessionId)) {
       return res.status(500).json({ error: 'metadata session_id does not match URL id' });
+    }
+
+    const isReviewer = portalMode === 'reviewer';
+    const isMobileCollector = portalMode === 'mobile' && collectorId.length > 0;
+    if (!isReviewer && !isMobileCollector) {
+      return res.status(403).json({
+        error:
+          'Metadata edits require x-portal-work-mode: reviewer (portal) or mobile (iOS collector) plus x-user-email.',
+      });
+    }
+
+    if (isMobileCollector) {
+      const owner = String(meta.user_name || meta.user_email || '')
+        .trim()
+        .toLowerCase();
+      if (!owner || owner !== collectorId.toLowerCase()) {
+        return res.status(403).json({ error: 'You can only edit captures uploaded under your collector name.' });
+      }
+    }
+
+    for (const k of Object.keys(patch)) {
+      const allowed = isReviewer ? METADATA_PATCHABLE : MOBILE_COLLECTOR_PATCHABLE;
+      if (!allowed.has(k)) {
+        return res.status(400).json({ error: `Field not allowed in patch: ${k}` });
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'user_correction')) {
@@ -1946,7 +1999,28 @@ app.get('/api/captures/history', async (req, res) => {
       return name === needle;
     });
 
-    matched.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
+    const sortBy =
+      req.query.sortBy === 'confidence'
+        ? 'confidence'
+        : req.query.sortBy === 'reading'
+          ? 'reading'
+          : 'date';
+    const sortOrder = req.query.sortOrder === 'asc' ? 'asc' : 'desc';
+    matched.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === 'confidence') {
+        const l = normalizeSessionConfidenceValue(a.confidence) ?? -1;
+        const r = normalizeSessionConfidenceValue(b.confidence) ?? -1;
+        cmp = l - r;
+      } else if (sortBy === 'reading') {
+        cmp = String(a.meterValue || '').localeCompare(String(b.meterValue || ''), undefined, {
+          numeric: true,
+        });
+      } else {
+        cmp = new Date(a.dateOfReading).getTime() - new Date(b.dateOfReading).getTime();
+      }
+      return sortOrder === 'asc' ? cmp : -cmp;
+    });
     const total = matched.length;
     const captures = matched.slice(offset, offset + limit);
 
@@ -1957,6 +2031,8 @@ app.get('/api/captures/history', async (req, res) => {
       total,
       offset,
       limit,
+      sortBy,
+      sortOrder,
       captures,
     });
   } catch (error) {

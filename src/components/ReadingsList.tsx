@@ -1000,7 +1000,7 @@ const ReadingsList: FC = () => {
                   </button>
                 </th>
                 <th>Location</th>
-                <th>Type</th>
+                <th>Source</th>
                 <th>Status</th>
                 <th scope="col" className="readings-th-sortable">
                   <button
@@ -1051,7 +1051,16 @@ const ReadingsList: FC = () => {
                     </button>
                   </td>
                   <td>
-                    <div className="cell-with-icon">
+                    <div
+                      className="cell-with-icon"
+                      title={
+                        reading.captureLocation?.coordinateLabel ||
+                        (reading.captureLocation?.latitude != null &&
+                        reading.captureLocation?.longitude != null
+                          ? `${reading.captureLocation.latitude}, ${reading.captureLocation.longitude}`
+                          : undefined)
+                      }
+                    >
                       <MapPin size={16} className="cell-icon" />
                       <span>{reading.location}</span>
                     </div>

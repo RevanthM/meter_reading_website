@@ -70,9 +70,21 @@ export type DialDetailFromMetadata = {
   stage_3?: DialStage3Info;
 };
 
+/** GPS snapshot from `metadata.capture_location` (iOS). */
+export type CaptureLocation = {
+  placeLabel?: string | null;
+  coordinateLabel?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracyM?: number | null;
+  capturedAt?: string | null;
+};
+
 export interface S3MeterReading extends MeterReading {
   /** Exact S3 session prefix (…/sessionId/) for server-side moves. */
   s3SessionPrefix?: string;
+  /** Full GPS / address payload; `location` is the short list label derived from this. */
+  captureLocation?: CaptureLocation | null;
   rawPrediction?: string;
   isCorrect?: boolean;
   confidence?: number;

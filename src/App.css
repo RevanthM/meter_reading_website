@@ -2148,6 +2148,33 @@ body {
   color: var(--text-primary);
 }
 
+.metadata-item--stacked .value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.reading-detail-location-primary {
+  font-weight: 600;
+}
+
+.reading-detail-location-sub {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.reading-detail-location-map-link {
+  font-size: 0.85rem;
+  color: var(--accent-amber);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.reading-detail-location-map-link:hover {
+  text-decoration: underline;
+}
+
 .meter-value-large {
   font-family: var(--font-mono);
   font-size: 1.5rem !important;

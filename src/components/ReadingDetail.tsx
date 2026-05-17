@@ -42,6 +42,12 @@ import {
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import {
+  captureLocationListLine,
+  captureLocationMapsUrl,
+  formatLatLon,
+  formatUploadModeLabel,
+} from '../utils/captureLocation';
 
 const PORTAL_WORK_TYPES: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
@@ -1498,16 +1504,51 @@ const ReadingDetail: React.FC = () => {
                   </span>
                   <span className="value">{formatReadingShortDate(reading.dateOfReading)}</span>
                 </div>
-                <div className="metadata-item">
+                <div className="metadata-item metadata-item--stacked">
                   <span className="label">
                     <MapPin size={16} aria-hidden /> Location
                   </span>
-                  <span className="value">{reading.location}</span>
+                  <div className="value reading-detail-location-block">
+                    <span className="reading-detail-location-primary">
+                      {captureLocationListLine(reading.captureLocation) || reading.location}
+                    </span>
+                    {reading.captureLocation?.placeLabel ? (
+                      <span className="reading-detail-location-sub">
+                        {reading.captureLocation.coordinateLabel ||
+                          (reading.captureLocation.latitude != null &&
+                          reading.captureLocation.longitude != null
+                            ? formatLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)
+                            : null)}
+                        {reading.captureLocation.accuracyM != null
+                          ? ` · ±${Math.round(reading.captureLocation.accuracyM)} m GPS`
+                          : ''}
+                      </span>
+                    ) : reading.captureLocation?.latitude != null &&
+                      reading.captureLocation?.longitude != null ? (
+                      <span className="reading-detail-location-sub reading-detail-location-coords">
+                        {formatLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)}
+                        {reading.captureLocation.accuracyM != null
+                          ? ` · ±${Math.round(reading.captureLocation.accuracyM)} m`
+                          : ''}
+                      </span>
+                    ) : null}
+                    {reading.captureLocation &&
+                    captureLocationMapsUrl(reading.captureLocation) ? (
+                      <a
+                        className="reading-detail-location-map-link"
+                        href={captureLocationMapsUrl(reading.captureLocation)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open in Maps
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="metadata-item">
                   <span className="label">
                     {reading.type === 'simulator' ? <Monitor size={16} aria-hidden /> : <Radio size={16} aria-hidden />}{' '}
-                    Type
+                    Source
                   </span>
                   <span className={`type-badge ${reading.type}`}>
                     {reading.type === 'simulator' ? 'Simulator' : 'Field'}
@@ -1563,11 +1604,17 @@ const ReadingDetail: React.FC = () => {
                     </span>
                   </div>
                 ) : null}
-                {(reading.uploadMode || reading.imageSource) ? (
+                {reading.uploadMode ? (
                   <div className="metadata-item">
-                    <span className="label">Capture</span>
-                    <span className="value">
-                      {[reading.uploadMode, reading.imageSource].filter(Boolean).join(' · ')}
+                    <span className="label">Upload mode</span>
+                    <span className="value">{formatUploadModeLabel(reading.uploadMode)}</span>
+                  </div>
+                ) : null}
+                {reading.imageSource ? (
+                  <div className="metadata-item">
+                    <span className="label">Image source</span>
+                    <span className="value" style={{ textTransform: 'capitalize' }}>
+                      {reading.imageSource}
                     </span>
                   </div>
                 ) : null}
