@@ -2143,6 +2143,25 @@ app.get('/api/unit-test/runs/:s3Key', async (req, res) => {
   }
 });
 
+/** Presigned download URL for a unit-test CSV (query s3Key — keys contain `/`). */
+app.get('/api/unit-test/download-url', async (req, res) => {
+  try {
+    const key = String(req.query.s3Key ?? '').trim();
+    if (!key.endsWith('.csv') || key.includes('..')) {
+      return res.status(400).json({ error: 'Invalid s3Key' });
+    }
+    const url = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }),
+      { expiresIn: 3600 },
+    );
+    res.json({ url, expiresInSeconds: 3600 });
+  } catch (error) {
+    console.error('GET /api/unit-test/download-url:', error);
+    res.status(500).json({ error: 'Failed to create download URL' });
+  }
+});
+
 /** Presigned download URL for a unit-test CSV. */
 app.get('/api/unit-test/runs/:s3Key/download-url', async (req, res) => {
   try {

@@ -1,39 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft,
-  ArrowRight,
-  ExternalLink,
-  Factory,
-  Layers,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Save,
-  Trash2,
-} from 'lucide-react';
+import { ArrowLeft, Factory, Layers, Loader2, Plus, RefreshCw, Save } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useReadings } from '../context/ReadingsContext';
 import {
   fetchPipelineIterations,
+  fetchUnitTestRunDownloadUrl,
   savePipelineIterations,
   type PipelineIterationRecord,
+  type PipelineIterationUnitTestLink,
 } from '../services/api';
-import { fetchRoboflowProjects, fetchRoboflowStatus, type RoboflowProject } from '../services/roboflowApi';
 import {
-  FACTORY_STAGES,
-  type FactoryStageId,
-  factoryStageLabel,
+  columnForStage,
+  FACTORY_COLUMNS,
+  FACTORY_PRODUCT_LINES,
+  type FactoryProductLine,
   factoryStageToLegacyStatus,
   inferFactoryStage,
-  inferProductLine,
+  inferProductLineForRow,
   nextFactoryStage,
-  productLineDisplay,
 } from '../constants/factoryStages';
 import PipelineIterationFormModal from './PipelineIterationFormModal';
+import ModelFactoryIterationRow from './ModelFactoryIterationRow';
 import {
   iterationDeleteConfirmMessage,
-  iterationEditSortKey,
   newestShippedIterationIdsByPipeline,
   removePipelineIterationRow,
   sortIterationsByEditDateDesc,
@@ -74,22 +64,6 @@ function cloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
   return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
 }
 
-function shipChips(row: PipelineIterationRecord): string[] {
-  const ship = row.modelShip;
-  const chips: string[] = [];
-  if (ship?.dialDetection) chips.push('Dial finder');
-  if (ship?.keypoint) chips.push('Keypoint reader');
-  if (!chips.length) chips.push('Not set');
-  return chips;
-}
-
-function fmtListDate(iso: string | null | undefined): string {
-  if (!iso?.trim()) return '—';
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return iso;
-  return new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
 const ModelFactoryPage: FC = () => {
   const navigate = useNavigate();
   const { userEmail } = useAuth();
@@ -100,12 +74,11 @@ const ModelFactoryPage: FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [stageFilter, setStageFilter] = useState<FactoryStageId | 'all'>('all');
+  const [productLineFilter, setProductLineFilter] = useState<FactoryProductLine | 'all'>('all');
+  const [utDownloadBusy, setUtDownloadBusy] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDraft, setModalDraft] = useState<PipelineIterationRecord>(() => newEmptyRow());
 
-  const [rfConfigured, setRfConfigured] = useState(false);
-  const [rfProjects, setRfProjects] = useState<RoboflowProject[]>([]);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
@@ -128,61 +101,60 @@ const ModelFactoryPage: FC = () => {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const st = await fetchRoboflowStatus();
-        setRfConfigured(st.configured);
-        if (st.configured) {
-          const data = await fetchRoboflowProjects();
-          setRfProjects(data.projects || []);
-        }
-      } catch {
-        setRfConfigured(false);
-      }
-    })();
-  }, []);
+  const rowsForView = useMemo(() => {
+    if (productLineFilter === 'all') return rows;
+    return rows.filter((r) => inferProductLineForRow(r) === productLineFilter);
+  }, [rows, productLineFilter]);
 
-  const stageCounts = useMemo(() => {
-    const m = new Map<FactoryStageId, number>();
-    for (const s of FACTORY_STAGES) m.set(s.id, 0);
+  const productLineCounts = useMemo(() => {
+    const m = new Map<FactoryProductLine, number>();
+    for (const pl of FACTORY_PRODUCT_LINES) m.set(pl.id, 0);
+    let unknown = 0;
     for (const r of rows) {
-      const st = inferFactoryStage(r);
-      m.set(st, (m.get(st) ?? 0) + 1);
+      const line = inferProductLineForRow(r);
+      if (line === 'unknown') unknown += 1;
+      else m.set(line, (m.get(line) ?? 0) + 1);
     }
-    return m;
+    return { lines: m, unknown };
   }, [rows]);
 
-  const listGroups = useMemo(() => {
-    if (stageFilter !== 'all') {
-      return [
-        {
-          stage: stageFilter,
-          items: sortIterationsByEditDateDesc(rows.filter((r) => inferFactoryStage(r) === stageFilter)),
-        },
-      ];
-    }
-    const groups = FACTORY_STAGES.map((st) => ({
-      stage: st.id,
-      items: sortIterationsByEditDateDesc(rows.filter((r) => inferFactoryStage(r) === st.id)),
-    })).filter((g) => g.items.length > 0);
-
-    // Order stage sections by most recently edited row in each group
-    return groups.sort((ga, gb) => {
-      const maxA = Math.max(...ga.items.map(iterationEditSortKey), 0);
-      const maxB = Math.max(...gb.items.map(iterationEditSortKey), 0);
-      if (maxA !== maxB) return maxB - maxA;
-      const ia = FACTORY_STAGES.findIndex((s) => s.id === ga.stage);
-      const ib = FACTORY_STAGES.findIndex((s) => s.id === gb.stage);
-      return ia - ib;
-    });
-  }, [rows, stageFilter]);
+  const boardColumns = useMemo(
+    () =>
+      FACTORY_COLUMNS.map((col) => ({
+        ...col,
+        items: sortIterationsByEditDateDesc(
+          rowsForView.filter((r) => columnForStage(inferFactoryStage(r)) === col.id),
+        ),
+      })),
+    [rowsForView],
+  );
 
   const newestShippedIds = useMemo(
     () =>
-      newestShippedIterationIdsByPipeline(rows, (r) => inferFactoryStage(r) === 'shipped'),
-    [rows],
+      newestShippedIterationIdsByPipeline(
+        rowsForView,
+        (r) => inferFactoryStage(r) === 'shipped',
+      ),
+    [rowsForView],
   );
+
+  const downloadUnitTestCsv = async (link: PipelineIterationUnitTestLink) => {
+    setUtDownloadBusy(link.s3Key);
+    try {
+      const { url } = await fetchUnitTestRunDownloadUrl(link.s3Key);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = link.fileName || link.s3Key.split('/').pop() || 'unit-test.csv';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'CSV download failed');
+    } finally {
+      setUtDownloadBusy(null);
+    }
+  };
 
   const openAdd = () => {
     setModalDraft(newEmptyRow());
@@ -281,7 +253,7 @@ const ModelFactoryPage: FC = () => {
             <div>
               <h1>Model factory</h1>
               <p>
-                End-to-end pipeline: data → labeling → training → model ready → test → shipped. Same registry as{' '}
+                Four stages at a glance: labelling → training → ready → shipped. Same registry as{' '}
                 <button type="button" className="training-hub-text-btn" onClick={() => navigate('/pipeline-iterations')}>
                   pipeline iterations
                 </button>
@@ -304,31 +276,8 @@ const ModelFactoryPage: FC = () => {
           </p>
         ) : null}
 
-        <section className="model-factory-line" aria-label="Assembly line">
-          <button
-            type="button"
-            className={`model-factory-line-station${stageFilter === 'all' ? ' model-factory-line-station--active' : ''}`}
-            onClick={() => setStageFilter('all')}
-          >
-            <span className="model-factory-line-label">All</span>
-            <span className="model-factory-line-count">{rows.length}</span>
-          </button>
-          {FACTORY_STAGES.map((st, i) => (
-            <div key={st.id} className="model-factory-line-connector-wrap">
-              {i > 0 ? <span className="model-factory-line-arrow" aria-hidden /> : null}
-              <button
-                type="button"
-                className={`model-factory-line-station${stageFilter === st.id ? ' model-factory-line-station--active' : ''}`}
-                onClick={() => setStageFilter(st.id)}
-              >
-                <span className="model-factory-line-label">{st.short}</span>
-                <span className="model-factory-line-count">{stageCounts.get(st.id) ?? 0}</span>
-              </button>
-            </div>
-          ))}
-        </section>
-
         <div className="model-factory-toolbar">
+          <div className="model-factory-toolbar-actions">
           <button type="button" className="view-button" onClick={() => void load()} disabled={loading}>
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
             Refresh
@@ -341,6 +290,31 @@ const ModelFactoryPage: FC = () => {
             <Plus size={16} />
             New iteration
           </button>
+          </div>
+          <div className="model-factory-product-filters" role="group" aria-label="Product line">
+            <button
+              type="button"
+              className={`model-factory-product-filter${productLineFilter === 'all' ? ' model-factory-product-filter--active' : ''}`}
+              onClick={() => setProductLineFilter('all')}
+            >
+              All
+              <span className="model-factory-product-filter-count">{rows.length}</span>
+            </button>
+            {FACTORY_PRODUCT_LINES.map((pl) => (
+              <button
+                key={pl.id}
+                type="button"
+                className={`model-factory-product-filter model-factory-product-filter--${pl.id}${productLineFilter === pl.id ? ' model-factory-product-filter--active' : ''}`}
+                onClick={() => setProductLineFilter(pl.id)}
+                title={pl.label}
+              >
+                {pl.short}
+                <span className="model-factory-product-filter-count">
+                  {productLineCounts.lines.get(pl.id) ?? 0}
+                </span>
+              </button>
+            ))}
+          </div>
           <button type="button" className="save-button" onClick={() => void handleSaveS3()} disabled={saving || loading}>
             {saving ? <Loader2 size={18} className="spin" /> : <Save size={18} />}
             Save to S3
@@ -353,166 +327,48 @@ const ModelFactoryPage: FC = () => {
             <p>Loading factory…</p>
           </div>
         ) : (
-          <div className="model-factory-list">
-            {listGroups.map((group) => (
-              <section key={group.stage} className="model-factory-list-group" aria-label={factoryStageLabel(group.stage)}>
-                {stageFilter === 'all' ? (
-                  <h2 className={`model-factory-list-group-title model-factory-list-group-title--${group.stage}`}>
-                    {factoryStageLabel(group.stage)}
-                    <span className="model-factory-list-group-count">{group.items.length}</span>
-                  </h2>
-                ) : null}
-                <ul className="model-factory-list-rows">
-                  {group.items.map((r) => {
-                    const stage = inferFactoryStage(r);
-                    const line = inferProductLine(r.modelId);
-                    const nxt = nextFactoryStage(stage);
-                    const rf = r.roboflowLinks;
-                    const rfLabel =
-                      rf?.dialDetection?.datasetSlug || rf?.keypoint?.datasetSlug
-                        ? [
-                            rf.dialDetection ? `Dial v${rf.dialDetection.version ?? '?'}` : null,
-                            rf.keypoint ? `KP v${rf.keypoint.version ?? '?'}` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')
-                        : '—';
-                    return (
-                      <li key={r.id} className={`model-factory-list-row model-factory-list-row--${stage}`}>
-                        <div
-                          className="model-factory-list-date"
-                          title={
-                            r.updatedAt
-                              ? `Last edited ${fmtListDate(r.updatedAt)} · Planned start ${fmtListDate(r.startDate)}`
-                              : `Planned start ${fmtListDate(r.startDate)}`
-                          }
-                        >
-                          <span className="model-factory-list-date-label">
-                            {r.updatedAt ? 'Edited' : 'Start'}
-                          </span>
-                          <time dateTime={(r.updatedAt || r.startDate) || undefined}>
-                            {fmtListDate(r.updatedAt || r.startDate)}
-                          </time>
-                        </div>
-                        <div className="model-factory-list-main">
-                          <div className="model-factory-list-head">
-                            <h3>
-                              {r.pipeline || 'Unnamed'}{' '}
-                              <span className="model-factory-card-iter">#{r.iterationNumber}</span>
-                              {stage === 'shipped' && newestShippedIds.has(r.id) ? (
-                                <span className="model-factory-new-pill" title="Latest shipped for this pipeline">
-                                  New
-                                </span>
-                              ) : null}
-                            </h3>
-                            <span className={`model-factory-stage-pill model-factory-stage-pill--${stage}`}>
-                              {factoryStageLabel(stage)}
-                            </span>
-                          </div>
-                          <p className="model-factory-list-meta">
-                            <code>{r.modelId || '—'}</code> · {productLineDisplay(line)} · {r.appVersion || '—'}
-                          </p>
-
-                          <div className="model-factory-list-chips">
-                    {shipChips(r).map((c) => (
-                      <span key={c} className="model-factory-ship-chip">
-                        {c}
-                      </span>
-                    ))}
-                          </div>
-                          <dl className="model-factory-list-facts">
-                            <div>
-                              <dt>Images</dt>
-                              <dd>{r.imageCount ?? r.portalStats?.totalImages ?? '—'}</dd>
-                            </div>
-                            <div>
-                              <dt>Unit tests</dt>
-                              <dd>{r.linkedUnitTests?.length ? `${r.linkedUnitTests.length} CSV` : '—'}</dd>
-                            </div>
-                            <div>
-                              <dt>Roboflow</dt>
-                              <dd>{rfLabel}</dd>
-                            </div>
-                            <div>
-                              <dt>Weights</dt>
-                              <dd>
-                                {[
-                                  r.modelWeights?.dialDetection ? 'Dial .pt' : null,
-                                  r.modelWeights?.keypoint ? 'KP .pt' : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(' · ') || '—'}
-                              </dd>
-                            </div>
-                          </dl>
-                          {r.scope ? <p className="model-factory-list-scope">{r.scope}</p> : null}
-                        </div>
-                        <div className="model-factory-list-actions">
-                          <button
-                            type="button"
-                            className={`view-button model-factory-list-edit model-factory-list-edit--${stage}`}
-                            onClick={() => openEdit(r)}
-                          >
-                            Edit · {factoryStageLabel(stage)}
-                          </button>
-                    {nxt ? (
-                      <button type="button" className="view-button" onClick={() => void advanceStage(r)} disabled={saving}>
-                        <ArrowRight size={14} />
-                        {factoryStageLabel(nxt)}
-                      </button>
-                    ) : null}
-                    {rfConfigured && rf?.keypoint?.datasetSlug ? (
-                      <a
-                        href={`https://app.roboflow.com/${rf.keypoint.datasetSlug}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="roboflow-hub-link"
-                      >
-                        Roboflow <ExternalLink size={12} />
-                      </a>
-                    ) : null}
-                          <button
-                            type="button"
-                            className="view-button model-factory-list-delete"
-                            title="Delete iteration"
-                            aria-label={`Delete ${r.pipeline || 'iteration'} #${r.iterationNumber}`}
-                            onClick={() => void deleteIteration(r)}
-                            disabled={saving}
-                          >
-                            <Trash2 size={14} />
-                            Delete
-                          </button>
-                        </div>
-                      </li>
-                    );
-                  })}
+          <div className="model-factory-board" role="region" aria-label="Pipeline board">
+            {boardColumns.map((col) => (
+              <section
+                key={col.id}
+                className={`model-factory-board-column model-factory-board-column--${col.id}`}
+                aria-label={col.label}
+              >
+                <header className="model-factory-board-column-head">
+                  <h2 className="model-factory-board-column-title">{col.label}</h2>
+                  <span className="model-factory-board-column-count">{col.items.length}</span>
+                  <p className="model-factory-board-column-hint">{col.hint}</p>
+                </header>
+                <ul className="model-factory-list-rows model-factory-board-column-body">
+                  {col.items.map((r) => (
+                    <ModelFactoryIterationRow
+                      key={r.id}
+                      row={r}
+                      showNewPill={inferFactoryStage(r) === 'shipped' && newestShippedIds.has(r.id)}
+                      saving={saving}
+                      utDownloadBusy={utDownloadBusy}
+                      onEdit={openEdit}
+                      onAdvance={(row) => void advanceStage(row)}
+                      onDelete={(row) => void deleteIteration(row)}
+                      onDownloadUt={(link) => void downloadUnitTestCsv(link)}
+                    />
+                  ))}
                 </ul>
+                {!col.items.length ? (
+                  <p className="model-factory-board-empty">No iterations in {col.label.toLowerCase()}.</p>
+                ) : null}
               </section>
             ))}
-            {!listGroups.length ? (
-              <p className="pipeline-iterations-empty">
-                {rows.length ? 'No iterations in this stage.' : 'No iterations yet — create one to start the line.'}
+            {!rowsForView.length ? (
+              <p className="pipeline-iterations-empty model-factory-board-empty-all">
+                {rows.length
+                  ? `No iterations for ${productLineFilter.toUpperCase()}.`
+                  : 'No iterations yet — create one to start the line.'}
               </p>
             ) : null}
           </div>
         )}
 
-        {rfConfigured && rfProjects.length > 0 ? (
-          <section className="model-factory-rf-ref">
-            <h2>Roboflow projects</h2>
-            <p className="pipeline-iteration-form-hint">
-              Link projects to an iteration in <strong>Edit</strong>. p1 = Anica, p2 = Sempra, p3 = Hybrid.
-            </p>
-            <div className="model-factory-rf-chips">
-              {rfProjects.slice(0, 12).map((p) => (
-                <span key={p.datasetSlug} className="model-factory-rf-chip" title={p.type || ''}>
-                  {p.name}
-                  {p.type ? ` · ${p.type}` : ''}
-                </span>
-              ))}
-            </div>
-          </section>
-        ) : null}
       </main>
 
       <PipelineIterationFormModal

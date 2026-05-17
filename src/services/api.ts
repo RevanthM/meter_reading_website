@@ -390,6 +390,23 @@ export async function fetchUnitTestRunDetail(
   }
 }
 
+export async function fetchUnitTestRunDownloadUrl(
+  s3Key: string,
+): Promise<{ url: string; expiresInSeconds: number }> {
+  const q = new URLSearchParams({ s3Key });
+  try {
+    const response = await fetch(`${API_BASE_URL}/unit-test/download-url?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<{ url: string; expiresInSeconds: number }>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Unit test CSV download failed.');
+  }
+}
+
 export type PipelineIterationWeightRole = 'dial_detection' | 'keypoint';
 
 export interface UploadPipelineIterationWeightsResponse {

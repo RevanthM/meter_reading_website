@@ -213,7 +213,7 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
       <fieldset className="pipeline-iteration-form-section model-factory-form-section">
         <legend>Factory — stage &amp; ship</legend>
         <p className="pipeline-iteration-form-hint">
-          Product line from model id: <strong>{productLineDisplay(line)}</strong> (p1 Anica · p2 Sempra · p3 Hybrid).
+          Product line from model id: <strong>{productLineDisplay(line)}</strong> (p1 Sempra · p2 Anica · p3 Sempra + Anica).
         </p>
         <div className="pipeline-iteration-form-grid">
           <label>
