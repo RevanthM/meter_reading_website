@@ -1,0 +1,115 @@
+name: Restart Elastic Beanstalk
+
+# Abort a stuck update (if any) and restart app servers. Does not deploy new code.
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Elastic Beanstalk environment"
+        required: true
+        default: meter-reading-prod
+        type: choice
+        options:
+          - meter-reading-dev
+          - meter-reading-prod
+      abort_update:
+        description: "Abort in-progress environment update first"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eb-restart-${{ inputs.target_env }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Describe environment
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}" \
+            --query "Environments[0].[EnvironmentName,Status,Health,HealthStatus,VersionLabel]" \
+            --output table
+
+      - name: Abort stuck update
+        if: inputs.abort_update == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          STATUS=$(aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}" \
+            --query "Environments[0].Status" \
+            --output text)
+          echo "Current status: $STATUS"
+          if [ "$STATUS" = "Updating" ]; then
+            echo "Aborting environment update…"
+            aws elasticbeanstalk abort-environment-update \
+              --environment-name "${{ inputs.target_env }}" \
+              --region "${AWS_REGION}"
+            echo "Waiting 90s for abort to settle…"
+            sleep 90
+          else
+            echo "Not Updating — skip abort."
+          fi
+
+      - name: Restart application servers
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws elasticbeanstalk restart-app-server \
+            --environment-name "${{ inputs.target_env }}" \
+            --region "${AWS_REGION}"
+          echo "Restart requested."
+
+      - name: Wait for environment Ready
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "Polling until Status=Ready (max ~15 min)…"
+          for i in $(seq 1 45); do
+            read -r STATUS HEALTH <<< "$(aws elasticbeanstalk describe-environments \
+              --region "${AWS_REGION}" \
+              --environment-names "${{ inputs.target_env }}" \
+              --query "Environments[0].[Status,Health]" \
+              --output text)"
+            echo "[$i] Status=$STATUS Health=$HEALTH"
+            if [ "$STATUS" = "Ready" ]; then
+              echo "Environment is Ready."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for Ready." >&2
+          exit 1
+
+      - name: Summary
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}" \
+            --query "Environments[0].[EnvironmentName,Status,Health,HealthStatus,CNAME]" \
+            --output table >> "$GITHUB_STEP_SUMMARY"
