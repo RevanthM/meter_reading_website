@@ -9,11 +9,12 @@ on:
       target_env:
         description: Elastic Beanstalk environment
         required: true
-        default: meter-reading-prod
+        default: amr-portal-prod
         type: choice
         options:
-          - meter-reading-prod
+          - amr-portal-prod
           - meter-reading-dev
+          - meter-reading-prod
 
 permissions:
   contents: read

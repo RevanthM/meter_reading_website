@@ -1,6 +1,12 @@
 # Deploy to AWS Elastic Beanstalk
 
-Production URL (example): [meter-reading-prod on Elastic Beanstalk](http://meter-reading-prod.eba-wejhhxwm.us-west-2.elasticbeanstalk.com/).
+Production URL: **`amr-portal-prod`** (current). Legacy: [meter-reading-prod](http://meter-reading-prod.eba-wejhhxwm.us-west-2.elasticbeanstalk.com/) (stuck / retired when v2 is live).
+
+| Environment | Branch (auto-deploy) | Purpose |
+|---------------|----------------------|---------|
+| `amr-portal-prod` | `main` | Production portal |
+| `meter-reading-dev` | `reetika` | Dev / staging |
+| `meter-reading-prod` | manual only | Legacy prod |
 
 ## Prerequisites
 
@@ -35,9 +41,22 @@ This creates `.elasticbeanstalk/config.yml` (local only; sensitive bits stay out
 Link the CLI to the environment:
 
 ```bash
-eb use meter-reading-prod
+eb use amr-portal-prod
 # replace with the exact Environment name from the console if different
 ```
+
+## Create a new environment (e.g. `amr-portal-prod`)
+
+GitHub Actions → **Create Elastic Beanstalk environment** → defaults clone from `meter-reading-dev` (IAM profile, S3 env vars, Node platform).
+
+Or locally (account with EB permissions):
+
+```bash
+aws elasticbeanstalk describe-environments --region us-west-2 \
+  --environment-names amr-portal-prod --output table
+```
+
+After the env is **Ready**, deploy via **Deploy to Elastic Beanstalk** (target `amr-portal-prod`) or push to `main`.
 
 ## Build and deploy
 
