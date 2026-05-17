@@ -98,8 +98,9 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
     try {
       const detail = await fetchRoboflowProjectDetail(slug);
       setVersionLists((prev) => ({ ...prev, [slug]: detail.versions }));
-      if (detail.modelsUrl) {
-        setModelsUrls((prev) => ({ ...prev, [slug]: detail.modelsUrl }));
+      const modelsUrl = detail.modelsUrl;
+      if (modelsUrl) {
+        setModelsUrls((prev) => ({ ...prev, [slug]: modelsUrl }));
       }
       const trained =
         detail.trainedModels?.length > 0
@@ -149,8 +150,9 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
         try {
           const detail = await fetchRoboflowProjectDetail(slug);
           setVersionLists((prev) => ({ ...prev, [slug]: detail.versions }));
-          if (detail.modelsUrl) {
-            setModelsUrls((prev) => ({ ...prev, [slug]: detail.modelsUrl }));
+          const modelsUrl = detail.modelsUrl;
+          if (modelsUrl) {
+            setModelsUrls((prev) => ({ ...prev, [slug]: modelsUrl }));
           }
           const trained =
             detail.trainedModels?.length > 0
