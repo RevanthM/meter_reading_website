@@ -49,11 +49,14 @@ function newEmptyRow(): PipelineIterationRecord {
     imagesAddedSinceLastIteration: null,
     currentStatus: 'Planning',
     subStatus: '',
+    readyToTestSimulatorSubStatus: '',
+    readyToTestUnitTestSubStatus: '',
     outcome: '',
     portalStats: null,
     manualMetrics: {},
     linkedUnitTests: [],
     factoryStage: 'planning',
+    factoryStageSubStatus: '',
     modelShip: { dialDetection: false, keypoint: true },
     roboflowLinks: null,
     modelWeights: null,
@@ -67,7 +70,7 @@ function cloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
 const ModelFactoryPage: FC = () => {
   const navigate = useNavigate();
   const { userEmail } = useAuth();
-  const { filteredReadings, workType, dataSource } = useReadings();
+  const { filteredReadings, workType, dataSource, ensureReadingsLoaded } = useReadings();
 
   const [rows, setRows] = useState<PipelineIterationRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +81,10 @@ const ModelFactoryPage: FC = () => {
   const [utDownloadBusy, setUtDownloadBusy] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDraft, setModalDraft] = useState<PipelineIterationRecord>(() => newEmptyRow());
+
+  useEffect(() => {
+    if (modalOpen) void ensureReadingsLoaded();
+  }, [modalOpen, ensureReadingsLoaded]);
 
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
@@ -253,7 +260,7 @@ const ModelFactoryPage: FC = () => {
             <div>
               <h1>Model factory</h1>
               <p>
-                Four stages at a glance: labelling → training → ready → shipped. Same registry as{' '}
+                Four stages at a glance: labelling → training → ready → deployed. Same registry as{' '}
                 <button type="button" className="training-hub-text-btn" onClick={() => navigate('/pipeline-iterations')}>
                   pipeline iterations
                 </button>
@@ -284,7 +291,7 @@ const ModelFactoryPage: FC = () => {
           </button>
           <button type="button" className="view-button" onClick={() => navigate('/training')}>
             <Layers size={16} />
-            Training hub
+            Model Training Center
           </button>
           <button type="button" className="view-button" onClick={openAdd}>
             <Plus size={16} />
@@ -374,6 +381,7 @@ const ModelFactoryPage: FC = () => {
       <PipelineIterationFormModal
         open={modalOpen}
         initial={modalDraft}
+        existingIterations={rows}
         onClose={() => setModalOpen(false)}
         onSave={commitModalRow}
         onDelete={

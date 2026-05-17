@@ -34,14 +34,20 @@ import {
   ChevronRight,
   UserCheck,
   Pencil,
+  XCircle,
 } from 'lucide-react';
 import {
+  approveSessionForUnitTest,
   fetchReadingById,
   patchSessionMetadata,
+  removeSessionFromTestDataset,
+  type ImageDifficulty,
+  type ReviewerDatasetDestination,
   type SessionMetadataPatch,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
 import {
   captureLocationListLine,
   captureLocationMapsUrl,
@@ -515,6 +521,8 @@ const ReadingDetail: React.FC = () => {
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
   const isLabelerMode = portalWorkMode === 'labeler';
+  const isReviewerSaveMode = portalWorkMode === 'reviewer' || portalWorkMode === 'admin';
+  const isTestDataReviewerMode = portalWorkMode === 'test_data_reviewer';
 
   const workTypeForApi = useMemo((): WorkType => {
     const q = searchParams.get('workType');
@@ -614,7 +622,10 @@ const ReadingDetail: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
-  const [recommendTraining, setRecommendTraining] = useState(false);
+  const [datasetDestination, setDatasetDestination] = useState<ReviewerDatasetDestination>(null);
+  const [imageDifficulty, setImageDifficulty] = useState<ImageDifficulty>(null);
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [removeFromTestBusy, setRemoveFromTestBusy] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -652,7 +663,11 @@ const ReadingDetail: React.FC = () => {
     setUserCorrection(exp || fromDials);
     setLocalDialRows(baseRows.map((d) => ({ ...d })));
     initialDialRowsRef.current = baseRows.map((d) => ({ ...d }));
-    setRecommendTraining(reading.reviewerRecommendTraining === true);
+    setDatasetDestination(
+      reading.reviewerDatasetDestination ??
+        (reading.reviewerRecommendTraining ? 'training' : null),
+    );
+    setImageDifficulty(reading.imageDifficulty ?? null);
   }, [
     reading?.id,
     reading?.status,
@@ -662,6 +677,8 @@ const ReadingDetail: React.FC = () => {
     reading?.comments,
     reading?.dialDetails,
     reading?.reviewerRecommendTraining,
+    reading?.reviewerDatasetDestination,
+    reading?.imageDifficulty,
   ]);
 
   const isDirty = useMemo(() => {
@@ -675,14 +692,17 @@ const ReadingDetail: React.FC = () => {
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
-    const baseRecommend = r.reviewerRecommendTraining === true;
+    const baseDest =
+      r.reviewerDatasetDestination ?? (r.reviewerRecommendTraining ? 'training' : null);
+    const baseDifficulty = r.imageDifficulty ?? null;
     return (
       userCorrection !== baseExpected ||
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
       selectedStatus !== r.status ||
-      recommendTraining !== baseRecommend
+      datasetDestination !== baseDest ||
+      imageDifficulty !== baseDifficulty
     );
   }, [
     isLabelerMode,
@@ -693,7 +713,8 @@ const ReadingDetail: React.FC = () => {
     localDialRows,
     comments,
     selectedStatus,
-    recommendTraining,
+    datasetDestination,
+    imageDifficulty,
   ]);
 
   const performSaveAction = useCallback(async (): Promise<boolean> => {
@@ -748,14 +769,17 @@ const ReadingDetail: React.FC = () => {
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
-    const baseRecommend = r.reviewerRecommendTraining === true;
+    const baseDest =
+      r.reviewerDatasetDestination ?? (r.reviewerRecommendTraining ? 'training' : null);
+    const baseDifficulty = r.imageDifficulty ?? null;
 
     const metaDirty =
       userCorrection !== baseExpected ||
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
-      recommendTraining !== baseRecommend;
+      datasetDestination !== baseDest ||
+      imageDifficulty !== baseDifficulty;
 
     const statusWillChange = selectedStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
@@ -768,8 +792,13 @@ const ReadingDetail: React.FC = () => {
           patch.ml_prediction = mlPrediction;
           patch.user_correction = userCorrection;
           patch.portal_review_notes = comments;
-          if (recommendTraining !== baseRecommend) {
-            patch.reviewer_recommend_training = recommendTraining;
+          if (isReviewerSaveMode) {
+            if (datasetDestination !== baseDest) {
+              patch.reviewer_dataset_destination = datasetDestination;
+            }
+            if (imageDifficulty !== baseDifficulty) {
+              patch.image_difficulty = imageDifficulty;
+            }
           }
           const hadDialDetails = (r.dialDetails?.length ?? 0) > 0;
           if (localDialRows.length > 0) {
@@ -799,7 +828,7 @@ const ReadingDetail: React.FC = () => {
         setDirectReading(fresh);
       }
 
-      if (selectedStatus !== snapshotForMove.status) {
+      if (isReviewerSaveMode && selectedStatus !== snapshotForMove.status) {
         await updateReadingStatus(snapshotForMove.id, selectedStatus, snapshotForMove);
       }
 
@@ -835,13 +864,78 @@ const ReadingDetail: React.FC = () => {
     updateReadingStatus,
     updateReadingComments,
     refreshData,
-    recommendTraining,
+    datasetDestination,
+    imageDifficulty,
+    isReviewerSaveMode,
     portalWorkMode,
+  ]);
+
+  const handleApproveUnitTest = useCallback(async () => {
+    const r = directReading || contextReading;
+    if (!r?.id) return;
+    setApproveBusy(true);
+    try {
+      if (isDirty) {
+        const saved = await performSaveAction();
+        if (!saved) return;
+      }
+      const res = await approveSessionForUnitTest(r.id, workTypeForApi, userEmail || undefined);
+      setDirectReading(res.reading);
+      await refreshData();
+      window.alert(`Approved — unit test image ${res.fileName} uploaded and manifest updated.`);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Approve failed');
+    } finally {
+      setApproveBusy(false);
+    }
+  }, [contextReading, directReading, isDirty, performSaveAction, refreshData, userEmail, workTypeForApi]);
+
+  const handleRemoveFromTestDataset = useCallback(async () => {
+    const r = directReading || contextReading;
+    if (!r?.id || !r.s3SessionPrefix) return;
+    if (!confirmRemoveFromTestDataset(r)) {
+      return;
+    }
+    setRemoveFromTestBusy(true);
+    try {
+      if (isDirty) {
+        const saved = await performSaveAction();
+        if (!saved) return;
+      }
+      await removeSessionFromTestDataset(
+        r.id,
+        workTypeForApi,
+        userEmail || undefined,
+        r.s3SessionPrefix,
+      );
+      await refreshData();
+      goBackToList();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Remove from test dataset failed');
+    } finally {
+      setRemoveFromTestBusy(false);
+    }
+  }, [
+    contextReading,
+    directReading,
+    goBackToList,
+    isDirty,
+    performSaveAction,
+    refreshData,
+    userEmail,
+    workTypeForApi,
   ]);
 
   const handleSave = useCallback(() => {
     void performSaveAction();
   }, [performSaveAction]);
+
+  const showHeaderSaveButton = isReviewerSaveMode || isTestDataReviewerMode;
+  const headerSaveDisabled =
+    isSaving ||
+    !isDirty ||
+    (isTestDataReviewerMode && (removeFromTestBusy || approveBusy));
+  const headerSaveLabel = isTestDataReviewerMode ? 'Save corrections' : 'Save changes';
 
   const canQueuePrev = queueIndex > 0;
   const canQueueNext = Boolean(
@@ -1009,6 +1103,32 @@ const ReadingDetail: React.FC = () => {
                   <ChevronRight size={18} aria-hidden />
                 </button>
               </div>
+            ) : null}
+            {showHeaderSaveButton ? (
+              <button
+                type="button"
+                className={`save-button reading-detail-header-save-btn ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
+                onClick={handleSave}
+                disabled={headerSaveDisabled}
+                aria-busy={isSaving}
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 size={18} className="spin" aria-hidden />
+                    <span>Saving…</span>
+                  </>
+                ) : isSaved ? (
+                  <>
+                    <Check size={18} aria-hidden />
+                    <span>Saved</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={18} aria-hidden />
+                    <span>{headerSaveLabel}</span>
+                  </>
+                )}
+              </button>
             ) : null}
             <button
               type="button"
@@ -1276,6 +1396,72 @@ const ReadingDetail: React.FC = () => {
                     </div>
                   ) : null}
                 </div>
+              ) : isTestDataReviewerMode ? (
+                <>
+                  <ol className="reading-detail-tdr-steps">
+                    <li>Fix the reading on the image (dials or correct reading).</li>
+                    <li>
+                      <strong>Save corrections</strong>, then approve or remove from the test queue.
+                    </li>
+                  </ol>
+                  {reading.testDataReviewStatus === 'approved' && reading.testDataUnitTestFileName ? (
+                    <p className="training-pipeline-bar-meta">
+                      Approved · <code>{reading.testDataUnitTestFileName}</code>
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`save-button ${isSaved ? 'saved' : ''}`}
+                    onClick={handleSave}
+                    disabled={isSaving || removeFromTestBusy || approveBusy || !isDirty}
+                  >
+                    {isSaving ? <Loader2 size={18} className="spin" /> : <Save size={18} />}
+                    {isSaving ? 'Saving…' : isSaved ? 'Saved' : 'Save corrections'}
+                  </button>
+                  <div className="reading-detail-tdr-actions">
+                    <button
+                      type="button"
+                      className="reading-detail-tdr-approve-btn"
+                      disabled={
+                        approveBusy ||
+                        removeFromTestBusy ||
+                        isSaving ||
+                        reading.reviewerDatasetDestination !== 'test'
+                      }
+                      onClick={() => void handleApproveUnitTest()}
+                    >
+                      {approveBusy ? <Loader2 size={18} className="spin" /> : <UserCheck size={18} />}
+                      {reading.testDataReviewStatus === 'approved'
+                        ? 'Update unit test image'
+                        : 'Approve for unit test'}
+                    </button>
+                    <button
+                      type="button"
+                      className="test-data-remove-btn"
+                      disabled={removeFromTestBusy || approveBusy || isSaving}
+                      onClick={() => void handleRemoveFromTestDataset()}
+                    >
+                      {removeFromTestBusy ? (
+                        <Loader2 size={18} className="spin" aria-hidden />
+                      ) : (
+                        <XCircle size={18} aria-hidden />
+                      )}
+                      Remove from test dataset
+                    </button>
+                  </div>
+                  <div className="comments-control reading-detail-comments-optional">
+                    <label htmlFor="reading-detail-comments-tdr">
+                      Comments <span className="reading-detail-optional-tag">(optional)</span>
+                    </label>
+                    <textarea
+                      id="reading-detail-comments-tdr"
+                      value={comments}
+                      onChange={(e) => setComments(e.target.value)}
+                      rows={2}
+                      placeholder="Notes for this session…"
+                    />
+                  </div>
+                </>
               ) : (
                 <>
                   <div className="status-control">
@@ -1295,33 +1481,77 @@ const ReadingDetail: React.FC = () => {
                         borderColor: statusColors[selectedStatus],
                         backgroundColor: `${statusColors[selectedStatus]}10`,
                       }}
-                      aria-describedby="reading-detail-status-hint"
                     >
                       <option value="correct">{statusLabels.correct}</option>
                       <option value={REVIEWER_SELECT_INCORRECT}>Incorrect</option>
                       <option value="no_dials">{statusLabels.no_dials}</option>
                       <option value="not_sure">{statusLabels.not_sure}</option>
                     </select>
-                    <p id="reading-detail-status-hint" className="reading-detail-field-hint">
-                      Save writes fixes to <code>metadata.json</code>, then moves the folder if the outcome changed.
-                      Pipeline stages after incorrect are set in <strong>labeler</strong> mode.
-                    </p>
                   </div>
 
-                  <div className="reading-detail-recommend-training">
-                    <label className="reading-detail-recommend-training-label">
+                  <fieldset className="reading-detail-radio-group">
+                    <legend>Dataset</legend>
+                    <label className="reading-detail-radio">
                       <input
-                        type="checkbox"
-                        checked={recommendTraining}
-                        onChange={(e) => setRecommendTraining(e.target.checked)}
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination === 'training'}
+                        onChange={() => setDatasetDestination('training')}
                       />
-                      <span>Recommend for training dataset</span>
+                      Send to training dataset
                     </label>
-                    <p className="reading-detail-field-hint" id="reading-detail-recommend-hint">
-                      Optional flag for labelers (filter lists with <strong>Reviewer picks</strong>). Does not copy
-                      files by itself—use labeler mode to copy into a pipeline folder.
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination === 'test'}
+                        onChange={() => setDatasetDestination('test')}
+                      />
+                      Send to test dataset
+                    </label>
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination !== 'training' && datasetDestination !== 'test'}
+                        onChange={() => setDatasetDestination(null)}
+                      />
+                      Neither
+                    </label>
+                    <p className="reading-detail-field-hint">
+                      Test dataset rows are approved by the <strong>test data reviewer</strong> role.
                     </p>
-                  </div>
+                  </fieldset>
+
+                  <fieldset className="reading-detail-radio-group">
+                    <legend>Image classification</legend>
+                    {(
+                      [
+                        ['normal', 'Normal'],
+                        ['difficult', 'Difficult'],
+                        ['very_difficult', 'Very difficult'],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <label key={value} className="reading-detail-radio">
+                        <input
+                          type="radio"
+                          name="image-difficulty"
+                          checked={imageDifficulty === value}
+                          onChange={() => setImageDifficulty(value)}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="image-difficulty"
+                        checked={!imageDifficulty}
+                        onChange={() => setImageDifficulty(null)}
+                      />
+                      Unset
+                    </label>
+                  </fieldset>
 
                   <div className="comments-control">
                     <label htmlFor="reading-detail-comments">Comments</label>

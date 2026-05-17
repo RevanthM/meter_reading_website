@@ -19,8 +19,12 @@ let cachedWorkspace = null;
 let cachedWorkspaceAt = 0;
 const WORKSPACE_CACHE_MS = 5 * 60 * 1000;
 
-function isConfigured() {
+export function isRoboflowConfigured() {
   return Boolean(roboflowApiKey());
+}
+
+function isConfigured() {
+  return isRoboflowConfigured();
 }
 
 async function streamToBuffer(stream) {
@@ -29,6 +33,10 @@ async function streamToBuffer(stream) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+export async function resolveRoboflowWorkspaceSlug() {
+  return resolveWorkspaceSlug();
 }
 
 async function resolveWorkspaceSlug() {
@@ -192,6 +200,136 @@ function guessContentType(filename) {
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.webp')) return 'image/webp';
   return 'image/jpeg';
+}
+
+/** Roboflow REST create-project `type` values (keypoint is not supported on this endpoint). */
+export const ROBOFLOW_CREATE_PROJECT_TYPES = [
+  'object-detection',
+  'single-label-classification',
+  'multi-label-classification',
+  'instance-segmentation',
+  'semantic-segmentation',
+];
+
+const ROBOFLOW_CREATE_PROJECT_TYPE_SET = new Set(ROBOFLOW_CREATE_PROJECT_TYPES);
+
+/** Portal default: human label "analog gas meter" → Roboflow slug `analog-gas-meter`. */
+export const DEFAULT_ROBOFLOW_ANNOTATION = 'analog-gas-meter';
+
+/** Normalize annotation for Roboflow create-project (letters, numbers, dashes only). */
+export function normalizeRoboflowAnnotation(annotation) {
+  const normalized = String(annotation || DEFAULT_ROBOFLOW_ANNOTATION)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 255);
+  return normalized || DEFAULT_ROBOFLOW_ANNOTATION;
+}
+
+/**
+ * Create a new Roboflow project (dataset) in the workspace.
+ * @see https://docs.roboflow.com/developer/rest-api/create-a-project
+ */
+export async function createRoboflowProject({ name, type, annotation, license = 'Private' }) {
+  if (!isConfigured()) {
+    throw new Error('Roboflow is not configured (set ROBOFLOW_API_KEY on the server).');
+  }
+  const projectName = String(name || '').trim();
+  if (!projectName || projectName.length > 200) {
+    throw new Error('Project name is required (max 200 characters).');
+  }
+  const projectType = String(type || 'object-detection').trim();
+  if (!ROBOFLOW_CREATE_PROJECT_TYPE_SET.has(projectType)) {
+    throw new Error(
+      `type must be one of: ${ROBOFLOW_CREATE_PROJECT_TYPES.join(', ')}. Keypoint projects cannot be created via this API — use object-detection or link an existing keypoint project in Model Factory.`,
+    );
+  }
+  const annotationGroup = normalizeRoboflowAnnotation(annotation);
+
+  const ws = await resolveWorkspaceSlug();
+  const url = `https://api.roboflow.com/${encodeURIComponent(ws)}/projects?api_key=${encodeURIComponent(roboflowApiKey())}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: projectName,
+      type: projectType,
+      annotation: annotationGroup,
+      license: String(license || 'Private').trim() || 'Private',
+    }),
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Roboflow create project: not JSON (${res.status})`);
+  }
+  if (!res.ok) {
+    throw new Error(json.error || json.message || text.slice(0, 300) || `HTTP ${res.status}`);
+  }
+
+  const projectId = String(json.id || '').trim();
+  const datasetSlug = projectId.includes('/') ? projectId : normalizeDatasetSlug(ws, projectId);
+  const parts = datasetSlug.split('/').filter(Boolean);
+  const workspaceSlug = parts[0] || ws;
+  const projectSlug = parts.slice(1).join('/') || parts[0] || '';
+
+  return {
+    workspaceSlug,
+    projectSlug,
+    datasetSlug,
+    projectName: String(json.name || projectName),
+    projectType: String(json.type || projectType),
+    annotation: annotationGroup,
+    annotateUrl: `https://app.roboflow.com/${encodeURIComponent(workspaceSlug)}/${encodeURIComponent(projectSlug)}/annotate`,
+    url: `https://app.roboflow.com/${encodeURIComponent(workspaceSlug)}/${encodeURIComponent(projectSlug)}`,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Upload one image buffer to a Roboflow dataset (existing project).
+ * @param {{ datasetPath: string, buffer: Buffer, fileName: string, split?: string, batch?: string }} opts
+ */
+export async function uploadImageBufferToRoboflowDataset(opts) {
+  if (!isConfigured()) {
+    throw new Error('Roboflow is not configured.');
+  }
+  const datasetPath = String(opts.datasetPath || '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+  if (!datasetPath.includes('/')) {
+    throw new Error('datasetPath must be workspace/project');
+  }
+  const fileName = String(opts.fileName || 'image.jpg').trim() || 'image.jpg';
+  const split = String(opts.split || 'train').trim() || 'train';
+  const batch = String(opts.batch || 'portal-upload').trim() || 'portal-upload';
+
+  const form = new FormData();
+  form.append('name', fileName);
+  form.append('split', split);
+  form.append('file', new Blob([opts.buffer], { type: guessContentType(fileName) }), fileName);
+  form.append('batch', batch);
+
+  const uploadUrl = `https://api.roboflow.com/dataset/${datasetPath}/upload?api_key=${encodeURIComponent(roboflowApiKey())}`;
+  const rfRes = await fetch(uploadUrl, { method: 'POST', body: form });
+  const text = await rfRes.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+  if (!rfRes.ok) {
+    throw new Error(data.error || data.message || text.slice(0, 300) || `HTTP ${rfRes.status}`);
+  }
+  return data;
 }
 
 /**

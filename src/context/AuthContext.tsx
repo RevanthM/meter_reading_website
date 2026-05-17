@@ -54,7 +54,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const initialAnicaLogin = loadAnicaLoginSession();
   const [user, setUser] = useState<User | null>(null);
   const [anicaLoginUser, setAnicaLoginUser] = useState<AnicaLoginSessionUser | null>(initialAnicaLogin);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialAnicaLogin);
   const [error, setError] = useState<string | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(!!initialAnicaLogin);
   const [mfaRequired, setMfaRequired] = useState(false);
@@ -75,6 +75,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setLoading(false);
       return;
     }
+    if (anicaLoginUserRef.current) {
+      setLoading(false);
+    }
+    const authReadyTimer = window.setTimeout(() => setLoading(false), 4000);
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         await checkAuthorization(currentUser);
@@ -88,7 +92,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      window.clearTimeout(authReadyTimer);
+      unsubscribe();
+    };
   }, [checkAuthorization]);
 
   const login = useCallback(async (email: string, password: string) => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useReadings, type DataSource } from '../context/ReadingsContext';
-import { fetchModelAnalytics, type ModelAnalyticsResponse, type ModelVersionStats } from '../services/api';
+import { fetchImprovementStats, type ModelAnalyticsResponse, type ModelVersionStats } from '../services/api';
 import type { WorkType } from '../types';
 import { workTypeLabels } from '../types';
 import {
@@ -76,7 +76,7 @@ const workTypeOptions: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
 const ModelAnalytics: React.FC = () => {
   const navigate = useNavigate();
-  const { workType, setWorkType, dataSource, setDataSource, filteredReadings } = useReadings();
+  const { workType, setWorkType, dataSource, setDataSource } = useReadings();
   const [data, setData] = useState<ModelAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,8 +91,12 @@ const ModelAnalytics: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchModelAnalytics(dataSource, workType);
-      setData(res);
+      const res = await fetchImprovementStats(dataSource, workType, 'all');
+      setData({
+        currentVersion: res.versionSummary?.[0]?.appVersion ?? null,
+        versions: res.versionSummary ?? [],
+        computedAt: res.computedAt,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
       setData(null);
@@ -114,23 +118,9 @@ const ModelAnalytics: React.FC = () => {
     [navigate],
   );
 
-  /** Fallback when API omits imageCount (older server); matches analytics bucket keys. */
-  const imageTotalsByVersion = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of filteredReadings) {
-      const v =
-        r.appVersion != null && String(r.appVersion).trim() !== ''
-          ? String(r.appVersion).trim()
-          : 'unknown';
-      m.set(v, (m.get(v) ?? 0) + (Array.isArray(r.images) ? r.images.length : 0));
-    }
-    return m;
-  }, [filteredReadings]);
-
   const formatImageCountCell = (row: ModelVersionStats) => {
     if (row.imageCount != null) return row.imageCount.toLocaleString();
-    const n = imageTotalsByVersion.get(row.appVersion);
-    return n != null ? n.toLocaleString() : '—';
+    return '—';
   };
 
   const narrative = useMemo(() => {

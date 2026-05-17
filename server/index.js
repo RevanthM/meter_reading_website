@@ -15,9 +15,16 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import admin from 'firebase-admin';
 import { registerRoboflowRoutes } from './roboflow.js';
+import {
+  registerTrainingDatasetRoboflowRoutes,
+  normalizePipelineIterationTrainingDatasetLinks,
+  normalizeTrainingDatasetRoboflowTraining,
+} from './roboflowTrainingDataset.js';
 import { pullWeightsPtFromRoboflow } from './roboflowWeights.js';
 import { registerApiDocs } from './apiDocs.js';
 import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
+import { createImprovementAnalyticsStore } from './improvementAnalytics.js';
+import { registerTestDataReviewRoutes } from './testDataReview.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -66,6 +73,24 @@ app.use(
 );
 
 const BUCKET_NAME = (process.env.AWS_S3_BUCKET || 'meter-reader-training-feedback').trim();
+/**
+ * Improvement chart index — same bucket as sessions, under `analytics/improvement/…`.
+ * Index file: s3://{bucket}/analytics/improvement/all/1000/index.json
+ *
+ * Do not set AWS_ANALYTICS_S3_BUCKET unless that bucket exists and your IAM key can read/write it.
+ * (An empty prefix is only used when AWS_ANALYTICS_S3_KEY_PREFIX is explicitly set to "".)
+ */
+const ANALYTICS_BUCKET_NAME = (process.env.AWS_ANALYTICS_S3_BUCKET || BUCKET_NAME).trim();
+const ANALYTICS_KEY_PREFIX = (() => {
+  if (process.env.AWS_ANALYTICS_S3_KEY_PREFIX != null) {
+    return String(process.env.AWS_ANALYTICS_S3_KEY_PREFIX).trim().replace(/^\/+|\/+$/g, '');
+  }
+  return 'analytics';
+})();
+const ANALYTICS_USE_DEDICATED_BUCKET = ANALYTICS_BUCKET_NAME !== BUCKET_NAME;
+/** When a dedicated analytics bucket is misconfigured, read from the sessions bucket + analytics/ prefix. */
+const ANALYTICS_FALLBACK_BUCKET =
+  ANALYTICS_BUCKET_NAME !== BUCKET_NAME ? BUCKET_NAME : undefined;
 const REGION = (process.env.AWS_REGION || 'us-east-1').trim();
 /** If objects live under a parent folder (e.g. prod/ or mobile-uploads/), set AWS_S3_BASE_PREFIX=prod */
 const S3_BASE_PREFIX = (process.env.AWS_S3_BASE_PREFIX || '').trim();
@@ -182,6 +207,12 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     raw?.imagesAddedSinceLastIteration ?? raw?.images_added_since_last_iteration;
   const currentStatus = String(raw?.currentStatus ?? raw?.current_status ?? '').trim();
   const subStatus = String(raw?.subStatus ?? raw?.sub_status ?? '').trim();
+  const readyToTestSimulatorSubStatus = String(
+    raw?.readyToTestSimulatorSubStatus ?? raw?.ready_to_test_simulator_sub_status ?? '',
+  ).trim();
+  const readyToTestUnitTestSubStatus = String(
+    raw?.readyToTestUnitTestSubStatus ?? raw?.ready_to_test_unit_test_sub_status ?? '',
+  ).trim();
   const outcome = String(raw?.outcome ?? '').trim();
 
   const numOrNull = (v) => {
@@ -203,11 +234,17 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     imagesAddedSinceLastIteration: numOrNull(imagesAddedSinceLastIteration),
     currentStatus,
     subStatus,
+    readyToTestSimulatorSubStatus,
+    readyToTestUnitTestSubStatus,
     outcome,
     portalStats: cloneJsonObject(raw?.portalStats),
     manualMetrics: cloneJsonObject(raw?.manualMetrics),
     linkedUnitTests: normalizePipelineIterationUnitTestLinks(raw),
+    linkedTrainingDatasets: normalizePipelineIterationTrainingDatasetLinks(raw),
     factoryStage: String(raw?.factoryStage ?? raw?.factory_stage ?? '').trim() || null,
+    factoryStageSubStatus: String(
+      raw?.factoryStageSubStatus ?? raw?.factory_stage_sub_status ?? '',
+    ).trim(),
     modelShip: normalizePipelineIterationModelShip(raw?.modelShip ?? raw?.model_ship),
     roboflowLinks: normalizePipelineIterationRoboflowLinks(raw?.roboflowLinks ?? raw?.roboflow_links),
     modelWeights: normalizePipelineIterationModelWeights(raw?.modelWeights ?? raw?.model_weights),
@@ -367,6 +404,10 @@ function normalizePipelineIterationModelShip(raw) {
   return {
     dialDetection: dial === true,
     keypoint: keypoint === true,
+    dialDetectionSubStatus: String(
+      raw.dialDetectionSubStatus ?? raw.dial_detection_sub_status ?? '',
+    ).trim(),
+    keypointSubStatus: String(raw.keypointSubStatus ?? raw.keypoint_sub_status ?? '').trim(),
   };
 }
 
@@ -604,6 +645,40 @@ function invalidateCache() {
   cache.clear();
 }
 
+/** When the same session_id appears under multiple S3 prefixes, prefer test-queue / library markers and newest portal update. */
+function readingDuplicatePriority(r) {
+  let score = 0;
+  if (r.reviewerDatasetDestination === 'test') score += 4;
+  if (r.testDataReviewStatus === 'approved') score += 8;
+  if (r.testDataReviewStatus === 'pending') score += 2;
+  if (r.testDataUnitTestS3Key) score += 8;
+  const t = Date.parse(r.portalMetadataUpdatedAt || r.dateOfReading || '');
+  return { score, time: Number.isFinite(t) ? t : 0 };
+}
+
+function pickPreferredReadingDuplicate(a, b) {
+  const pa = readingDuplicatePriority(a);
+  const pb = readingDuplicatePriority(b);
+  if (pa.score !== pb.score) return pa.score > pb.score ? a : b;
+  return pa.time >= pb.time ? a : b;
+}
+
+/** Fire-and-forget improvement index updates (does not block API responses). */
+function scheduleImprovementUpdate(fn) {
+  setImmediate(() => {
+    Promise.resolve()
+      .then(fn)
+      .catch((err) => console.error('📈 improvement analytics update:', err.message));
+  });
+}
+
+function syncImprovementFromReading(source, workType, reading) {
+  if (!improvementAnalytics || !reading) return;
+  scheduleImprovementUpdate(() =>
+    improvementAnalytics.upsertFromReading(source || 'all', workType || '1000', reading),
+  );
+}
+
 async function streamToString(stream) {
   const chunks = [];
   for await (const chunk of stream) {
@@ -611,6 +686,17 @@ async function streamToString(stream) {
   }
   return Buffer.concat(chunks).toString('utf-8');
 }
+
+const improvementAnalytics = createImprovementAnalyticsStore({
+  s3Client,
+  bucketName: ANALYTICS_BUCKET_NAME,
+  keyPrefix: ANALYTICS_KEY_PREFIX,
+  fallbackBucketName: ANALYTICS_FALLBACK_BUCKET,
+  fallbackKeyPrefix: 'analytics',
+  region: REGION,
+  allowCreateBucket: ANALYTICS_USE_DEDICATED_BUCKET,
+  streamToString,
+});
 
 /** Full S3 object body as Buffer — required before archiver.append; piping SDK streams often corrupts ZIPs. */
 async function streamToBuffer(stream) {
@@ -756,7 +842,33 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       feedbackType: metadata.feedback_type || '',
       /** iOS `AppConfig.appVersion` — use to compare on-device model generations. */
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
-      reviewerRecommendTraining: metadata.reviewer_recommend_training === true,
+      reviewerRecommendTraining:
+        metadata.reviewer_dataset_destination === 'training' ||
+        (metadata.reviewer_dataset_destination == null && metadata.reviewer_recommend_training === true),
+      reviewerDatasetDestination:
+        metadata.reviewer_dataset_destination === 'training' || metadata.reviewer_dataset_destination === 'test'
+          ? metadata.reviewer_dataset_destination
+          : metadata.reviewer_recommend_training === true
+            ? 'training'
+            : null,
+      imageDifficulty:
+        metadata.image_difficulty === 'normal' ||
+        metadata.image_difficulty === 'difficult' ||
+        metadata.image_difficulty === 'very_difficult'
+          ? metadata.image_difficulty
+          : null,
+      testDataReviewStatus:
+        metadata.test_data_review_status === 'approved' || metadata.test_data_review_status === 'pending'
+          ? metadata.test_data_review_status
+          : metadata.reviewer_dataset_destination === 'test' && metadata.test_data_review_status !== 'approved'
+            ? 'pending'
+            : null,
+      testDataUnitTestS3Key:
+        typeof metadata.test_data_unit_test_s3_key === 'string' ? metadata.test_data_unit_test_s3_key : undefined,
+      testDataUnitTestFileName:
+        typeof metadata.test_data_unit_test_file_name === 'string' ? metadata.test_data_unit_test_file_name : undefined,
+      testDataApprovedAt:
+        typeof metadata.test_data_approved_at === 'string' ? metadata.test_data_approved_at : undefined,
       /** Portal / iOS: `is_manually_reviewed` in metadata.json (legacy `is_human_reviewed` still honored when reading). */
       isManuallyReviewed:
         metadata.is_manually_reviewed === true || metadata.is_human_reviewed === true,
@@ -776,6 +888,82 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
     console.error(`Error parsing session ${prefix}:`, error.message);
     return null;
   }
+}
+
+/** Metadata + image count only — no presigned URLs (used for improvement analytics index). */
+async function parseSessionLight(prefix, status, sourceType, workType = '1000') {
+  try {
+    const metaKey = `${prefix}metadata.json`;
+    const [metadataResponse, listResponse] = await Promise.all([
+      s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey })),
+      s3Client.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME, Prefix: prefix })),
+    ]);
+
+    const metadata = JSON.parse(await streamToString(metadataResponse.Body));
+    const files = listResponse.Contents || [];
+    const imageCount = files.filter(
+      (f) => f.Key.endsWith('.jpg') || f.Key.endsWith('.jpeg') || f.Key.endsWith('.png'),
+    ).length;
+
+    return {
+      id: metadata.session_id,
+      s3SessionPrefix: prefix,
+      dateOfReading: metadata.timestamp,
+      type: sourceType,
+      status,
+      workType: metadata.work_type || workType,
+      meterValue: metadata.ml_prediction,
+      expectedValue: metadata.user_correction || undefined,
+      confidence: normalizeSessionConfidenceValue(metadata.confidence),
+      dialDetails: Array.isArray(metadata.dial_details) ? metadata.dial_details : undefined,
+      appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
+      imageCount,
+    };
+  } catch (error) {
+    console.error(`Error parsing session (light) ${prefix}:`, error.message);
+    return null;
+  }
+}
+
+async function getReadingsFromFolderLight(folderPrefix, status, sourceType, workType = '1000') {
+  try {
+    const command = new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      Prefix: folderPrefix,
+      Delimiter: '/',
+    });
+
+    const response = await s3Client.send(command);
+    const folders = response.CommonPrefixes || [];
+
+    const results = await Promise.all(
+      folders.map((folder) => parseSessionLight(folder.Prefix, status, sourceType, workType)),
+    );
+
+    return results.filter(Boolean);
+  } catch (error) {
+    console.error(`Error listing folder (light) ${folderPrefix}:`, error.message);
+    return [];
+  }
+}
+
+async function getAllLightReadings(source = 'all', workType = '1000') {
+  console.log(`\n📈 Light readings scan for analytics (source: ${source}, workType: ${workType})`);
+  const allPrefixes = getAllFolderPrefixes(source, workType);
+  const readings = [];
+  for (const { folder, status, sourceType } of allPrefixes) {
+    const part = await getReadingsFromFolderLight(folder, status, sourceType, workType);
+    readings.push(...part);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const seen = new Set();
+  const unique = readings.filter((r) => {
+    if (seen.has(r.id)) return false;
+    seen.add(r.id);
+    return true;
+  });
+  console.log(`📈 Light readings: ${unique.length} sessions\n`);
+  return unique;
 }
 
 async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = '1000') {
@@ -823,13 +1011,17 @@ async function getAllReadings(source = 'all', workType = '1000') {
   const results = await Promise.all(folderJobs);
   const readings = results.flat();
   
-  // Deduplicate by session ID (same session may appear in root and 1000/ prefix)
-  const seen = new Set();
-  const unique = readings.filter(r => {
-    if (seen.has(r.id)) return false;
-    seen.add(r.id);
-    return true;
-  });
+  // Deduplicate by session ID (same session may appear in multiple status folders / prefixes).
+  const byId = new Map();
+  for (const r of readings) {
+    const existing = byId.get(r.id);
+    if (!existing) {
+      byId.set(r.id, r);
+      continue;
+    }
+    byId.set(r.id, pickPreferredReadingDuplicate(existing, r));
+  }
+  const unique = [...byId.values()];
   
   unique.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
   
@@ -1150,6 +1342,9 @@ app.get('/api/readings', async (req, res) => {
   try {
     const source = req.query.source || 'all';
     const workType = req.query.workType || '1000';
+    if (req.query.refresh === '1' || req.query.refresh === 'true') {
+      invalidateCache();
+    }
     const readings = await getAllReadings(source, workType);
     res.json(readings);
   } catch (error) {
@@ -1167,6 +1362,43 @@ app.get('/api/counts', async (req, res) => {
   } catch (error) {
     console.error('Error calculating counts:', error);
     res.status(500).json({ error: 'Failed to calculate counts' });
+  }
+});
+
+app.get('/api/improvement-stats', async (req, res) => {
+  try {
+    const source = req.query.source || 'all';
+    const workType = req.query.workType || '1000';
+    const range = typeof req.query.range === 'string' && req.query.range.trim() ? req.query.range.trim() : 'all';
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const allowedRanges = new Set(['all', '1d', '7d', '14d', '30d']);
+    const safeRange = allowedRanges.has(range) ? range : 'all';
+
+    const payload = await improvementAnalytics.getStats(source, workType, {
+      range: safeRange,
+      refresh,
+      maxVersions: 16,
+      fetchAllLightReadings: getAllLightReadings,
+    });
+    res.json({
+      ...payload,
+      storage: improvementAnalytics.storageLocation(source, workType),
+    });
+  } catch (error) {
+    console.error('Error fetching improvement stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch improvement stats' });
+  }
+});
+
+app.post('/api/improvement-stats/backfill', async (req, res) => {
+  try {
+    const source = req.query.source || req.body?.source || 'all';
+    const workType = req.query.workType || req.body?.workType || '1000';
+    const result = await improvementAnalytics.backfill(source, workType, getAllLightReadings);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('Error backfilling improvement stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to backfill improvement stats' });
   }
 });
 
@@ -1245,6 +1477,8 @@ const METADATA_PATCHABLE = new Set([
   'condition_code',
   'portal_review_notes',
   'reviewer_recommend_training',
+  'reviewer_dataset_destination',
+  'image_difficulty',
   'is_manually_reviewed',
   'confidence',
   'processing_time_ms',
@@ -1312,12 +1546,13 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       return res.status(500).json({ error: 'metadata session_id does not match URL id' });
     }
 
-    const isReviewer = portalMode === 'reviewer';
+    const isReviewer = portalMode === 'reviewer' || portalMode === 'admin';
+    const isTestDataReviewer = portalMode === 'test_data_reviewer';
     const isMobileCollector = portalMode === 'mobile' && collectorId.length > 0;
-    if (!isReviewer && !isMobileCollector) {
+    if (!isReviewer && !isTestDataReviewer && !isMobileCollector) {
       return res.status(403).json({
         error:
-          'Metadata edits require x-portal-work-mode: reviewer (portal) or mobile (iOS collector) plus x-user-email.',
+          'Metadata edits require x-portal-work-mode: reviewer, test_data_reviewer, or mobile (iOS collector) plus x-user-email when mobile.',
       });
     }
 
@@ -1330,10 +1565,25 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       }
     }
 
+    const testDataReviewerOnly = new Set([
+      'user_correction',
+      'ml_prediction',
+      'ml_raw_prediction',
+      'dial_details',
+      'dial_count',
+      'portal_review_notes',
+      'is_manually_reviewed',
+      'reviewer_dataset_destination',
+      'image_difficulty',
+    ]);
+
     for (const k of Object.keys(patch)) {
-      const allowed = isReviewer ? METADATA_PATCHABLE : MOBILE_COLLECTOR_PATCHABLE;
+      const allowed = isReviewer || isTestDataReviewer ? METADATA_PATCHABLE : MOBILE_COLLECTOR_PATCHABLE;
       if (!allowed.has(k)) {
         return res.status(400).json({ error: `Field not allowed in patch: ${k}` });
+      }
+      if (isTestDataReviewer && !isReviewer && !testDataReviewerOnly.has(k)) {
+        return res.status(403).json({ error: `Field not allowed for test_data_reviewer: ${k}` });
       }
     }
 
@@ -1404,6 +1654,34 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         return res.status(400).json({ error: 'reviewer_recommend_training must be boolean' });
       }
       meta.reviewer_recommend_training = patch.reviewer_recommend_training;
+      if (patch.reviewer_recommend_training) {
+        meta.reviewer_dataset_destination = 'training';
+      } else if (meta.reviewer_dataset_destination === 'training') {
+        meta.reviewer_dataset_destination = null;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'reviewer_dataset_destination')) {
+      const dest = patch.reviewer_dataset_destination;
+      if (dest != null && dest !== 'training' && dest !== 'test') {
+        return res.status(400).json({ error: 'reviewer_dataset_destination must be training, test, or null' });
+      }
+      meta.reviewer_dataset_destination = dest;
+      meta.reviewer_recommend_training = dest === 'training';
+      if (dest === 'test' && meta.test_data_review_status !== 'approved') {
+        meta.test_data_review_status = 'pending';
+      }
+      if (dest !== 'test') {
+        meta.test_data_review_status = null;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'image_difficulty')) {
+      const d = patch.image_difficulty;
+      if (d != null && d !== 'normal' && d !== 'difficult' && d !== 'very_difficult') {
+        return res.status(400).json({ error: 'image_difficulty must be normal, difficult, very_difficult, or null' });
+      }
+      meta.image_difficulty = d;
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'is_manually_reviewed')) {
@@ -1460,6 +1738,9 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
     if (!fresh) {
       return res.status(500).json({ error: 'Failed to re-read session after metadata update' });
     }
+    const analyticsSource = typeof req.query.source === 'string' ? req.query.source : 'all';
+    const analyticsWorkType = fresh.workType || workTypeHint || '1000';
+    syncImprovementFromReading(analyticsSource, analyticsWorkType, fresh);
     res.json(fresh);
   } catch (error) {
     console.error('PATCH /api/readings/:id/metadata:', error);
@@ -1950,6 +2231,37 @@ app.post('/api/readings/bulk-move', async (req, res) => {
     console.log(`✅ Moved ${movedCount}/${readings.length} readings\n`);
 
     invalidateCache();
+
+    const analyticsSource = req.query.source || req.body?.source || 'all';
+    const analyticsWorkType = req.query.workType || req.body?.workType || '1000';
+    for (let i = 0; i < readings.length; i++) {
+      if (!moveResults[i]) continue;
+      const item = readings[i];
+      const srcPrefix =
+        typeof item.s3SessionPrefix === 'string' && item.s3SessionPrefix.length > 4
+          ? item.s3SessionPrefix.endsWith('/')
+            ? item.s3SessionPrefix
+            : `${item.s3SessionPrefix}/`
+          : null;
+      if (!srcPrefix) continue;
+      const targetPrefix = buildTargetSessionPrefixFromSource(
+        srcPrefix,
+        item.sourceType,
+        item.targetStatus,
+      );
+      if (!targetPrefix) continue;
+      scheduleImprovementUpdate(async () => {
+        const light = await parseSessionLight(
+          targetPrefix,
+          item.targetStatus,
+          item.sourceType,
+          analyticsWorkType,
+        );
+        if (light) {
+          await improvementAnalytics.upsertFromReading(analyticsSource, analyticsWorkType, light);
+        }
+      });
+    }
     
     await loadActivityLog();
     for (const reading of readings) {
@@ -2259,6 +2571,7 @@ app.get('/api/training-datasets', async (req, res) => {
                   originalFileName: typeof w.originalFileName === 'string' ? w.originalFileName : null,
                 }
               : null,
+            roboflowTraining: normalizeTrainingDatasetRoboflowTraining(j.roboflowTraining ?? j.roboflow_training),
           };
         } catch {
           const leaf = folderPrefix.slice(root.length).replace(/\/$/, '');
@@ -2404,6 +2717,14 @@ registerRoboflowRoutes(app, {
   BUCKET_NAME,
 });
 
+registerTrainingDatasetRoboflowRoutes(app, {
+  s3Client,
+  BUCKET_NAME,
+  normalizeTrainingDatasetFolderPrefix,
+  readTrainingDatasetManifest,
+  writeTrainingDatasetManifest,
+});
+
 const EXPORT_INCORRECT_MAX_SESSIONS = Math.max(
   1,
   Math.min(10_000, parseInt(process.env.EXPORT_INCORRECT_MAX_SESSIONS || '3000', 10) || 3000),
@@ -2426,6 +2747,16 @@ async function findReadingAcrossWorkTypes(id, workTypeHint) {
   }
   return reading;
 }
+
+registerTestDataReviewRoutes(app, {
+  s3Client,
+  BUCKET_NAME,
+  findReadingAcrossWorkTypes,
+  normalizeS3SessionPrefix,
+  streamToString,
+  getPresignedUrl: getSignedImageUrl,
+  invalidateCache,
+});
 
 const COPY_TO_TRAINING_MAX_SESSIONS = Math.max(
   1,
@@ -3511,7 +3842,18 @@ app.get('/{*path}', (req, res, next) => {
 app.listen(PORT, async () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📦 Bucket: ${BUCKET_NAME}`);
+  console.log(
+    `📈 Analytics: s3://${ANALYTICS_BUCKET_NAME}/${ANALYTICS_KEY_PREFIX ? `${ANALYTICS_KEY_PREFIX}/` : ''}improvement/…`,
+  );
   console.log(`🌎 Region: ${REGION}`);
+  await improvementAnalytics.ensureBucketExists();
+  try {
+    const probe = await improvementAnalytics.readIndex('all', '1000');
+    const n = Object.keys(probe.sessions || {}).length;
+    console.log(`📈 Improvement index probe: ${n} session(s) indexed`);
+  } catch (err) {
+    console.warn(`📈 Improvement index probe failed: ${err.message}`);
+  }
   console.log(`📂 S3 base prefix: ${S3_BASE_PREFIX || '(none — keys at bucket root)'}`);
   console.log(`📋 Work Types: ${WORK_TYPES.join(', ')}`);
   console.log(`🔎 S3 layout debug: GET http://localhost:${PORT}/api/s3-discover`);

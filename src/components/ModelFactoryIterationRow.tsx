@@ -9,6 +9,15 @@ import {
   productLineDisplay,
 } from '../constants/factoryStages';
 import { pickNewestLink } from '../utils/unitTestIterationLink';
+import { normalizePipelineIterationTestReadinessSubStatus } from '../constants/pipelineIterationRegistry';
+
+function shipSubStatusPillClass(status: string): string {
+  const n = normalizePipelineIterationTestReadinessSubStatus(status);
+  if (n === 'Not started') return 'model-factory-substatus-pill--not-started';
+  if (n === 'In progress') return 'model-factory-substatus-pill--in-progress';
+  if (n === 'Completed') return 'model-factory-substatus-pill--completed';
+  return '';
+}
 
 function fmtListDate(iso: string | null | undefined): string {
   if (!iso?.trim()) return '—';
@@ -45,6 +54,11 @@ const ModelFactoryIterationRow: FC<ModelFactoryIterationRowProps> = ({
   const primaryUt = pickNewestLink(utLinks);
   const imageCount = r.imageCount ?? r.portalStats?.totalImages ?? null;
   const imageLabel = imageCount != null ? `${imageCount} images` : '— images';
+  const stageSubStatus = normalizePipelineIterationTestReadinessSubStatus(r.factoryStageSubStatus);
+  const stagePill =
+    stageSubStatus != null && stageSubStatus !== ''
+      ? { label: factoryStageLabel(stage), status: stageSubStatus }
+      : null;
 
   const tooltip = [
     productLineDisplay(line),
@@ -74,11 +88,22 @@ const ModelFactoryIterationRow: FC<ModelFactoryIterationRowProps> = ({
           {r.pipeline || 'Unnamed'} <span className="model-factory-card-mini-iter">#{r.iterationNumber}</span>
         </span>
         {showNewPill ? (
-          <span className="model-factory-new-pill model-factory-new-pill--mini" title="Latest shipped for this pipeline">
+          <span className="model-factory-new-pill model-factory-new-pill--mini" title="Latest deployed for this pipeline">
             New
           </span>
         ) : null}
       </div>
+      {stagePill ? (
+        <div className="model-factory-card-mini-chips" aria-label="Stage sub-status">
+          <span
+            className={`model-factory-substatus-pill ${shipSubStatusPillClass(stagePill.status)}`.trim()}
+            title={`${stagePill.label}: ${stagePill.status}`}
+          >
+            <span className="model-factory-substatus-pill-track">{stagePill.label}</span>
+            <span className="model-factory-substatus-pill-value">{stagePill.status}</span>
+          </span>
+        </div>
+      ) : null}
       <div className="model-factory-card-mini-bottom">
         <span className="model-factory-card-mini-images">{imageLabel}</span>
         <div className="model-factory-card-mini-actions">

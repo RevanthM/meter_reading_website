@@ -15,6 +15,7 @@ import { useReadings } from '../context/ReadingsContext';
 import { useAuth } from '../context/AuthContext';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { folderPrefixToSegment } from '../utils/trainingPipeline';
+import TrainingDatasetRoboflowPanel from './TrainingDatasetRoboflowPanel';
 
 function formatBytes(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n) || n < 0) return '—';
@@ -103,7 +104,7 @@ const TrainingPipelinePage: FC = () => {
       const found =
         data.datasets.find((d) => !d.manifestMissing && folderPrefixToSegment(d.folderPrefix) === segment) || null;
       setRow(found);
-      if (!found) setLoadError('Pipeline not found. It may have been removed.');
+      if (!found) setLoadError('Training dataset not found. It may have been removed.');
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Load failed.');
       setRow(null);
@@ -195,10 +196,10 @@ const TrainingPipelinePage: FC = () => {
             <div className="page-title">
               <GraduationCap size={32} strokeWidth={1.5} />
               <div>
-                <h1>{row?.displayName ?? 'pipeline'}</h1>
+                <h1>{row?.displayName ?? 'Training dataset'}</h1>
                 <p>
-                  Copy rows into this folder, download a session ZIP for Roboflow, train, then attach{' '}
-                  <strong>weights.pt</strong> here → same bucket <code>model/weights.pt</code> for the iOS app. Pipeline id:{' '}
+                  Copy sessions into this training dataset, train in Roboflow (keypoint project — create in app for now), then attach{' '}
+                  <strong>weights.pt</strong> here → same bucket <code>model/weights.pt</code> for the iOS app. Id:{' '}
                   <code>{segment}</code>
                 </p>
               </div>
@@ -296,6 +297,8 @@ const TrainingPipelinePage: FC = () => {
               </div>
             </section>
             {weightsMsg ? <p className="training-pipeline-bar-toast">{weightsMsg}</p> : null}
+
+            <TrainingDatasetRoboflowPanel row={row} onUpdated={load} />
 
             <section className="training-pipeline-bar training-pipeline-bar--queues" aria-labelledby="pipeline-add-title">
               <h2 id="pipeline-add-title" className="training-pipeline-bar-title">

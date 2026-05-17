@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FC, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import type { WorkType } from '../types';
 import type { DataSource } from '../context/ReadingsContext';
@@ -7,6 +7,7 @@ import {
   PIPELINE_ITERATION_PRIMARY_STATUSES,
   PIPELINE_ITERATION_SUB_STATUSES,
   normalizePipelineIterationPrimaryStatus,
+  normalizePipelineIterationTestReadinessSubStatus,
 } from '../constants/pipelineIterationRegistry';
 import {
   computePortalStatsForAppVersion,
@@ -14,7 +15,13 @@ import {
 } from '../utils/pipelineIterationStats';
 import PipelineIterationUnitTestLinker from './PipelineIterationUnitTestLinker';
 import FactoryFormExtras from './FactoryFormExtras';
-import { inferFactoryStage } from '../constants/factoryStages';
+import { inferFactoryStage, normalizeFactoryStageId } from '../constants/factoryStages';
+import {
+  PIPELINE_CATALOG,
+  matchPipelineToCatalog,
+  suggestNextIterationAndModel,
+  type PipelineCatalogId,
+} from '../utils/pipelineCatalog';
 
 function deepCloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
   return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
@@ -30,8 +37,51 @@ function fmtPct100(x: number | null | undefined): string {
   return `${x.toFixed(1)}%`;
 }
 
+type IterationModalSection = 'pipeline' | 'dataset' | 'testResults' | 'fieldTest';
+
+const ITERATION_MODAL_SECTIONS: { id: IterationModalSection; label: string }[] = [
+  { id: 'pipeline', label: 'Pipeline details' },
+  { id: 'dataset', label: 'Dataset' },
+  { id: 'testResults', label: 'Test results' },
+  { id: 'fieldTest', label: 'Field test results' },
+];
+
 function emptyManual(): PipelineIterationManualMetrics {
   return {};
+}
+
+function StatusPillRow({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: readonly string[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div className="iteration-status-pill-row">
+      <span className="iteration-status-pill-row-label">{label}</span>
+      <div className="iteration-status-pills" role="group" aria-label={label}>
+        {options.map((opt) => {
+          const active = value === opt;
+          return (
+            <button
+              key={opt}
+              type="button"
+              className={`iteration-status-pill${active ? ' iteration-status-pill--active' : ''}`}
+              aria-pressed={active}
+              onClick={() => onChange(active ? '' : opt)}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function manualNumInput(
@@ -71,6 +121,8 @@ type Props = {
   dataSource: DataSource;
   /** Show factory stage, ship targets, and Roboflow link fields. */
   factoryMode?: boolean;
+  /** Full registry — used to suggest next iteration # and model id per pipeline. */
+  existingIterations?: PipelineIterationRecord[];
 };
 
 const PipelineIterationFormModal: FC<Props> = ({
@@ -83,8 +135,10 @@ const PipelineIterationFormModal: FC<Props> = ({
   workType,
   dataSource,
   factoryMode = false,
+  existingIterations = [],
 }) => {
   const [row, setRow] = useState<PipelineIterationRecord>(() => deepCloneRow(initial));
+  const [activeSection, setActiveSection] = useState<IterationModalSection>('pipeline');
   const [err, setErr] = useState<string | null>(null);
   const [metricsHighlight, setMetricsHighlight] = useState(false);
   const manualMetricsAnchorRef = useRef<HTMLFieldSetElement>(null);
@@ -97,14 +151,56 @@ const PipelineIterationFormModal: FC<Props> = ({
     body.scrollTo({ top: body.scrollTop + offset - 12, behavior: 'smooth' });
   };
 
+  const isNewRow = useMemo(
+    () => !existingIterations.some((r) => r.id === initial.id),
+    [existingIterations, initial.id],
+  );
+
+  const applyPipelineCatalog = useCallback(
+    (catalogId: PipelineCatalogId, base?: PipelineIterationRecord) => {
+      const opt = PIPELINE_CATALOG.find((o) => o.id === catalogId);
+      if (!opt) return;
+      const suggested = suggestNextIterationAndModel(
+        existingIterations,
+        catalogId,
+        isNewRow ? undefined : (base ?? row).id,
+      );
+      setRow((r) => {
+        const cur = base ?? r;
+        return {
+          ...cur,
+          pipeline: opt.value,
+          iterationNumber: suggested.iterationNumber,
+          modelId: suggested.modelId,
+        };
+      });
+    },
+    [existingIterations, isNewRow, row.id],
+  );
+
   useEffect(() => {
     if (open) {
-      setRow(deepCloneRow(initial));
+      const cloned = deepCloneRow(initial);
+      setActiveSection('pipeline');
       setErr(null);
       setSubmitting(false);
       setDeleting(false);
+
+      if (isNewRow) {
+        const catalogId = matchPipelineToCatalog(cloned.pipeline) ?? 'pipeline_3';
+        const opt = PIPELINE_CATALOG.find((o) => o.id === catalogId)!;
+        const suggested = suggestNextIterationAndModel(existingIterations, catalogId);
+        setRow({
+          ...cloned,
+          pipeline: opt.value,
+          iterationNumber: suggested.iterationNumber,
+          modelId: suggested.modelId,
+        });
+      } else {
+        setRow(cloned);
+      }
     }
-  }, [open, initial]);
+  }, [open, initial, isNewRow, existingIterations]);
 
   /** Debounced: when app version is set, pull portal images / confidence / queue proxies without an extra click. */
   useEffect(() => {
@@ -133,6 +229,14 @@ const PipelineIterationFormModal: FC<Props> = ({
 
   const versionChoices = uniqueAppVersionsFromReadings(readings);
   const mm = row.manualMetrics ?? emptyManual();
+  const pipelineCatalogId = matchPipelineToCatalog(row.pipeline) ?? '';
+  const handlePipelineCatalogChange = (catalogId: string) => {
+    if (!catalogId) {
+      setRow((r) => ({ ...r, pipeline: '' }));
+      return;
+    }
+    applyPipelineCatalog(catalogId as PipelineCatalogId);
+  };
 
   const setManual = (patch: Partial<PipelineIterationManualMetrics>) => {
     setRow((r) => ({
@@ -166,8 +270,8 @@ const PipelineIterationFormModal: FC<Props> = ({
   const [deleting, setDeleting] = useState(false);
 
   const buildNormalizedRow = (): PipelineIterationRecord | null => {
-    if (!row.pipeline.trim()) {
-      setErr('Pipeline is required.');
+    if (!matchPipelineToCatalog(row.pipeline)) {
+      setErr('Select a pipeline from the list.');
       return null;
     }
     if (!Number.isFinite(row.iterationNumber) || row.iterationNumber < 1) {
@@ -178,12 +282,22 @@ const PipelineIterationFormModal: FC<Props> = ({
       setErr('Start date is required.');
       return null;
     }
-    const factoryStage = factoryMode
+    const rawStage = factoryMode
       ? row.factoryStage?.trim() || inferFactoryStage(row)
       : row.factoryStage?.trim() || null;
+    const factoryStage = rawStage ? normalizeFactoryStageId(rawStage) ?? rawStage : null;
     return {
       ...row,
       currentStatus: normalizePipelineIterationPrimaryStatus(row.currentStatus),
+      readyToTestSimulatorSubStatus: normalizePipelineIterationTestReadinessSubStatus(
+        row.readyToTestSimulatorSubStatus,
+      ),
+      readyToTestUnitTestSubStatus: normalizePipelineIterationTestReadinessSubStatus(
+        row.readyToTestUnitTestSubStatus,
+      ),
+      factoryStageSubStatus: normalizePipelineIterationTestReadinessSubStatus(
+        row.factoryStageSubStatus,
+      ),
       factoryStage: factoryStage || null,
       linkedUnitTests: row.linkedUnitTests ?? [],
       manualMetrics: row.manualMetrics ?? {},
@@ -299,6 +413,26 @@ const PipelineIterationFormModal: FC<Props> = ({
               {err}
             </p>
           ) : null}
+
+          <nav className="pipeline-iteration-modal-section-nav" role="tablist" aria-label="Form sections">
+            {ITERATION_MODAL_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="tab"
+                aria-selected={activeSection === s.id}
+                className={`pipeline-iteration-modal-section-tab${
+                  activeSection === s.id ? ' pipeline-iteration-modal-section-tab--active' : ''
+                }`}
+                onClick={() => {
+                  setActiveSection(s.id);
+                  modalBodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </nav>
         </div>
 
         <form
@@ -307,13 +441,49 @@ const PipelineIterationFormModal: FC<Props> = ({
           className="pipeline-iteration-modal-body"
           onSubmit={handleSubmit}
         >
-          {factoryMode ? <FactoryFormExtras row={row} setRow={setRow} /> : null}
+          {activeSection === 'pipeline' ? (
+            <div
+              role="tabpanel"
+              className="pipeline-iteration-modal-section-panel"
+              aria-label="Pipeline details"
+            >
+          {!factoryMode ? (
+            <fieldset className="pipeline-iteration-form-section pipeline-iteration-form-section--status">
+              <legend>Status</legend>
+              <StatusPillRow
+                label="Current status"
+                options={PIPELINE_ITERATION_PRIMARY_STATUSES}
+                value={row.currentStatus}
+                onChange={(currentStatus) => setRow((r) => ({ ...r, currentStatus }))}
+              />
+              <StatusPillRow
+                label="Sub-status"
+                options={PIPELINE_ITERATION_SUB_STATUSES}
+                value={row.subStatus ?? ''}
+                onChange={(subStatus) => setRow((r) => ({ ...r, subStatus }))}
+              />
+            </fieldset>
+          ) : null}
+
+          {factoryMode ? <FactoryFormExtras row={row} setRow={setRow} part="pipeline" /> : null}
 
           <fieldset className="pipeline-iteration-form-section">
             <legend>Iteration plan (manual)</legend>
             <div className="pipeline-iteration-form-grid">
               <label>
-                Pipeline <input value={row.pipeline} onChange={(e) => setRow({ ...row, pipeline: e.target.value })} />
+                Pipeline
+                <select
+                  value={pipelineCatalogId}
+                  onChange={(e) => handlePipelineCatalogChange(e.target.value)}
+                  required
+                >
+                  <option value="">— Select pipeline —</option>
+                  {PIPELINE_CATALOG.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Iteration #{' '}
@@ -330,13 +500,19 @@ const PipelineIterationFormModal: FC<Props> = ({
                 />
               </label>
               <label>
-                Model # <span className="pipeline-iteration-optional">(optional)</span>{' '}
+                Model #
                 <input
                   value={row.modelId}
                   onChange={(e) => setRow({ ...row, modelId: e.target.value })}
-                  placeholder="e.g. anica.p2"
+                  placeholder="e.g. combined.p3.3"
                 />
               </label>
+              {pipelineCatalogId ? (
+                <p className="pipeline-iteration-form-hint pipeline-iteration-form-span2">
+                  Iteration # and model # are suggested from the latest row on this pipeline (e.g.{' '}
+                  <code>combined.p3.3</code>). Change pipeline to refresh both.
+                </p>
+              ) : null}
               <label>
                 App version <span className="pipeline-iteration-optional">(optional)</span>
                 <input
@@ -403,44 +579,6 @@ const PipelineIterationFormModal: FC<Props> = ({
                   }}
                 />
               </label>
-              {!factoryMode ? (
-                <>
-                  <label>
-                    Current status{' '}
-                    <input
-                      list="pipeline-primary-status-options"
-                      value={row.currentStatus}
-                      onChange={(e) => setRow({ ...row, currentStatus: e.target.value })}
-                      onBlur={() =>
-                        setRow((r) => ({
-                          ...r,
-                          currentStatus: normalizePipelineIterationPrimaryStatus(r.currentStatus),
-                        }))
-                      }
-                      placeholder="e.g. In Process"
-                    />
-                    <datalist id="pipeline-primary-status-options">
-                      {PIPELINE_ITERATION_PRIMARY_STATUSES.map((s) => (
-                        <option key={s} value={s} />
-                      ))}
-                    </datalist>
-                  </label>
-                  <label>
-                    Sub-status (optional){' '}
-                    <input
-                      list="pipeline-sub-status-options"
-                      value={row.subStatus ?? ''}
-                      onChange={(e) => setRow({ ...row, subStatus: e.target.value })}
-                      placeholder="e.g. In Training"
-                    />
-                    <datalist id="pipeline-sub-status-options">
-                      {PIPELINE_ITERATION_SUB_STATUSES.map((s) => (
-                        <option key={s} value={s} />
-                      ))}
-                    </datalist>
-                  </label>
-                </>
-              ) : null}
               <label>
                 Outcome <input value={row.outcome} onChange={(e) => setRow({ ...row, outcome: e.target.value })} />
               </label>
@@ -454,61 +592,16 @@ const PipelineIterationFormModal: FC<Props> = ({
               Load sessions &amp; images from portal
             </button>
           </fieldset>
+            </div>
+          ) : null}
 
-          {ps ? (
-            <fieldset className="pipeline-iteration-form-section pipeline-iteration-form-section--readonly">
-              <legend>From portal (auto)</legend>
-              <p className="pipeline-iteration-form-hint">
-                Snapshot at {new Date(ps.pulledAt).toLocaleString()}. Queue “accuracy” is % of sessions in the{' '}
-                <strong>correct</strong> folder; digit match compares <code>user_correction</code> vs{' '}
-                <code>ml_prediction</code> digits (proxy only).
-              </p>
-              <div className="pipeline-iteration-stats-grid">
-                <div><span className="k">Sessions</span><span className="v">{ps.totalSessions}</span></div>
-                <div><span className="k">Total images</span><span className="v">{ps.totalImages}</span></div>
-                <div><span className="k">Simulator sessions</span><span className="v">{ps.simulatorSessions}</span></div>
-                <div><span className="k">Simulator images</span><span className="v">{ps.simulatorImages}</span></div>
-                <div><span className="k">Field sessions</span><span className="v">{ps.fieldSessions}</span></div>
-                <div><span className="k">Field images</span><span className="v">{ps.fieldImages}</span></div>
-                <div><span className="k">Avg session confidence (app)</span><span className="v">{fmtPct01(ps.avgSessionConfidence)}</span></div>
-                <div><span className="k">Queue correct (all)</span><span className="v">{fmtPct100(ps.queueCorrectRateAll)}</span></div>
-                <div><span className="k">Queue correct (simulator)</span><span className="v">{fmtPct100(ps.queueCorrectRateSimulator)}</span></div>
-                <div><span className="k">Queue correct (field)</span><span className="v">{fmtPct100(ps.queueCorrectRateField)}</span></div>
-                <div><span className="k">Digit match UT (sim)</span><span className="v">{fmtPct100(ps.digitMatchUtPct)}</span></div>
-                <div><span className="k">Dial 1 UT (%)</span><span className="v">{fmtPct100(ps.dial1UtPct)}</span></div>
-                <div><span className="k">Dial 2 UT (%)</span><span className="v">{fmtPct100(ps.dial2UtPct)}</span></div>
-                <div><span className="k">Dial 3 UT (%)</span><span className="v">{fmtPct100(ps.dial3UtPct)}</span></div>
-                <div><span className="k">Dial 4 UT (%)</span><span className="v">{fmtPct100(ps.dial4UtPct)}</span></div>
-                <div><span className="k">Digit match FT (field)</span><span className="v">{fmtPct100(ps.digitMatchFtPct)}</span></div>
-                <div><span className="k">Dial 1 FT (%)</span><span className="v">{fmtPct100(ps.dial1FtPct)}</span></div>
-                <div><span className="k">Dial 2 FT (%)</span><span className="v">{fmtPct100(ps.dial2FtPct)}</span></div>
-                <div><span className="k">Dial 3 FT (%)</span><span className="v">{fmtPct100(ps.dial3FtPct)}</span></div>
-                <div><span className="k">Dial 4 FT (%)</span><span className="v">{fmtPct100(ps.dial4FtPct)}</span></div>
-              </div>
-            </fieldset>
-          ) : (
-            <p className="pipeline-iteration-form-muted">No portal snapshot yet — choose app version and click “Load sessions…”.</p>
-          )}
-
-          <PipelineIterationUnitTestLinker
-            workType={workType}
-            modelId={row.modelId}
-            linked={row.linkedUnitTests ?? []}
-            onLinkedChange={(linkedUnitTests) => setRow((r) => ({ ...r, linkedUnitTests }))}
-            onApplyManualMetrics={(metrics) => {
-              setRow((r) => ({ ...r, manualMetrics: metrics }));
-              setMetricsHighlight(true);
-              window.setTimeout(() => setMetricsHighlight(false), 2600);
-            }}
-            onAfterApply={() => {
-              scrollModalBodyTo(manualMetricsAnchorRef.current);
-            }}
-            onSuggestAppVersion={(appVersion) => {
-              if (!row.appVersion.trim()) {
-                setRow((r) => ({ ...r, appVersion }));
-              }
-            }}
-          />
+          {activeSection === 'dataset' ? (
+            <div
+              role="tabpanel"
+              className="pipeline-iteration-modal-section-panel"
+              aria-label="Dataset"
+            >
+          {factoryMode ? <FactoryFormExtras row={row} setRow={setRow} part="dataset" /> : null}
 
           <fieldset className="pipeline-iteration-form-section">
             <legend>Roboflow (manual)</legend>
@@ -541,41 +634,65 @@ const PipelineIterationFormModal: FC<Props> = ({
               </label>
             </div>
           </fieldset>
-
-          <fieldset className="pipeline-iteration-form-section">
-            <legend>App model metrics (manual)</legend>
-            <div className="pipeline-iteration-form-grid">
-              <label>
-                Ave. bbox confidence — app (%){' '}
-                <input
-                  type="number"
-                  step="0.1"
-                  value={mm.appAvgBboxConfidence ?? ''}
-                  onChange={(e) =>
-                    setManual({ appAvgBboxConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
-                  }
-                />
-              </label>
-              <label>
-                Ave. keypoint confidence — app (%){' '}
-                <input
-                  type="number"
-                  step="0.1"
-                  value={mm.appAvgKeypointConfidence ?? ''}
-                  onChange={(e) =>
-                    setManual({ appAvgKeypointConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
-                  }
-                />
-              </label>
             </div>
-          </fieldset>
+          ) : null}
+
+          {activeSection === 'testResults' ? (
+            <div
+              role="tabpanel"
+              className="pipeline-iteration-modal-section-panel"
+              aria-label="Test results"
+            >
+          <PipelineIterationUnitTestLinker
+            workType={workType}
+            modelId={row.modelId}
+            linked={row.linkedUnitTests ?? []}
+            onLinkedChange={(linkedUnitTests) => setRow((r) => ({ ...r, linkedUnitTests }))}
+            onApplyManualMetrics={(metrics) => {
+              setRow((r) => ({ ...r, manualMetrics: metrics }));
+              setMetricsHighlight(true);
+              window.setTimeout(() => setMetricsHighlight(false), 2600);
+            }}
+            onAfterApply={() => {
+              window.setTimeout(() => scrollModalBodyTo(manualMetricsAnchorRef.current), 80);
+            }}
+            onSuggestAppVersion={(appVersion) => {
+              if (!row.appVersion.trim()) {
+                setRow((r) => ({ ...r, appVersion }));
+              }
+            }}
+          />
+
+          {ps ? (
+            <fieldset className="pipeline-iteration-form-section pipeline-iteration-form-section--readonly">
+              <legend>Simulator results (portal)</legend>
+              <p className="pipeline-iteration-form-hint">
+                Snapshot at {new Date(ps.pulledAt).toLocaleString()}. Simulator / unit-test proxy for app version{' '}
+                <strong>{row.appVersion.trim() || '—'}</strong>.
+              </p>
+              <div className="pipeline-iteration-stats-grid">
+                <div><span className="k">Simulator sessions</span><span className="v">{ps.simulatorSessions}</span></div>
+                <div><span className="k">Simulator images</span><span className="v">{ps.simulatorImages}</span></div>
+                <div><span className="k">Queue correct (simulator)</span><span className="v">{fmtPct100(ps.queueCorrectRateSimulator)}</span></div>
+                <div><span className="k">Digit match UT (sim)</span><span className="v">{fmtPct100(ps.digitMatchUtPct)}</span></div>
+                <div><span className="k">Dial 1 UT (%)</span><span className="v">{fmtPct100(ps.dial1UtPct)}</span></div>
+                <div><span className="k">Dial 2 UT (%)</span><span className="v">{fmtPct100(ps.dial2UtPct)}</span></div>
+                <div><span className="k">Dial 3 UT (%)</span><span className="v">{fmtPct100(ps.dial3UtPct)}</span></div>
+                <div><span className="k">Dial 4 UT (%)</span><span className="v">{fmtPct100(ps.dial4UtPct)}</span></div>
+              </div>
+            </fieldset>
+          ) : (
+            <p className="pipeline-iteration-form-muted">
+              No simulator portal snapshot — set app version on Pipeline details and click “Load sessions…”.
+            </p>
+          )}
 
           <fieldset
             ref={manualMetricsAnchorRef}
             id="pipeline-manual-metrics-read"
             className={`pipeline-iteration-form-section${metricsHighlight ? ' pipeline-metrics--applied' : ''}`}
           >
-            <legend>Read accuracy &amp; dials (manual — eval / notebook)</legend>
+            <legend>Simulator &amp; unit test (manual)</legend>
             <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
               <label>
                 Read acc. simulator laptop (%){' '}
@@ -598,17 +715,6 @@ const PipelineIterationFormModal: FC<Props> = ({
                   value={mm.readAccuracyUt ?? ''}
                   onChange={(e) =>
                     setManual({ readAccuracyUt: e.target.value === '' ? null : parseFloat(e.target.value) })
-                  }
-                />
-              </label>
-              <label>
-                Read acc. FT (%){' '}
-                <input
-                  type="number"
-                  step="0.1"
-                  value={mm.readAccuracyFt ?? ''}
-                  onChange={(e) =>
-                    setManual({ readAccuracyFt: e.target.value === '' ? null : parseFloat(e.target.value) })
                   }
                 />
               </label>
@@ -653,6 +759,134 @@ const PipelineIterationFormModal: FC<Props> = ({
                   value={mm.dial4UtPct ?? ''}
                   onChange={(e) =>
                     setManual({ dial4UtPct: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                UT images — laptop (#){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={mm.unitTestImagesLaptop == null ? '' : String(mm.unitTestImagesLaptop)}
+                  onChange={(e) =>
+                    setManual({
+                      unitTestImagesLaptop: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                UT images — gallery / screen (#){' '}
+                <input
+                  type="number"
+                  min={0}
+                  value={mm.unitTestImagesGalleryOrScreen == null ? '' : String(mm.unitTestImagesGalleryOrScreen)}
+                  onChange={(e) =>
+                    setManual({
+                      unitTestImagesGalleryOrScreen: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Per-dial accuracy — simulator (%)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              {manualNumInput(mm, setManual, 'simDial1AccuracyPct', 'Sim dial 1 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial2AccuracyPct', 'Sim dial 2 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial3AccuracyPct', 'Sim dial 3 acc. (%)')}
+              {manualNumInput(mm, setManual, 'simDial4AccuracyPct', 'Sim dial 4 acc. (%)')}
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Per-dial confidence — simulator (%)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              {manualNumInput(mm, setManual, 'simDial1ConfidencePct', 'Sim dial 1 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial2ConfidencePct', 'Sim dial 2 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial3ConfidencePct', 'Sim dial 3 conf. (%)')}
+              {manualNumInput(mm, setManual, 'simDial4ConfidencePct', 'Sim dial 4 conf. (%)')}
+            </div>
+          </fieldset>
+            </div>
+          ) : null}
+
+          {activeSection === 'fieldTest' ? (
+            <div
+              role="tabpanel"
+              className="pipeline-iteration-modal-section-panel"
+              aria-label="Field test results"
+            >
+          {ps ? (
+            <fieldset className="pipeline-iteration-form-section pipeline-iteration-form-section--readonly">
+              <legend>Field test results (portal)</legend>
+              <p className="pipeline-iteration-form-hint">
+                Snapshot at {new Date(ps.pulledAt).toLocaleString()}. Queue “accuracy” is % of sessions in the{' '}
+                <strong>correct</strong> folder; digit match compares <code>user_correction</code> vs{' '}
+                <code>ml_prediction</code> digits (proxy only).
+              </p>
+              <div className="pipeline-iteration-stats-grid">
+                <div><span className="k">Sessions</span><span className="v">{ps.totalSessions}</span></div>
+                <div><span className="k">Total images</span><span className="v">{ps.totalImages}</span></div>
+                <div><span className="k">Field sessions</span><span className="v">{ps.fieldSessions}</span></div>
+                <div><span className="k">Field images</span><span className="v">{ps.fieldImages}</span></div>
+                <div><span className="k">Avg session confidence (app)</span><span className="v">{fmtPct01(ps.avgSessionConfidence)}</span></div>
+                <div><span className="k">Queue correct (all)</span><span className="v">{fmtPct100(ps.queueCorrectRateAll)}</span></div>
+                <div><span className="k">Queue correct (field)</span><span className="v">{fmtPct100(ps.queueCorrectRateField)}</span></div>
+                <div><span className="k">Digit match FT (field)</span><span className="v">{fmtPct100(ps.digitMatchFtPct)}</span></div>
+                <div><span className="k">Dial 1 FT (%)</span><span className="v">{fmtPct100(ps.dial1FtPct)}</span></div>
+                <div><span className="k">Dial 2 FT (%)</span><span className="v">{fmtPct100(ps.dial2FtPct)}</span></div>
+                <div><span className="k">Dial 3 FT (%)</span><span className="v">{fmtPct100(ps.dial3FtPct)}</span></div>
+                <div><span className="k">Dial 4 FT (%)</span><span className="v">{fmtPct100(ps.dial4FtPct)}</span></div>
+              </div>
+            </fieldset>
+          ) : (
+            <p className="pipeline-iteration-form-muted">
+              No field portal snapshot — set app version on Pipeline details and click “Load sessions…”.
+            </p>
+          )}
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>App model metrics (manual)</legend>
+            <div className="pipeline-iteration-form-grid">
+              <label>
+                Ave. bbox confidence — app (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.appAvgBboxConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({ appAvgBboxConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Ave. keypoint confidence — app (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.appAvgKeypointConfidence ?? ''}
+                  onChange={(e) =>
+                    setManual({ appAvgKeypointConfidence: e.target.value === '' ? null : parseFloat(e.target.value) })
+                  }
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="pipeline-iteration-form-section">
+            <legend>Field test (manual)</legend>
+            <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
+              <label>
+                Read acc. FT (%){' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={mm.readAccuracyFt ?? ''}
+                  onChange={(e) =>
+                    setManual({ readAccuracyFt: e.target.value === '' ? null : parseFloat(e.target.value) })
                   }
                 />
               </label>
@@ -711,42 +945,6 @@ const PipelineIterationFormModal: FC<Props> = ({
                   }
                 />
               </label>
-            </div>
-          </fieldset>
-
-          <fieldset className="pipeline-iteration-form-section">
-            <legend>Admin — dataset splits &amp; eval summary</legend>
-            <p className="pipeline-iteration-form-hint">
-              Optional fields aligned with the iteration spreadsheet (UT laptop vs gallery/screen vs field counts;
-              exact-reading accuracy; manual review rate).
-            </p>
-            <div className="pipeline-iteration-form-grid">
-              <label>
-                UT images — laptop (#){' '}
-                <input
-                  type="number"
-                  min={0}
-                  value={mm.unitTestImagesLaptop == null ? '' : String(mm.unitTestImagesLaptop)}
-                  onChange={(e) =>
-                    setManual({
-                      unitTestImagesLaptop: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
-                    })
-                  }
-                />
-              </label>
-              <label>
-                UT images — gallery / screen (#){' '}
-                <input
-                  type="number"
-                  min={0}
-                  value={mm.unitTestImagesGalleryOrScreen == null ? '' : String(mm.unitTestImagesGalleryOrScreen)}
-                  onChange={(e) =>
-                    setManual({
-                      unitTestImagesGalleryOrScreen: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
-                    })
-                  }
-                />
-              </label>
               <label>
                 Field test images (#){' '}
                 <input
@@ -790,12 +988,8 @@ const PipelineIterationFormModal: FC<Props> = ({
           </fieldset>
 
           <fieldset className="pipeline-iteration-form-section">
-            <legend>Admin — per-dial accuracy (%)</legend>
+            <legend>Per-dial accuracy — app / field (%)</legend>
             <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
-              {manualNumInput(mm, setManual, 'simDial1AccuracyPct', 'Sim dial 1 acc. (%)')}
-              {manualNumInput(mm, setManual, 'simDial2AccuracyPct', 'Sim dial 2 acc. (%)')}
-              {manualNumInput(mm, setManual, 'simDial3AccuracyPct', 'Sim dial 3 acc. (%)')}
-              {manualNumInput(mm, setManual, 'simDial4AccuracyPct', 'Sim dial 4 acc. (%)')}
               {manualNumInput(mm, setManual, 'appDial1AccuracyPct', 'App dial 1 acc. (%)')}
               {manualNumInput(mm, setManual, 'appDial2AccuracyPct', 'App dial 2 acc. (%)')}
               {manualNumInput(mm, setManual, 'appDial3AccuracyPct', 'App dial 3 acc. (%)')}
@@ -804,18 +998,16 @@ const PipelineIterationFormModal: FC<Props> = ({
           </fieldset>
 
           <fieldset className="pipeline-iteration-form-section">
-            <legend>Admin — per-dial confidence (%)</legend>
+            <legend>Per-dial confidence — app / field (%)</legend>
             <div className="pipeline-iteration-form-grid pipeline-iteration-form-grid--dense">
-              {manualNumInput(mm, setManual, 'simDial1ConfidencePct', 'Sim dial 1 conf. (%)')}
-              {manualNumInput(mm, setManual, 'simDial2ConfidencePct', 'Sim dial 2 conf. (%)')}
-              {manualNumInput(mm, setManual, 'simDial3ConfidencePct', 'Sim dial 3 conf. (%)')}
-              {manualNumInput(mm, setManual, 'simDial4ConfidencePct', 'Sim dial 4 conf. (%)')}
               {manualNumInput(mm, setManual, 'appDial1ConfidencePct', 'App dial 1 conf. (%)')}
               {manualNumInput(mm, setManual, 'appDial2ConfidencePct', 'App dial 2 conf. (%)')}
               {manualNumInput(mm, setManual, 'appDial3ConfidencePct', 'App dial 3 conf. (%)')}
               {manualNumInput(mm, setManual, 'appDial4ConfidencePct', 'App dial 4 conf. (%)')}
             </div>
           </fieldset>
+            </div>
+          ) : null}
 
         </form>
       </div>

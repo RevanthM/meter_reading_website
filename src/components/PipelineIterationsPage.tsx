@@ -35,6 +35,9 @@ function newEmptyRow(): PipelineIterationRecord {
     imagesAddedSinceLastIteration: null,
     currentStatus: '',
     subStatus: '',
+    readyToTestSimulatorSubStatus: '',
+    readyToTestUnitTestSubStatus: '',
+    factoryStageSubStatus: '',
     outcome: '',
     portalStats: null,
     manualMetrics: {},
@@ -592,6 +595,7 @@ const PipelineIterationsPage: FC = () => {
       <PipelineIterationFormModal
         open={modalOpen}
         initial={modalDraft}
+        existingIterations={rows}
         onClose={() => setModalOpen(false)}
         onSave={commitModalRow}
         onDelete={

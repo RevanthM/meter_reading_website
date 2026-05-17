@@ -55,7 +55,7 @@ const LIST_PRIORITY: Record<string, number> = {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** List toolbar cohort (replaces pipeline-stage dropdown + legacy trainingPick). */
-const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'recommended'] as const;
+const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data', 'recommended'] as const;
 type ReadingsCohortId = (typeof READINGS_COHORT_IDS)[number];
 
 function isReadingsCohortId(s: string): s is ReadingsCohortId {
@@ -66,7 +66,10 @@ const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
   untrained: 'Untrained',
   correct: 'Reviewed correct',
   wrong: 'Reviewed wrong',
-  recommended: 'Reviewer recommended',
+  training: 'Send to training',
+  test_data: 'Send to test dataset',
+  /** @deprecated use training */
+  recommended: 'Send to training',
 };
 
 function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boolean {
@@ -77,8 +80,11 @@ function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boo
       return r.status === 'correct';
     case 'wrong':
       return r.status === 'incorrect_analyzed' || r.status === 'incorrect_labeled' || r.status === 'incorrect_training';
+    case 'training':
     case 'recommended':
-      return r.reviewerRecommendTraining === true;
+      return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
+    case 'test_data':
+      return r.reviewerDatasetDestination === 'test';
   }
 }
 
@@ -182,7 +188,12 @@ const ReadingsList: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { getReadingsByStatus, bulkUpdateStatus, workType, dataSource, isUsingRealData } = useReadings();
+  const { getReadingsByStatus, bulkUpdateStatus, workType, dataSource, isUsingRealData, ensureReadingsLoaded } =
+    useReadings();
+
+  useEffect(() => {
+    void ensureReadingsLoaded();
+  }, [ensureReadingsLoaded]);
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
   const showBulkMove = portalWorkMode !== 'labeler';
@@ -1088,8 +1099,8 @@ const ReadingsList: FC = () => {
                         {statusLabels[reading.status]}
                       </span>
                       {reading.reviewerRecommendTraining ? (
-                        <span className="readings-training-pick-badge" title="Reviewer recommended for training">
-                          Pick
+                        <span className="readings-training-pick-badge" title="Reviewer sent to training dataset">
+                          Training
                         </span>
                       ) : null}
                     </span>

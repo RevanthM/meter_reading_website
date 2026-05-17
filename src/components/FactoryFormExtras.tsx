@@ -10,6 +10,7 @@ import {
   productLineDisplay,
 } from '../constants/factoryStages';
 import FactoryIterationWeights from './FactoryIterationWeights';
+import FactoryIterationTrainingDatasets from './FactoryIterationTrainingDatasets';
 import RoboflowLinkDetail from './RoboflowLinkDetail';
 import {
   fetchRoboflowProjectDetail,
@@ -21,15 +22,20 @@ import {
   type RoboflowProjectVersion,
 } from '../services/roboflowApi';
 import { mergeRoboflowVersionDetailIntoLink } from '../utils/roboflowLinkFields';
+import { PIPELINE_ITERATION_TEST_READINESS_SUB_STATUSES } from '../constants/pipelineIterationRegistry';
 
 type Props = {
   row: PipelineIterationRecord;
   setRow: React.Dispatch<React.SetStateAction<PipelineIterationRecord>>;
+  /** When set, only render fields for that modal tab (default: all). */
+  part?: 'pipeline' | 'dataset' | 'all';
 };
 
 type LinkKey = 'dialDetection' | 'keypoint';
 
-const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
+const FactoryFormExtras: FC<Props> = ({ row, setRow, part = 'all' }) => {
+  const showPipeline = part === 'all' || part === 'pipeline';
+  const showDataset = part === 'all' || part === 'dataset';
   const [rfProjects, setRfProjects] = useState<RoboflowProject[]>([]);
   const [rfLoading, setRfLoading] = useState(false);
   const [rfErr, setRfErr] = useState<string | null>(null);
@@ -210,6 +216,7 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
 
   return (
     <>
+      {showPipeline ? (
       <fieldset className="pipeline-iteration-form-section model-factory-form-section">
         <legend>Factory — stage &amp; ship</legend>
         <p className="pipeline-iteration-form-hint">
@@ -222,6 +229,23 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
               {FACTORY_STAGES.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Stage sub-status
+            <select
+              value={row.factoryStageSubStatus ?? ''}
+              onChange={(e) =>
+                setRow((r) => ({ ...r, factoryStageSubStatus: e.target.value }))
+              }
+              aria-label="Factory stage sub-status"
+            >
+              <option value="">— Select —</option>
+              {PIPELINE_ITERATION_TEST_READINESS_SUB_STATUSES.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
                 </option>
               ))}
             </select>
@@ -246,6 +270,11 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
           </label>
         </div>
       </fieldset>
+      ) : null}
+
+      {showDataset ? (
+      <>
+      <FactoryIterationTrainingDatasets row={row} setRow={setRow} />
 
       <fieldset className="pipeline-iteration-form-section model-factory-form-section">
         <legend>Roboflow</legend>
@@ -319,6 +348,8 @@ const FactoryFormExtras: FC<Props> = ({ row, setRow }) => {
       </fieldset>
 
       <FactoryIterationWeights row={row} setRow={setRow} />
+      </>
+      ) : null}
     </>
   );
 };

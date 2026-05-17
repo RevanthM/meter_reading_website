@@ -1,5 +1,10 @@
 import type { MeterReading, DashboardCounts, WorkType } from '../types';
 import type { PortalWorkMode } from '../utils/portalWorkMode';
+import { portalWorkModeForMetadataHeader } from '../utils/portalWorkMode';
+
+export type ReviewerDatasetDestination = 'training' | 'test' | null;
+export type ImageDifficulty = 'normal' | 'difficult' | 'very_difficult' | null;
+export type TestDataReviewStatus = 'pending' | 'approved' | null;
 import type { DataSource } from '../context/ReadingsContext';
 
 const API_BASE_URL = '/api';
@@ -102,8 +107,14 @@ export interface S3MeterReading extends MeterReading {
   imageSource?: string;
   uploadMode?: string;
   feedbackType?: string;
-  /** Reviewer flagged this session for the training dataset (`reviewer_recommend_training` in metadata). */
+  /** @deprecated Use reviewerDatasetDestination — kept for list filters. */
   reviewerRecommendTraining?: boolean;
+  reviewerDatasetDestination?: ReviewerDatasetDestination;
+  imageDifficulty?: ImageDifficulty;
+  testDataReviewStatus?: TestDataReviewStatus;
+  testDataUnitTestS3Key?: string;
+  testDataUnitTestFileName?: string;
+  testDataApprovedAt?: string;
   /** `is_manually_reviewed` in metadata; legacy `is_human_reviewed` is still read by the server until migrated. */
   isManuallyReviewed?: boolean;
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
@@ -263,13 +274,21 @@ export interface PipelineIterationRecord {
   currentStatus: string;
   /** Optional workflow detail (e.g. In Training, Annotation). */
   subStatus?: string;
+  /** Ready to test (simulator) — not started / in progress / completed. */
+  readyToTestSimulatorSubStatus?: string;
+  /** Ready to test (unit test) — not started / in progress / completed. */
+  readyToTestUnitTestSubStatus?: string;
   outcome: string;
   portalStats?: PipelineIterationPortalStats | null;
   manualMetrics?: PipelineIterationManualMetrics | null;
   /** Unit-test CSV exports from S3 attached to this iteration. */
   linkedUnitTests?: PipelineIterationUnitTestLink[];
+  /** Portal training datasets (S3 folders) linked to this iteration — not post-train Roboflow model links. */
+  linkedTrainingDatasets?: PipelineIterationTrainingDatasetLink[];
   /** Model factory assembly-line stage (see factoryStages.ts). */
   factoryStage?: string | null;
+  /** Progress within the current factory stage (not started / in progress / completed). */
+  factoryStageSubStatus?: string;
   /** What this release ships: dial finder, keypoint reader, or both. */
   modelShip?: PipelineIterationModelShip | null;
   /** Linked Roboflow projects/versions for this iteration. */
@@ -300,6 +319,10 @@ export interface PipelineIterationModelWeights {
 export interface PipelineIterationModelShip {
   dialDetection?: boolean;
   keypoint?: boolean;
+  /** Not started / In progress / Completed for Stage A ship track. */
+  dialDetectionSubStatus?: string;
+  /** Not started / In progress / Completed for Stage B ship track. */
+  keypointSubStatus?: string;
 }
 
 export interface PipelineIterationRoboflowSplits {
@@ -332,6 +355,31 @@ export interface PipelineIterationRoboflowVersionLink {
 export interface PipelineIterationRoboflowLinks {
   dialDetection?: PipelineIterationRoboflowVersionLink | null;
   keypoint?: PipelineIterationRoboflowVersionLink | null;
+}
+
+/** Roboflow project created from a portal training dataset (upload target). */
+export interface TrainingDatasetRoboflowTraining {
+  projectName: string | null;
+  projectType: string | null;
+  /** Roboflow annotation group slug, e.g. analog-gas-meter */
+  annotation?: string | null;
+  datasetSlug: string;
+  workspaceSlug: string | null;
+  projectSlug: string | null;
+  annotateUrl: string | null;
+  url: string | null;
+  createdAt: string | null;
+  lastSyncAt: string | null;
+  lastSyncUploaded: number | null;
+  lastSyncFailed: number | null;
+  lastSyncBatch: string | null;
+}
+
+export interface PipelineIterationTrainingDatasetLink {
+  folderPrefix: string;
+  displayName?: string | null;
+  linkedAt?: string | null;
+  roboflowTraining?: TrainingDatasetRoboflowTraining | null;
 }
 
 export interface PipelineIterationsDoc {
@@ -538,13 +586,18 @@ export async function fetchWorkTypes(): Promise<WorkTypeInfo[]> {
   }
 }
 
-export async function fetchReadings(source?: DataSource, workType?: WorkType): Promise<S3MeterReading[]> {
+export async function fetchReadings(
+  source?: DataSource,
+  workType?: WorkType,
+  refresh = false,
+): Promise<S3MeterReading[]> {
   try {
     const params = new URLSearchParams();
     if (source && source !== 'all') params.set('source', source);
     if (workType) params.set('workType', workType);
-    
-    const url = params.toString() 
+    if (refresh) params.set('refresh', '1');
+
+    const url = params.toString()
       ? `${API_BASE_URL}/readings?${params}`
       : `${API_BASE_URL}/readings`;
     const response = await fetch(url);
@@ -697,6 +750,49 @@ export async function fetchCounts(source?: DataSource, workType?: WorkType): Pro
   }
 }
 
+export type ImprovementChartRange = 'all' | '1d' | '7d' | '14d' | '30d';
+
+export interface ImprovementStatsResponse {
+  bins: import('../utils/dashboardImprovementStats').ImprovementStoryBin[];
+  /** Per app_version rollups from analytics index (replaces heavy model-analytics on dashboard). */
+  versionSummary?: ModelVersionStats[];
+  windowSessionCount: number;
+  totalIndexedSessions: number;
+  computedAt: string;
+  range: ImprovementChartRange;
+  storage?: { bucket: string; key: string; uri: string };
+  /** Index empty — background S3 scan started. */
+  building?: boolean;
+  /** Refresh requested — serving cached index while backfill runs. */
+  rebuilding?: boolean;
+}
+
+export async function fetchImprovementStats(
+  source?: DataSource,
+  workType?: WorkType,
+  range: ImprovementChartRange = 'all',
+  refresh = false,
+): Promise<ImprovementStatsResponse> {
+  try {
+    const params = new URLSearchParams();
+    if (source && source !== 'all') params.set('source', source);
+    if (workType) params.set('workType', workType);
+    if (range && range !== 'all') params.set('range', range);
+    if (refresh) params.set('refresh', '1');
+    const url = params.toString()
+      ? `${API_BASE_URL}/improvement-stats?${params}`
+      : `${API_BASE_URL}/improvement-stats`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to fetch improvement stats:', error);
+    throw error;
+  }
+}
+
 export async function fetchReadingById(id: string, workType?: WorkType): Promise<S3MeterReading | null> {
   try {
     const q = workType ? `?workType=${encodeURIComponent(workType)}` : '';
@@ -722,8 +818,10 @@ export type SessionMetadataPatch = {
   is_correct?: boolean;
   condition_code?: string | null;
   portal_review_notes?: string;
-  /** When true, labelers can filter the list for reviewer-recommended sessions. */
+  /** @deprecated Use reviewer_dataset_destination */
   reviewer_recommend_training?: boolean;
+  reviewer_dataset_destination?: 'training' | 'test' | null;
+  image_difficulty?: 'normal' | 'difficult' | 'very_difficult' | null;
   /** Portal reviewer save sets true in metadata.json (replaces legacy `is_human_reviewed` on write). */
   is_manually_reviewed?: boolean;
   confidence?: number;
@@ -740,7 +838,7 @@ export async function patchSessionMetadata(
 ): Promise<S3MeterReading> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-portal-work-mode': portalWorkMode === 'admin' ? 'reviewer' : portalWorkMode,
+    'x-portal-work-mode': portalWorkModeForMetadataHeader(portalWorkMode),
   };
   if (userEmail) headers['x-user-email'] = userEmail;
   const response = await fetch(`${API_BASE_URL}/readings/${encodeURIComponent(sessionId)}/metadata`, {
@@ -888,6 +986,8 @@ export interface TrainingDatasetRow {
   copiedSessionCount?: number;
   lastCopyAt?: string | null;
   weights?: TrainingPipelineWeightsSummary | null;
+  /** Portal-linked Roboflow project for training uploads (not iteration model-version links). */
+  roboflowTraining?: TrainingDatasetRoboflowTraining | null;
 }
 
 export interface CopySessionsToTrainingDatasetResult {
@@ -1081,6 +1181,201 @@ export async function createTrainingDataset(name: string): Promise<CreateTrainin
     throw new Error(err.error || `HTTP ${response.status}`);
   }
   return parseJsonBody<CreateTrainingDatasetResponse>(text, response.status);
+}
+
+export type TrainingDatasetRoboflowProjectType = 'object-detection';
+
+/** Roboflow annotation group for portal training datasets (spaces → hyphens in API). */
+export const TRAINING_DATASET_ROBOFLOW_ANNOTATION = 'analog-gas-meter';
+
+/** Portal create-project disabled until keypoint REST create is supported. */
+export const TRAINING_DATASET_ROBOFLOW_CREATE_ENABLED = false;
+
+/** @deprecated Create disabled — kept for when keypoint create is re-enabled. */
+export async function createTrainingDatasetRoboflowProject(
+  folderPrefix: string,
+  opts?: {
+    projectName?: string;
+    projectType?: TrainingDatasetRoboflowProjectType;
+    annotation?: string;
+  },
+): Promise<{
+  ok: boolean;
+  folderPrefix: string;
+  roboflowTraining: TrainingDatasetRoboflowTraining;
+  displayName: string;
+}> {
+  if (!TRAINING_DATASET_ROBOFLOW_CREATE_ENABLED) {
+    throw new Error(
+      'Creating Roboflow projects from the portal is disabled (keypoint-detection required). Create in Roboflow app and link later.',
+    );
+  }
+  const response = await fetch(`${API_BASE_URL}/training-datasets/roboflow/create-project`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      folderPrefix,
+      projectName: opts?.projectName,
+      projectType: opts?.projectType ?? 'object-detection',
+      annotation: opts?.annotation ?? TRAINING_DATASET_ROBOFLOW_ANNOTATION,
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function syncTrainingDatasetToRoboflow(
+  folderPrefix: string,
+  split: 'train' | 'valid' | 'test' = 'train',
+): Promise<{
+  ok: boolean;
+  uploaded: number;
+  failed: number;
+  batch: string;
+  annotateUrl: string | null;
+  roboflowTraining: TrainingDatasetRoboflowTraining;
+}> {
+  const response = await fetch(`${API_BASE_URL}/training-datasets/roboflow/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPrefix, split }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export interface UnitTestImageRow {
+  s3Key: string;
+  fileName: string;
+  expectedMeterValue: string | null;
+  imageDifficulty?: ImageDifficulty | null;
+  url?: string;
+  size?: number;
+  lastModified?: string | null;
+}
+
+export async function fetchUnitTestImages(workType: WorkType): Promise<{
+  prefix: string;
+  manifestKey: string;
+  images: UnitTestImageRow[];
+}> {
+  const params = new URLSearchParams({ workType });
+  const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images?${params}`);
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function updateUnitTestImageExpected(
+  workType: WorkType,
+  s3Key: string,
+  expectedMeterValue: string,
+  imageDifficulty?: ImageDifficulty | null,
+): Promise<{
+  ok: boolean;
+  fileName: string;
+  s3Key: string;
+  priorS3Key: string;
+  expectedMeterValue: string;
+  imageDifficulty: ImageDifficulty;
+  renamed: boolean;
+  url?: string;
+}> {
+  const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-portal-work-mode': 'test_data_reviewer',
+    },
+    body: JSON.stringify({ workType, s3Key, expectedMeterValue, imageDifficulty }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function deleteUnitTestImage(
+  workType: WorkType,
+  s3Key: string,
+): Promise<{ ok: boolean; s3Key: string; deleted: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-portal-work-mode': 'test_data_reviewer',
+    },
+    body: JSON.stringify({ workType, s3Key }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function approveSessionForUnitTest(
+  sessionId: string,
+  workType: WorkType | undefined,
+  userEmail?: string,
+): Promise<{ ok: boolean; fileName: string; s3Key: string; reading: S3MeterReading }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-portal-work-mode': 'test_data_reviewer',
+  };
+  if (userEmail) headers['x-user-email'] = userEmail;
+  const response = await fetch(`${API_BASE_URL}/test-data/approve`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sessionId, workType }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function removeSessionFromTestDataset(
+  sessionId: string,
+  workType: WorkType | undefined,
+  userEmail?: string,
+  s3SessionPrefix?: string,
+): Promise<{
+  ok: boolean;
+  removedFromQueue: boolean;
+  removedFromS3: boolean;
+  deletedS3Key: string | null;
+  reading: S3MeterReading;
+}> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-portal-work-mode': 'test_data_reviewer',
+  };
+  if (userEmail) headers['x-user-email'] = userEmail;
+  const response = await fetch(`${API_BASE_URL}/test-data/remove-from-dataset`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      sessionId,
+      workType,
+      ...(s3SessionPrefix?.trim() ? { s3SessionPrefix: s3SessionPrefix.trim() } : {}),
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
 }
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {

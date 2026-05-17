@@ -25,7 +25,11 @@ import {
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
-import { getStoredPortalWorkMode, setStoredPortalWorkMode } from '../utils/portalWorkMode';
+import {
+  getStoredPortalWorkMode,
+  setStoredPortalWorkMode,
+  PORTAL_ROLE_LABELS,
+} from '../utils/portalWorkMode';
 import { statusLabels } from '../types';
 
 type NavLeaf = {
@@ -107,16 +111,52 @@ const PortalLayout: FC = () => {
     setStoredPortalWorkMode(next);
   }, []);
 
-  const { mainLinks, moreLinks, modeHint } = useMemo((): {
+  const { mainLinks, moreLinks, roleHint } = useMemo((): {
     mainLinks: NavLeaf[];
     moreLinks: NavLeaf[];
-    modeHint: string;
+    roleHint: string;
   } => {
     const dash: NavLeaf = { path: '/', label: 'Home', icon: <LayoutDashboard size={17} /> };
 
+    if (workMode === 'test_data_reviewer') {
+      return {
+        roleHint: 'Approve sessions reviewers marked for unit test; browse existing unit test images.',
+        mainLinks: [
+          {
+            ...dash,
+            label: 'Dashboard',
+            description: 'Charts & KPIs',
+            hint: 'Session counts and trends',
+          },
+          {
+            path: '/test-data/pending',
+            label: 'Pending test data',
+            description: 'Reviewer → test dataset',
+            hint: 'Sessions marked send to test dataset, not yet approved',
+            icon: <Inbox size={17} strokeWidth={2} />,
+          },
+          {
+            path: '/test-data/images',
+            label: 'Unit test images',
+            description: 'unittestng_manifest.xlsx',
+            hint: 'Flat images under unit_test_images/',
+            icon: <ListTree size={17} />,
+          },
+        ],
+        moreLinks: [
+          {
+            path: '/usage',
+            label: 'Usage',
+            description: 'Sessions by day',
+            icon: <Users size={17} />,
+          },
+        ],
+      };
+    }
+
     if (workMode === 'reviewer') {
       return {
-        modeHint: 'Awaiting review = not human-reviewed yet (app flag coming). Other lists = reviewed outcomes. Logo = dashboard.',
+        roleHint: 'Awaiting review = not human-reviewed yet. Other lists = reviewed outcomes.',
         mainLinks: [
           {
             ...dash,
@@ -166,7 +206,7 @@ const PortalLayout: FC = () => {
 
     if (workMode === 'admin') {
       return {
-        modeHint: 'Iteration registry, training hub, and full lists.',
+        roleHint: 'Iteration registry, Model Training Center, and full lists.',
         mainLinks: [
           {
             ...dash,
@@ -178,7 +218,7 @@ const PortalLayout: FC = () => {
             path: '/factory',
             label: 'Model factory',
             description: 'Assembly line · ship',
-            hint: 'Planning → data → label → train → test → shipped',
+            hint: 'Planning → data → label → train → test → deployed',
             icon: <Factory size={17} strokeWidth={2} />,
           },
           {
@@ -199,9 +239,9 @@ const PortalLayout: FC = () => {
         moreLinks: [
           {
             path: '/training',
-            label: 'Training',
+            label: 'Model Training',
             description: 'Pipelines · copy · ZIP',
-            hint: 'Same hub as labeler mode',
+            hint: 'Same as labeler Model Training',
             icon: <GraduationCap size={17} strokeWidth={2} />,
           },
           {
@@ -221,7 +261,7 @@ const PortalLayout: FC = () => {
     }
 
     return {
-      modeHint: 'Training hub = all pipelines. Reviewer recommended opens the list with picks only. Logo = overview.',
+      roleHint: 'Model Training Center = all pipelines. Training picks = send to training dataset.',
       mainLinks: [
         {
           ...dash,
@@ -231,12 +271,12 @@ const PortalLayout: FC = () => {
         },
         {
           path: '/readings/all',
-          to: '/readings/all?cohort=recommended',
-          label: 'Reviewer recommended',
-          description: 'Flagged for training',
-          hint: 'Sessions where reviewer_recommend_training is true',
+          to: '/readings/all?cohort=training',
+          label: 'Training picks',
+          description: 'Send to training dataset',
+          hint: 'Sessions reviewer marked for training',
           icon: <Sparkles size={17} strokeWidth={2} />,
-          activeWhenSearch: { cohort: 'recommended' },
+          activeWhenSearch: { cohort: 'training' },
         },
       ],
       moreLinks: [
@@ -366,18 +406,20 @@ const PortalLayout: FC = () => {
 
         <nav id="portal-sidebar-nav" className="portal-sidebar-nav">
           <div className="portal-role-bar">
-            <label htmlFor="portal-work-mode">Mode</label>
+            <label htmlFor="portal-work-mode">Role</label>
             <select
               id="portal-work-mode"
               className="portal-role-select"
               value={workMode}
               onChange={onWorkModeChange}
             >
-              <option value="reviewer">reviewer</option>
-              <option value="labeler">labeler</option>
-              <option value="admin">admin</option>
+              {(Object.keys(PORTAL_ROLE_LABELS) as PortalWorkMode[]).map((id) => (
+                <option key={id} value={id}>
+                  {PORTAL_ROLE_LABELS[id]}
+                </option>
+              ))}
             </select>
-            <p className="portal-role-hint">{modeHint}</p>
+            <p className="portal-role-hint">{roleHint}</p>
           </div>
 
           {workMode === 'labeler' || workMode === 'admin' ? (
@@ -391,7 +433,7 @@ const PortalLayout: FC = () => {
                 >
                   <span className="portal-nav-primary-row">
                     <GraduationCap size={18} strokeWidth={2} aria-hidden />
-                    <span className="portal-nav-primary-label">Training</span>
+                    <span className="portal-nav-primary-label">Model Training</span>
                   </span>
                   <span className="portal-nav-primary-note">
                     {workMode === 'admin'
@@ -403,7 +445,7 @@ const PortalLayout: FC = () => {
 
               <div className="portal-nav-section">
                 <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">{workMode === 'admin' ? 'Admin' : 'Training'}</span>
+                  <span className="portal-nav-section-title">{workMode === 'admin' ? 'Admin' : 'Model Training'}</span>
                   <span className="portal-nav-section-sub">
                     {workMode === 'admin' ? 'Dashboard · registry · lists' : 'Overview &amp; reviewer picks'}
                   </span>

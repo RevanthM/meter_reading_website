@@ -18,6 +18,9 @@ import TrainingHubPage from './components/TrainingHubPage';
 import TrainingPipelinePage from './components/TrainingPipelinePage';
 import PipelineIterationsPage from './components/PipelineIterationsPage';
 import ModelFactoryPage from './components/ModelFactoryPage';
+import TestDataPendingPage from './components/TestDataPendingPage';
+import UnitTestImagesPage from './components/UnitTestImagesPage';
+import UnitTestImageEditPage from './components/UnitTestImageEditPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -54,6 +57,9 @@ function AppContent() {
           <Route path="/training" element={<TrainingHubPage />} />
           <Route path="/factory" element={<ModelFactoryPage />} />
           <Route path="/pipeline-iterations" element={<PipelineIterationsPage />} />
+          <Route path="/test-data/pending" element={<TestDataPendingPage />} />
+          <Route path="/test-data/images" element={<UnitTestImagesPage />} />
+          <Route path="/test-data/images/edit/:fileName" element={<UnitTestImageEditPage />} />
         </Route>
       </Routes>
     </div>

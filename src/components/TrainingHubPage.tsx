@@ -28,7 +28,7 @@ const COPY_SESSION_CHUNK = 10;
 
 type DatePreset = 'all' | 'today' | '7d' | '30d' | 'custom';
 
-const HUB_COHORT_IDS = ['untrained', 'correct', 'wrong', 'recommended'] as const;
+const HUB_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data', 'recommended'] as const;
 type TrainingHubCohortId = (typeof HUB_COHORT_IDS)[number];
 type TrainingHubCohort = 'all' | TrainingHubCohortId;
 
@@ -36,7 +36,9 @@ const HUB_COHORT_LABELS: Record<TrainingHubCohortId, string> = {
   untrained: 'Untrained',
   correct: 'Reviewed correct',
   wrong: 'Reviewed wrong',
-  recommended: 'Reviewer recommended',
+  training: 'Send to training',
+  test_data: 'Send to test dataset',
+  recommended: 'Send to training',
 };
 
 function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort): boolean {
@@ -52,8 +54,11 @@ function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort):
         r.status === 'incorrect_labeled' ||
         r.status === 'incorrect_training'
       );
+    case 'training':
     case 'recommended':
-      return r.reviewerRecommendTraining === true;
+      return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
+    case 'test_data':
+      return r.reviewerDatasetDestination === 'test';
   }
 }
 
@@ -190,7 +195,12 @@ const TrainingHubPage: FC = () => {
     workType,
     refreshData,
     getReadingById,
+    ensureReadingsLoaded,
   } = useReadings();
+
+  useEffect(() => {
+    void ensureReadingsLoaded();
+  }, [ensureReadingsLoaded]);
 
   const [meta, setMeta] = useState<Pick<TrainingDatasetsResponse, 'bucket' | 'rootPrefix' | 'trainingDatasetsSegment'> | null>(
     null,
@@ -419,7 +429,7 @@ const TrainingHubPage: FC = () => {
           <div className="page-title">
             <GraduationCap size={32} strokeWidth={1.5} />
             <div>
-              <h1>Training hub</h1>
+              <h1>Model Training Center</h1>
               <p>
                 Filters and pipeline tiles run across the top; previews fill the width below. Use <strong>Copy selected</strong>{' '}
                 or drag thumbnails onto a pipeline tile. Pipelines under{' '}
@@ -528,11 +538,11 @@ const TrainingHubPage: FC = () => {
           </div>
         </section>
 
-        <section className="training-hub-pipelines-strip" aria-label="Training pipelines">
+        <section className="training-hub-pipelines-strip" aria-label="Training datasets">
           <div className="training-hub-pipelines-strip-inner">
             <div className="training-hub-pipelines-strip-head">
               <div className="training-hub-pipelines-strip-intro">
-                <h2 className="training-hub-list-title">Pipelines</h2>
+                <h2 className="training-hub-list-title">Training datasets</h2>
                 <p className="training-hub-list-sub">
                   Scroll sideways — click a tile to open. Drop thumbnails on a tile or use Copy selected under Previews.
                 </p>
@@ -540,13 +550,13 @@ const TrainingHubPage: FC = () => {
               <div className="training-hub-toolbar training-hub-toolbar--pipelines training-hub-toolbar--pipelines-bar">
                 <div className="training-hub-create">
                   <label className="sr-only" htmlFor="new-pipeline-name">
-                    New pipeline name
+                    New training dataset name
                   </label>
                   <input
                     id="new-pipeline-name"
                     type="text"
                     className="training-hub-name-input"
-                    placeholder="new pipeline name"
+                    placeholder="new training dataset name"
                     maxLength={200}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -566,7 +576,7 @@ const TrainingHubPage: FC = () => {
                     ) : (
                       <>
                         <Plus size={18} />
-                        new pipeline
+                        new training dataset
                       </>
                     )}
                   </button>

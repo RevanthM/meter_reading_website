@@ -7,16 +7,27 @@ export const FACTORY_STAGES = [
   { id: 'labeling', label: 'Labeling', short: 'Label' },
   { id: 'training', label: 'Training', short: 'Train' },
   { id: 'model_ready', label: 'Model ready', short: 'Ready' },
-  { id: 'ready_to_test', label: 'Ready to test', short: 'Test' },
-  { id: 'shipped', label: 'Shipped', short: 'Shipped' },
+  { id: 'ready_for_simulator_test', label: 'Ready for simulator test', short: 'Sim' },
+  { id: 'ready_for_unit_test', label: 'Ready for unit test', short: 'UT' },
+  { id: 'shipped', label: 'Deployed', short: 'Deployed' },
 ] as const;
 
 export type FactoryStageId = (typeof FACTORY_STAGES)[number]['id'];
 
 export const FACTORY_STAGE_IDS: FactoryStageId[] = FACTORY_STAGES.map((s) => s.id);
 
+/** Map legacy / unknown stored ids to current factory stage ids. */
+export function normalizeFactoryStageId(raw: string | null | undefined): FactoryStageId | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (s === 'ready_to_test') return 'ready_for_unit_test';
+  if (FACTORY_STAGE_IDS.includes(s as FactoryStageId)) return s as FactoryStageId;
+  return null;
+}
+
 export function factoryStageLabel(id: FactoryStageId | string): string {
-  return FACTORY_STAGES.find((s) => s.id === id)?.label ?? id;
+  const normalized = normalizeFactoryStageId(id) ?? id;
+  return FACTORY_STAGES.find((s) => s.id === normalized)?.label ?? String(id);
 }
 
 /** Product line: p1 Sempra, p2 Anica, p3 Sempra+Anica (hybrid). */
@@ -77,16 +88,21 @@ export function productLineDisplay(line: FactoryProductLine): string {
 }
 
 export function inferFactoryStage(row: PipelineIterationRecord): FactoryStageId {
-  const explicit = row.factoryStage?.trim();
-  if (explicit && FACTORY_STAGE_IDS.includes(explicit as FactoryStageId)) {
-    return explicit as FactoryStageId;
-  }
+  const explicit = normalizeFactoryStageId(row.factoryStage);
+  if (explicit) return explicit;
+
+  const simReady = (row.readyToTestSimulatorSubStatus || '').trim();
+  const utReady = (row.readyToTestUnitTestSubStatus || '').trim();
+  if (simReady && !utReady) return 'ready_for_simulator_test';
+  if (utReady) return 'ready_for_unit_test';
+
   const status = (row.currentStatus || '').trim().toLowerCase();
   const sub = (row.subStatus || '').trim().toLowerCase();
   if (status === 'cancelled') return 'planning';
   if (status === 'completed') return 'shipped';
+  if (sub.includes('simulator')) return 'ready_for_simulator_test';
   if (sub.includes('unit') || sub.includes('field test') || sub.includes('testing')) {
-    return 'ready_to_test';
+    return 'ready_for_unit_test';
   }
   if (sub.includes('training')) return 'training';
   if (sub.includes('annotation') || sub.includes('label')) return 'labeling';
@@ -121,13 +137,13 @@ export const FACTORY_COLUMNS: {
   },
   {
     id: 'ready',
-    label: 'Ready',
-    hint: 'Model ready · unit / field test',
-    stages: ['model_ready', 'ready_to_test'],
+    label: 'Model ready / In test',
+    hint: 'Model ready · simulator · unit test',
+    stages: ['model_ready', 'ready_for_simulator_test', 'ready_for_unit_test'],
   },
   {
     id: 'shipped',
-    label: 'Shipped',
+    label: 'Deployed',
     hint: 'Completed / in production',
     stages: ['shipped'],
   },
@@ -139,9 +155,25 @@ export function factoryColumnLabel(id: FactoryColumnId): string {
 
 export function columnForStage(stage: FactoryStageId): FactoryColumnId {
   if (stage === 'shipped') return 'shipped';
-  if (stage === 'model_ready' || stage === 'ready_to_test') return 'ready';
+  if (
+    stage === 'model_ready' ||
+    stage === 'ready_for_simulator_test' ||
+    stage === 'ready_for_unit_test'
+  ) {
+    return 'ready';
+  }
   if (stage === 'training') return 'training';
   return 'labelling';
+}
+
+/** Stages where legacy simulator / unit-test readiness fields may still apply. */
+export function isInTestReadinessStage(stage: FactoryStageId): boolean {
+  return (
+    stage === 'model_ready' ||
+    stage === 'ready_for_simulator_test' ||
+    stage === 'ready_for_unit_test' ||
+    stage === 'shipped'
+  );
 }
 
 export function inferFactoryColumn(row: PipelineIterationRecord): FactoryColumnId {
@@ -149,7 +181,8 @@ export function inferFactoryColumn(row: PipelineIterationRecord): FactoryColumnI
 }
 
 export function nextFactoryStage(id: FactoryStageId): FactoryStageId | null {
-  const i = FACTORY_STAGE_IDS.indexOf(id);
+  const normalized = normalizeFactoryStageId(id) ?? id;
+  const i = FACTORY_STAGE_IDS.indexOf(normalized as FactoryStageId);
   if (i < 0 || i >= FACTORY_STAGE_IDS.length - 1) return null;
   return FACTORY_STAGE_IDS[i + 1];
 }
@@ -170,7 +203,9 @@ export function factoryStageToLegacyStatus(stage: FactoryStageId): {
       return { currentStatus: 'In Process', subStatus: 'In Training' };
     case 'model_ready':
       return { currentStatus: 'In Process', subStatus: '' };
-    case 'ready_to_test':
+    case 'ready_for_simulator_test':
+      return { currentStatus: 'In Process', subStatus: 'Ready for simulator test' };
+    case 'ready_for_unit_test':
       return { currentStatus: 'In Process', subStatus: 'Ready for Unit/Field Testing' };
     case 'shipped':
       return { currentStatus: 'Completed', subStatus: '' };

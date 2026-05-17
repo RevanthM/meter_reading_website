@@ -82,7 +82,11 @@ const PortalWelcomeModal: React.FC = () => {
             <ul className="portal-welcome-list">
               <li>Lists meter sessions from cloud storage by <strong>work type</strong> and <strong>source</strong> (field vs simulator).</li>
               <li>Lets you open a session, inspect images and metadata, and <strong>change status</strong> — which moves the session folder in storage to match your workflow.</li>
-              <li><strong>Reviewer</strong> mode: queues, outcomes, and corrections per session; optionally <strong>Recommend for training</strong> (saved in metadata). <strong>Labeler</strong> mode adds <strong>Training</strong> (pipelines, copy into folders, ZIP) and can filter lists with <strong>Reviewer picks only</strong>.</li>
+              <li>
+                <strong>Reviewer</strong> role: outcomes, corrections, send to <strong>training</strong> or <strong>test dataset</strong>, and image
+                difficulty (Normal / Difficult / Very difficult). <strong>Test data reviewer</strong> approves test-dataset picks into
+                unit test images + manifest. <strong>Labeler</strong> copies into training folders; <strong>admin</strong> adds Model Factory.
+              </li>
               <li>The <strong>Models</strong> page summarizes app/model versions and session mix for comparing generations over time.</li>
               <li><strong>Usage</strong> shows sessions, image counts, and distinct users per day from the same S3 metadata (until Dynamo backs it).</li>
             </ul>

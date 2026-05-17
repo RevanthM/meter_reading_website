@@ -15,6 +15,30 @@ export const PIPELINE_ITERATION_SUB_STATUSES = [
   'Ready for Unit/Field Testing',
 ] as const;
 
+/** Sub-status for “Ready to test” rows (simulator / unit test). */
+export const PIPELINE_ITERATION_TEST_READINESS_SUB_STATUSES = [
+  'Not started',
+  'In progress',
+  'Completed',
+] as const;
+
+export type PipelineIterationTestReadinessSubStatus =
+  (typeof PIPELINE_ITERATION_TEST_READINESS_SUB_STATUSES)[number];
+
+export function normalizePipelineIterationTestReadinessSubStatus(
+  raw: string | null | undefined,
+): PipelineIterationTestReadinessSubStatus | '' {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return '';
+  if (s === 'not started' || s === 'not-started') return 'Not started';
+  if (s === 'in progress' || s === 'in-progress') return 'In progress';
+  if (s === 'completed' || s === 'complete') return 'Completed';
+  const match = PIPELINE_ITERATION_TEST_READINESS_SUB_STATUSES.find(
+    (opt) => opt.toLowerCase() === s,
+  );
+  return match ?? '';
+}
+
 /** Normalize free-text status to canonical casing used in filters and seeds. */
 export function normalizePipelineIterationPrimaryStatus(raw: string): string {
   const s = String(raw ?? '').trim();

@@ -1,0 +1,593 @@
+/**
+ * Test-data reviewer: approve sessions → unit_test_images + unittestng_manifest.xlsx
+ */
+import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
+import {
+  buildUnitTestImageFileName,
+  normalizeUnitTestDifficulty,
+  parseUnitTestImageFileName,
+  removeUnitTestManifestByS3Key,
+  unitTestImagesPrefix,
+  upsertUnitTestManifestRow,
+  readUnitTestManifestRows,
+  writeUnitTestManifestRows,
+} from './unitTestManifest.js';
+
+const IMAGE_SUFFIXES = ['.jpg', '.jpeg', '.png', '.webp'];
+
+function normalizeReviewerDatasetDestination(raw) {
+  const d = String(raw ?? '').trim().toLowerCase();
+  if (d === 'test' || d === 'training') return d;
+  return null;
+}
+
+function normalizeTestDataReviewStatus(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'approved' || s === 'pending') return s;
+  return null;
+}
+
+/**
+ * True when session is in the test-data queue or already approved into unit_test_images.
+ * Uses live metadata.json and optional list snapshot (handles stale S3 list cache / duplicate folders).
+ */
+export function isSessionInTestDatasetQueueOrLibrary(meta, reading) {
+  const dest = normalizeReviewerDatasetDestination(meta?.reviewer_dataset_destination);
+  const status = normalizeTestDataReviewStatus(meta?.test_data_review_status);
+  const unitKey = String(meta?.test_data_unit_test_s3_key || '').trim();
+
+  if (dest === 'test') return true;
+  if (status === 'approved' || status === 'pending') return true;
+  if (unitKey) return true;
+
+  if (reading && typeof reading === 'object') {
+    if (reading.reviewerDatasetDestination === 'test') return true;
+    if (reading.testDataReviewStatus === 'approved' || reading.testDataReviewStatus === 'pending') {
+      return true;
+    }
+    if (String(reading.testDataUnitTestS3Key || '').trim()) return true;
+  }
+
+  return false;
+}
+
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function guessContentType(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+async function findSessionOriginalKey(s3Client, bucket, sessionPrefix) {
+  const norm = sessionPrefix.endsWith('/') ? sessionPrefix : `${sessionPrefix}/`;
+  const list = await s3Client.send(
+    new ListObjectsV2Command({ Bucket: bucket, Prefix: norm, MaxKeys: 200 }),
+  );
+  const contents = list.Contents || [];
+  const original = contents.find((o) => (o.Key?.split('/').pop() || '').toLowerCase() === 'original.jpg');
+  if (original?.Key) return original.Key;
+  const anyImage = contents.find((o) => {
+    const name = (o.Key || '').toLowerCase();
+    return IMAGE_SUFFIXES.some((s) => name.endsWith(s));
+  });
+  return anyImage?.Key || null;
+}
+
+function expectedFromMetadata(meta) {
+  const uc = meta?.user_correction;
+  if (uc != null && String(uc).trim() !== '') return String(uc).trim();
+  const ml = meta?.ml_prediction;
+  if (ml != null && String(ml).trim() !== '') return String(ml).trim();
+  return '';
+}
+
+/**
+ * @param {{ s3Client, bucket: string, workType: string, sessionPrefix: string, meta: object, userEmail?: string }} opts
+ */
+export async function approveSessionForUnitTest(opts) {
+  const workType = String(opts.workType || opts.meta?.work_type || '1000').trim() || '1000';
+  const prefix = unitTestImagesPrefix(workType);
+  const dialCount = opts.meta?.dial_count ?? (Array.isArray(opts.meta?.dial_details) ? opts.meta.dial_details.length : 1);
+  const expected = expectedFromMetadata(opts.meta);
+  if (!expected) {
+    throw new Error('Set a corrected reading (user_correction) before approving for unit test.');
+  }
+
+  const difficulty = normalizeUnitTestDifficulty(opts.meta?.image_difficulty);
+  const priorFileName = String(opts.meta?.test_data_unit_test_file_name || '').trim();
+  const priorParsed = priorFileName ? parseUnitTestImageFileName(priorFileName) : null;
+  const filePrefix = priorParsed?.prefix ?? String(dialCount);
+
+  const sourceKey = await findSessionOriginalKey(opts.s3Client, opts.bucket, opts.sessionPrefix);
+  if (!sourceKey) {
+    throw new Error('No original.jpg (or image) found in this session folder.');
+  }
+
+  const sourceExt = (sourceKey.split('.').pop() || 'jpg').toLowerCase();
+  const ext = sourceExt === 'jpg' ? 'jpeg' : sourceExt;
+  const fileName = buildUnitTestImageFileName(filePrefix, expected, difficulty, ext);
+  const destKey = `${prefix}${fileName}`;
+
+  const priorKey = String(opts.meta?.test_data_unit_test_s3_key || '').trim();
+  if (priorKey && priorKey !== destKey) {
+    try {
+      await opts.s3Client.send(new DeleteObjectCommand({ Bucket: opts.bucket, Key: priorKey }));
+    } catch {
+      /* ignore */
+    }
+    try {
+      await removeUnitTestManifestByS3Key(opts.s3Client, opts.bucket, workType, priorKey);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const sameBucketCopy = priorKey === destKey;
+  if (sameBucketCopy) {
+    const obj = await opts.s3Client.send(
+      new GetObjectCommand({ Bucket: opts.bucket, Key: sourceKey }),
+    );
+    const body = await streamToBuffer(obj.Body);
+    await opts.s3Client.send(
+      new PutObjectCommand({
+        Bucket: opts.bucket,
+        Key: destKey,
+        Body: body,
+        ContentType: guessContentType(fileName),
+      }),
+    );
+  } else {
+    await opts.s3Client.send(
+      new CopyObjectCommand({
+        Bucket: opts.bucket,
+        CopySource: `${opts.bucket}/${sourceKey}`,
+        Key: destKey,
+        ContentType: guessContentType(fileName),
+        MetadataDirective: 'REPLACE',
+      }),
+    );
+  }
+
+  const manifestKey = await upsertUnitTestManifestRow(opts.s3Client, opts.bucket, workType, {
+    image_file_name: fileName,
+    expected_meter_value: expected,
+    s3_key: destKey,
+    image_difficulty: difficulty,
+  });
+
+  const now = new Date().toISOString();
+  opts.meta.test_data_review_status = 'approved';
+  opts.meta.test_data_approved_at = now;
+  if (opts.userEmail) {
+    opts.meta.test_data_approved_by = String(opts.userEmail).slice(0, 320);
+  }
+  opts.meta.test_data_unit_test_s3_key = destKey;
+  opts.meta.test_data_unit_test_file_name = fileName;
+  opts.meta.reviewer_dataset_destination = 'test';
+
+  return {
+    workType,
+    fileName,
+    s3Key: destKey,
+    manifestKey,
+    expectedMeterValue: expected,
+    approvedAt: now,
+  };
+}
+
+/**
+ * Remove session from test dataset queue. If already approved into unit_test_images/, also delete S3 + manifest row.
+ * @param {{ s3Client, bucket: string, workType: string, meta: object }} opts
+ */
+export async function removeSessionFromTestDataset(opts) {
+  const workType = String(opts.workType || opts.meta?.work_type || '1000').trim() || '1000';
+  const unitTestKey = String(opts.meta?.test_data_unit_test_s3_key || '').trim();
+  const wasApproved =
+    opts.meta?.test_data_review_status === 'approved' || Boolean(unitTestKey);
+
+  if (unitTestKey) {
+    try {
+      await opts.s3Client.send(
+        new DeleteObjectCommand({ Bucket: opts.bucket, Key: unitTestKey }),
+      );
+    } catch (e) {
+      if (e?.name !== 'NoSuchKey' && e?.$metadata?.httpStatusCode !== 404) {
+        throw e;
+      }
+    }
+    try {
+      await removeUnitTestManifestByS3Key(opts.s3Client, opts.bucket, workType, unitTestKey);
+    } catch {
+      /* ignore manifest errors */
+    }
+  }
+
+  opts.meta.reviewer_dataset_destination = null;
+  opts.meta.reviewer_recommend_training = false;
+  opts.meta.test_data_review_status = null;
+  opts.meta.test_data_unit_test_s3_key = null;
+  opts.meta.test_data_unit_test_file_name = null;
+  opts.meta.test_data_approved_at = null;
+  opts.meta.test_data_approved_by = null;
+
+  return {
+    workType,
+    removedFromQueue: true,
+    removedFromS3: wasApproved && Boolean(unitTestKey),
+    deletedS3Key: unitTestKey || null,
+  };
+}
+
+/**
+ * Update expected reading / difficulty for an existing unit test image (manifest + S3 rename when needed).
+ * @param {{ s3Client, bucket: string, workType: string, s3Key: string, expectedMeterValue: string, imageDifficulty?: string }} opts
+ */
+export async function updateUnitTestImageExpected(opts) {
+  const workType = String(opts.workType || '1000').trim() || '1000';
+  const prefix = unitTestImagesPrefix(workType);
+  const s3Key = String(opts.s3Key || '').trim();
+  const expected = String(opts.expectedMeterValue ?? '').trim();
+  const difficulty = normalizeUnitTestDifficulty(opts.imageDifficulty);
+  if (!s3Key) throw new Error('s3Key is required.');
+  if (!expected) throw new Error('expectedMeterValue is required.');
+  if (!s3Key.startsWith(prefix)) throw new Error('Not a unit test image in this work type prefix.');
+
+  const oldFileName = s3Key.slice(prefix.length);
+  const parsed = parseUnitTestImageFileName(oldFileName);
+  if (!parsed) {
+    throw new Error('Filename must be {prefix}_d{1|2|3}_{expectedReading}.ext');
+  }
+  const ext = (oldFileName.split('.').pop() || 'jpeg').toLowerCase();
+  const newFileName = buildUnitTestImageFileName(parsed.prefix, expected, difficulty, ext);
+  const newKey = `${prefix}${newFileName}`;
+
+  if (newKey !== s3Key) {
+    const existing = await opts.s3Client.send(
+      new ListObjectsV2Command({ Bucket: opts.bucket, Prefix: newKey, MaxKeys: 1 }),
+    );
+    if ((existing.Contents || []).some((o) => o.Key === newKey)) {
+      throw new Error(`Target key already exists: ${newFileName}`);
+    }
+    await opts.s3Client.send(
+      new CopyObjectCommand({
+        Bucket: opts.bucket,
+        CopySource: `${opts.bucket}/${s3Key}`,
+        Key: newKey,
+        ContentType: guessContentType(newFileName),
+        MetadataDirective: 'REPLACE',
+      }),
+    );
+    await opts.s3Client.send(new DeleteObjectCommand({ Bucket: opts.bucket, Key: s3Key }));
+  }
+
+  const { rows } = await readUnitTestManifestRows(opts.s3Client, opts.bucket, workType);
+  let found = false;
+  const updatedRows = rows.map((r) => {
+    const match = r.s3_key === s3Key || r.image_file_name === oldFileName;
+    if (!match) return r;
+    found = true;
+    return {
+      image_file_name: newFileName,
+      expected_meter_value: expected,
+      s3_key: newKey,
+      image_difficulty: difficulty,
+    };
+  });
+  if (!found) {
+    updatedRows.push({
+      image_file_name: newFileName,
+      expected_meter_value: expected,
+      s3_key: newKey,
+      image_difficulty: difficulty,
+    });
+  }
+  const manifestKey = await writeUnitTestManifestRows(opts.s3Client, opts.bucket, workType, updatedRows);
+
+  return {
+    workType,
+    fileName: newFileName,
+    s3Key: newKey,
+    priorS3Key: s3Key,
+    expectedMeterValue: expected,
+    imageDifficulty: difficulty,
+    manifestKey,
+    renamed: newKey !== s3Key,
+  };
+}
+
+/**
+ * Delete a unit test image from S3 and manifest (gallery delete; does not touch session folders).
+ */
+export async function deleteUnitTestImage(opts) {
+  const workType = String(opts.workType || '1000').trim() || '1000';
+  const prefix = unitTestImagesPrefix(workType);
+  const s3Key = String(opts.s3Key || '').trim();
+  if (!s3Key) throw new Error('s3Key is required.');
+  if (!s3Key.startsWith(prefix)) throw new Error('Not a unit test image in this work type prefix.');
+
+  try {
+    await opts.s3Client.send(new DeleteObjectCommand({ Bucket: opts.bucket, Key: s3Key }));
+  } catch (e) {
+    if (e?.name !== 'NoSuchKey' && e?.$metadata?.httpStatusCode !== 404) {
+      throw e;
+    }
+  }
+  const { key: manifestKey } = await removeUnitTestManifestByS3Key(opts.s3Client, opts.bucket, workType, s3Key);
+  return { workType, s3Key, manifestKey, deleted: true };
+}
+
+export async function listUnitTestImages(s3Client, bucket, workType) {
+  const prefix = unitTestImagesPrefix(workType);
+  const images = [];
+  let token;
+  do {
+    const out = await s3Client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }),
+    );
+    for (const o of out.Contents || []) {
+      const key = o.Key || '';
+      const name = key.slice(prefix.length);
+      if (!name || name.includes('/')) continue;
+      const lower = name.toLowerCase();
+      if (!IMAGE_SUFFIXES.some((s) => lower.endsWith(s))) continue;
+      if (lower === 'unittestng_manifest.xlsx') continue;
+      images.push({
+        s3Key: key,
+        fileName: name,
+        size: o.Size,
+        lastModified: o.LastModified?.toISOString?.() || null,
+      });
+    }
+    token = out.NextContinuationToken;
+  } while (token);
+
+  const { rows: manifestRows, key: manifestKey } = await readUnitTestManifestRows(s3Client, bucket, workType);
+  const byKey = new Map(manifestRows.map((r) => [r.s3_key || `${prefix}${r.image_file_name}`, r]));
+
+  return {
+    prefix,
+    manifestKey,
+    images: images.map((img) => {
+      const row = byKey.get(img.s3Key);
+      const parsed = parseUnitTestImageFileName(img.fileName);
+      return {
+        ...img,
+        expectedMeterValue: row?.expected_meter_value || parsed?.expected || null,
+        imageDifficulty: row?.image_difficulty || parsed?.difficulty || 'normal',
+      };
+    }),
+    manifestRows,
+  };
+}
+
+/**
+ * @param {import('express').Express} app
+ * @param {{ s3Client, BUCKET_NAME: string, findReadingAcrossWorkTypes: Function, normalizeS3SessionPrefix: Function, streamToString: Function, getPresignedUrl: Function, invalidateCache?: Function }} deps
+ */
+export function registerTestDataReviewRoutes(app, deps) {
+  const {
+    s3Client,
+    BUCKET_NAME,
+    findReadingAcrossWorkTypes,
+    normalizeS3SessionPrefix,
+    streamToString,
+    getPresignedUrl,
+    invalidateCache,
+  } = deps;
+
+  app.get('/api/test-data/unit-test-images', async (req, res) => {
+    try {
+      const workType = String(req.query.workType || '1000').trim() || '1000';
+      const data = await listUnitTestImages(s3Client, BUCKET_NAME, workType);
+      const images = await Promise.all(
+        data.images.map(async (img) => ({
+          ...img,
+          url: await getPresignedUrl(img.s3Key),
+        })),
+      );
+      res.json({ ...data, images });
+    } catch (e) {
+      console.error('GET /api/test-data/unit-test-images:', e);
+      res.status(500).json({ error: e.message || 'Failed to list unit test images' });
+    }
+  });
+
+  app.patch('/api/test-data/unit-test-images', async (req, res) => {
+    try {
+      const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+      if (portalMode !== 'test_data_reviewer') {
+        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      }
+
+      const workType = String(req.body?.workType || req.query?.workType || '1000').trim() || '1000';
+      const s3Key = String(req.body?.s3Key || '').trim();
+      const expectedMeterValue = String(req.body?.expectedMeterValue ?? '').trim();
+      const imageDifficulty = req.body?.imageDifficulty ?? req.body?.image_difficulty;
+      if (!s3Key) return res.status(400).json({ error: 's3Key is required.' });
+      if (!expectedMeterValue) return res.status(400).json({ error: 'expectedMeterValue is required.' });
+
+      const result = await updateUnitTestImageExpected({
+        s3Client,
+        bucket: BUCKET_NAME,
+        workType,
+        s3Key,
+        expectedMeterValue,
+        imageDifficulty,
+      });
+
+      const url = await getPresignedUrl(result.s3Key);
+      res.json({ ok: true, ...result, url });
+    } catch (e) {
+      console.error('PATCH /api/test-data/unit-test-images:', e);
+      res.status(502).json({ error: e.message || 'Failed to update unit test image' });
+    }
+  });
+
+  app.delete('/api/test-data/unit-test-images', async (req, res) => {
+    try {
+      const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+      if (portalMode !== 'test_data_reviewer') {
+        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      }
+
+      const workType = String(req.body?.workType || req.query?.workType || '1000').trim() || '1000';
+      const s3Key = String(req.body?.s3Key || req.query?.s3Key || '').trim();
+      if (!s3Key) return res.status(400).json({ error: 's3Key is required.' });
+
+      const result = await deleteUnitTestImage({
+        s3Client,
+        bucket: BUCKET_NAME,
+        workType,
+        s3Key,
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error('DELETE /api/test-data/unit-test-images:', e);
+      res.status(502).json({ error: e.message || 'Failed to delete unit test image' });
+    }
+  });
+
+  app.post('/api/test-data/remove-from-dataset', async (req, res) => {
+    try {
+      const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+      if (portalMode !== 'test_data_reviewer') {
+        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      }
+
+      const sessionId = String(req.body?.sessionId || req.body?.id || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'sessionId is required.' });
+      }
+
+      const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
+      const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      if (!reading?.s3SessionPrefix) {
+        return res.status(404).json({ error: 'Reading not found.' });
+      }
+
+      let serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
+      const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
+      if (clientPrefix) {
+        serverPrefix = clientPrefix;
+      }
+      const metaKey = `${serverPrefix}metadata.json`;
+      const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
+      const meta = JSON.parse(await streamToString(getOut.Body));
+
+      if (!isSessionInTestDatasetQueueOrLibrary(meta, reading)) {
+        return res.status(400).json({
+          error: 'Session is not in the test dataset queue or unit test library.',
+        });
+      }
+
+      const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
+
+      const result = await removeSessionFromTestDataset({
+        s3Client,
+        bucket: BUCKET_NAME,
+        workType: reading.workType || workTypeHint || '1000',
+        meta,
+      });
+
+      meta.portal_metadata_updated_at = new Date().toISOString();
+      if (userEmail) meta.portal_metadata_updated_by = userEmail.slice(0, 320);
+
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: metaKey,
+          Body: JSON.stringify(meta, null, 2),
+          ContentType: 'application/json',
+        }),
+      );
+
+      if (typeof invalidateCache === 'function') {
+        invalidateCache();
+      }
+
+      const fresh = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      res.json({ ok: true, ...result, reading: fresh });
+    } catch (e) {
+      console.error('POST /api/test-data/remove-from-dataset:', e);
+      res.status(502).json({ error: e.message || 'Remove from test dataset failed' });
+    }
+  });
+
+  app.post('/api/test-data/approve', async (req, res) => {
+    try {
+      const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+      if (portalMode !== 'test_data_reviewer') {
+        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      }
+
+      const sessionId = String(req.body?.sessionId || req.body?.id || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'sessionId is required.' });
+      }
+
+      const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
+      const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      if (!reading?.s3SessionPrefix) {
+        return res.status(404).json({ error: 'Reading not found.' });
+      }
+
+      const serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
+      const metaKey = `${serverPrefix}metadata.json`;
+      const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
+      const meta = JSON.parse(await streamToString(getOut.Body));
+
+      if (meta.reviewer_dataset_destination !== 'test') {
+        return res.status(400).json({
+          error: 'Session is not marked send to test dataset. Reviewer must select that before approval.',
+        });
+      }
+
+      const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
+
+      const result = await approveSessionForUnitTest({
+        s3Client,
+        bucket: BUCKET_NAME,
+        workType: reading.workType || workTypeHint || '1000',
+        sessionPrefix: serverPrefix,
+        meta,
+        userEmail,
+      });
+
+      meta.portal_metadata_updated_at = new Date().toISOString();
+      if (userEmail) meta.portal_metadata_updated_by = userEmail.slice(0, 320);
+
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: metaKey,
+          Body: JSON.stringify(meta, null, 2),
+          ContentType: 'application/json',
+        }),
+      );
+
+      if (typeof invalidateCache === 'function') {
+        invalidateCache();
+      }
+
+      const fresh = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      res.json({ ok: true, ...result, reading: fresh });
+    } catch (e) {
+      console.error('POST /api/test-data/approve:', e);
+      res.status(502).json({ error: e.message || 'Approve for unit test failed' });
+    }
+  });
+}
