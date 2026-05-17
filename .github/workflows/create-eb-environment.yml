@@ -36,12 +36,12 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          NAME=$(aws elasticbeanstalk describe-environments \
+          read -r NAME STATUS <<< "$(aws elasticbeanstalk describe-environments \
             --region "${AWS_REGION}" \
             --environment-names "${{ inputs.new_env_name }}" \
-            --query "Environments[0].EnvironmentName" \
-            --output text 2>/dev/null || echo "None")
-          if [ "$NAME" = "${{ inputs.new_env_name }}" ]; then
+            --query "Environments[0].[EnvironmentName,Status]" \
+            --output text 2>/dev/null || echo "None None")"
+          if [ "$NAME" = "${{ inputs.new_env_name }}" ] && [ "$STATUS" != "Terminated" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             aws elasticbeanstalk describe-environments \
               --region "${AWS_REGION}" \
@@ -50,6 +50,9 @@ jobs:
               --output table
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+            if [ "$STATUS" = "Terminated" ]; then
+              echo "Previous env was Terminated — creating a new one with the same name."
+            fi
           fi
 
       - name: Resolve platform from template
@@ -83,15 +86,17 @@ jobs:
             --environment-name "${{ inputs.template_env }}" \
             --output json > /tmp/config.json
 
-          jq --arg template "${{ inputs.template_env }}" '
+          # Only clone app env vars + IAM instance profile (avoid VPC/SG conflicts from dev).
+          jq '
             .ConfigurationSettings[0].OptionSettings
             | map(select(
                 .ResourceName == null
-                and (.Namespace | test("^aws:(elasticbeanstalk:application:environment|autoscaling:launchconfiguration|ec2:vpc|elasticbeanstalk:environment:proxy|elasticbeanstalk:container:nodejs|elasticbeanstalk:environment:process:default)"))
-                and (.OptionName | IN("EnvironmentName", "CNAME") | not)
+                and (
+                  .Namespace == "aws:elasticbeanstalk:application:environment"
+                  or (.Namespace == "aws:autoscaling:launchconfiguration" and .OptionName == "IamInstanceProfile")
+                )
                 and (.Value != null)
                 and (.Value | type == "string")
-                and (.Value | contains($template) | not)
               ))
             | map({Namespace, OptionName, Value})
           ' /tmp/config.json > /tmp/option-settings.json
@@ -134,8 +139,14 @@ jobs:
               echo "cname=$CNAME" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            if [ "$STATUS" = "Terminated" ] || [ "$HEALTH" = "Red" ]; then
-              echo "Environment failed to launch." >&2
+            if [ "$STATUS" = "Terminated" ]; then
+              echo "Environment failed to launch (Terminated)." >&2
+              aws elasticbeanstalk describe-events \
+                --region "${AWS_REGION}" \
+                --environment-name "${{ inputs.new_env_name }}" \
+                --max-items 8 \
+                --query "Events[*].Message" \
+                --output text >&2 || true
               exit 1
             fi
             sleep 20
