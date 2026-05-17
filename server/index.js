@@ -3,10 +3,19 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { S3Client, ListObjectsV2Command, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  ListObjectsV2Command,
+  GetObjectCommand,
+  HeadObjectCommand,
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import admin from 'firebase-admin';
 import { registerRoboflowRoutes } from './roboflow.js';
+import { pullWeightsPtFromRoboflow } from './roboflowWeights.js';
 import { registerApiDocs } from './apiDocs.js';
 import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
 import archiver from 'archiver';
@@ -197,7 +206,270 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     outcome,
     portalStats: cloneJsonObject(raw?.portalStats),
     manualMetrics: cloneJsonObject(raw?.manualMetrics),
+    linkedUnitTests: normalizePipelineIterationUnitTestLinks(raw),
+    factoryStage: String(raw?.factoryStage ?? raw?.factory_stage ?? '').trim() || null,
+    modelShip: normalizePipelineIterationModelShip(raw?.modelShip ?? raw?.model_ship),
+    roboflowLinks: normalizePipelineIterationRoboflowLinks(raw?.roboflowLinks ?? raw?.roboflow_links),
+    modelWeights: normalizePipelineIterationModelWeights(raw?.modelWeights ?? raw?.model_weights),
   };
+}
+
+function sanitizePipelineIterationId(id) {
+  return String(id || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9-]/g, '_')
+    .slice(0, 120);
+}
+
+/** Work type segment for iteration weights (default meter reading). */
+const WEIGHTS_S3_WORK_TYPE = String(process.env.WEIGHTS_S3_WORK_TYPE || '1000').trim() || '1000';
+
+function sanitizeIterationWeightsFolderName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+}
+
+function buildIterationWeightsFolderName(row) {
+  const pipeline = String(row?.pipeline ?? 'iteration').trim() || 'iteration';
+  const n = parseInt(String(row?.iterationNumber ?? ''), 10);
+  const iter = Number.isFinite(n) ? n : 0;
+  let name = `${pipeline}-iter-${iter}`;
+  const model = String(row?.modelId ?? '').trim();
+  if (model) name += `_${model}`;
+  return sanitizeIterationWeightsFolderName(name);
+}
+
+function iterationWeightFileName(role) {
+  return role === 'dial_detection' ? 'dial_detection.pt' : 'weights.pt';
+}
+
+function iterationWeightS3Key(folderName, role) {
+  const safe = sanitizeIterationWeightsFolderName(folderName);
+  if (!safe) return null;
+  return withS3Base(`${WEIGHTS_S3_WORK_TYPE}/Weights/${safe}/${iterationWeightFileName(role)}`);
+}
+
+async function readPipelineIterationsDoc() {
+  const key = pipelineIterationsS3Key();
+  try {
+    const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+    const txt = await streamToString(out.Body);
+    return JSON.parse(txt);
+  } catch (e) {
+    if (e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404) {
+      return { iterations: [] };
+    }
+    throw e;
+  }
+}
+
+async function resolveIterationWeightsFolder(iterationId, hints = {}) {
+  const fromHint = hints.iterationFolder ?? hints.iterationName;
+  if (fromHint) return sanitizeIterationWeightsFolderName(fromHint);
+
+  try {
+    const doc = await readPipelineIterationsDoc();
+    const row = (Array.isArray(doc.iterations) ? doc.iterations : []).find(
+      (r) => r && String(r.id) === String(iterationId),
+    );
+    if (row) return buildIterationWeightsFolderName(row);
+  } catch {
+    /* fall through */
+  }
+
+  if (hints.pipeline != null || hints.iterationNumber != null || hints.modelId) {
+    return buildIterationWeightsFolderName(hints);
+  }
+
+  return sanitizeIterationWeightsFolderName(sanitizePipelineIterationId(iterationId));
+}
+
+function normalizePipelineIterationModelWeights(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const normOne = (v) => {
+    if (!v || typeof v !== 'object') return null;
+    const s3Key = String(v.s3Key ?? v.s3_key ?? '').trim();
+    if (!s3Key || s3Key.includes('..')) return null;
+    const sizeBytes = v.sizeBytes ?? v.size_bytes;
+    const n = typeof sizeBytes === 'number' ? sizeBytes : parseInt(String(sizeBytes ?? ''), 10);
+    return {
+      s3Key,
+      bucket: String(v.bucket ?? BUCKET_NAME).trim() || BUCKET_NAME,
+      uploadedAt: String(v.uploadedAt ?? v.uploaded_at ?? '').trim() || null,
+      sizeBytes: Number.isFinite(n) ? n : null,
+      originalFileName: String(v.originalFileName ?? v.original_file_name ?? '').trim() || null,
+      source: v.source === 'roboflow' || v.source === 'upload' ? v.source : null,
+      roboflowFormat: String(v.roboflowFormat ?? v.roboflow_format ?? '').trim() || null,
+      weightsFolder: String(v.weightsFolder ?? v.weights_folder ?? '').trim() || null,
+      weightsPrefix: String(v.weightsPrefix ?? v.weights_prefix ?? '').trim() || null,
+    };
+  };
+  const dial = normOne(raw.dialDetection ?? raw.dial_detection);
+  const keypoint = normOne(raw.keypoint);
+  if (!dial && !keypoint) return null;
+  return { dialDetection: dial, keypoint };
+}
+
+async function putPipelineIterationWeightBuffer(iterationId, role, buffer, meta = {}) {
+  const folderName = await resolveIterationWeightsFolder(iterationId, meta);
+  const key = iterationWeightS3Key(folderName, role);
+  if (!key) throw new Error('Invalid iteration folder name.');
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      Body: buffer,
+      ContentType: 'application/octet-stream',
+    }),
+  );
+  const uploadedAt = new Date().toISOString();
+  return {
+    s3Key: key,
+    bucket: BUCKET_NAME,
+    uploadedAt,
+    sizeBytes: buffer.length,
+    originalFileName:
+      String(meta.originalFileName || '').trim() || iterationWeightFileName(role),
+    source: meta.source === 'roboflow' ? 'roboflow' : 'upload',
+    roboflowFormat: meta.roboflowFormat ? String(meta.roboflowFormat).trim() : null,
+    weightsFolder: folderName,
+    weightsPrefix: `${WEIGHTS_S3_WORK_TYPE}/Weights/${folderName}/`,
+  };
+}
+
+function parseIterationWeightRole(raw) {
+  const r = String(raw ?? '').trim();
+  if (r === 'dial_detection' || r === 'dialDetection') return 'dial_detection';
+  if (r === 'keypoint') return 'keypoint';
+  return null;
+}
+
+function normalizePipelineIterationModelShip(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const dial = raw.dialDetection ?? raw.dial_detection;
+  const keypoint = raw.keypoint;
+  if (dial == null && keypoint == null) return null;
+  return {
+    dialDetection: dial === true,
+    keypoint: keypoint === true,
+  };
+}
+
+function pipelineNumOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pipelineFloatOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeRoboflowSplits(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const train = raw.train;
+  const valid = raw.valid ?? raw.validation;
+  const test = raw.test;
+  const n = (v) => {
+    if (v == null || v === '') return null;
+    const x = typeof v === 'number' ? v : parseInt(String(v), 10);
+    return Number.isFinite(x) ? x : null;
+  };
+  const out = { train: n(train), valid: n(valid), test: n(test) };
+  if (out.train == null && out.valid == null && out.test == null) return null;
+  return out;
+}
+
+function normalizePipelineIterationRoboflowLinks(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const normLink = (v) => {
+    if (!v || typeof v !== 'object') return null;
+    const datasetSlug = String(v.datasetSlug ?? v.dataset_slug ?? '').trim();
+    if (!datasetSlug) return null;
+    const ver = v.version ?? v.version_number;
+    return {
+      datasetSlug,
+      projectName: String(v.projectName ?? v.project_name ?? '').trim() || null,
+      version: ver === null || ver === undefined || ver === '' ? null : parseInt(String(ver), 10) || null,
+      role: v.role === 'dial_detection' || v.role === 'keypoint' ? v.role : null,
+      modelTypeDisplay:
+        String(v.modelTypeDisplay ?? v.model_type_display ?? '').trim() || null,
+      versionName: String(v.versionName ?? v.version_name ?? '').trim() || null,
+      imageCount: pipelineNumOrNull(v.imageCount ?? v.image_count),
+      splits: normalizeRoboflowSplits(v.splits),
+      versionCreatedAt: String(v.versionCreatedAt ?? v.version_created_at ?? '').trim() || null,
+      lastTrainedAt: String(v.lastTrainedAt ?? v.last_trained_at ?? '').trim() || null,
+      trainStatus: String(v.trainStatus ?? v.train_status ?? '').trim() || null,
+      mapPercent: pipelineFloatOrNull(v.mapPercent ?? v.map_percent),
+      precisionPercent: pipelineFloatOrNull(v.precisionPercent ?? v.precision_percent),
+      recallPercent: pipelineFloatOrNull(v.recallPercent ?? v.recall_percent),
+      checkpoint: String(v.checkpoint ?? '').trim() || null,
+      modelId: String(v.modelId ?? v.model_id ?? '').trim() || null,
+    };
+  };
+  const dial = normLink(raw.dialDetection ?? raw.dial_detection);
+  const keypoint = normLink(raw.keypoint);
+  if (!dial && !keypoint) return null;
+  return { dialDetection: dial, keypoint };
+}
+
+function normalizePipelineIterationUnitTestLinks(raw) {
+  const fromArray = raw?.linkedUnitTests ?? raw?.linked_unit_tests;
+  if (Array.isArray(fromArray)) {
+    const out = [];
+    for (const item of fromArray) {
+      if (!item || typeof item !== 'object') continue;
+      const s3Key = String(item.s3Key ?? item.s3_key ?? '').trim();
+      if (!s3Key || s3Key.includes('..')) continue;
+      const acc = item.accuracyPercent ?? item.accuracy_percent;
+      const imgs = item.imagesProcessed ?? item.images_processed;
+      out.push({
+        s3Key,
+        fileName: String(item.fileName ?? item.file_name ?? s3Key.split('/').pop() ?? '').trim() || null,
+        linkedAt: String(item.linkedAt ?? item.linked_at ?? '').trim() || null,
+        pipelineId: String(item.pipelineId ?? item.pipeline_id ?? '').trim() || null,
+        pipelineDisplayName:
+          String(item.pipelineDisplayName ?? item.pipeline_display_name ?? '').trim() || null,
+        accuracyPercent:
+          acc === null || acc === undefined || acc === ''
+            ? null
+            : Number.isFinite(Number(acc))
+              ? Number(acc)
+              : null,
+        imagesProcessed:
+          imgs === null || imgs === undefined || imgs === ''
+            ? null
+            : Number.isFinite(Number(imgs))
+              ? Number(imgs)
+              : null,
+        generatedUtc: String(item.generatedUtc ?? item.generated_utc ?? '').trim() || null,
+        appVersionHint: String(item.appVersionHint ?? item.app_version_hint ?? '').trim() || null,
+      });
+    }
+    return out;
+  }
+  const legacyKeys = raw?.linkedUnitTestS3Keys ?? raw?.linked_unit_test_s3_keys;
+  if (!Array.isArray(legacyKeys)) return [];
+  return legacyKeys
+    .map((k) => String(k ?? '').trim())
+    .filter((s3Key) => s3Key && !s3Key.includes('..'))
+    .map((s3Key) => ({
+      s3Key,
+      fileName: s3Key.split('/').pop() || null,
+      linkedAt: null,
+      pipelineId: null,
+      pipelineDisplayName: null,
+      accuracyPercent: null,
+      imagesProcessed: null,
+      generatedUtc: null,
+      appVersionHint: null,
+    }));
 }
 
 function validatePipelineIterationsPayload(iterations) {
@@ -263,6 +535,18 @@ function getAllFolderPrefixes(source, workType) {
     if (source === 'all' || source === 'field') {
       prefixes.push({ folder: withS3Base('correct/'), status: 'correct', sourceType: 'field' });
       prefixes.push({ folder: withS3Base('incorrect/'), status: 'incorrect_new', sourceType: 'field' });
+    }
+  }
+
+  // iOS default upload: `{workType}/f_skipped_review/` (is_manually_reviewed=false)
+  for (const root of getS3FolderRootsForPortalWorkType(workType)) {
+    for (const src of sources) {
+      const srcPrefix = src === 'field' ? 'f_' : 's_';
+      prefixes.push({
+        folder: withS3Base(`${root}/${srcPrefix}skipped_review/`),
+        status: 'incorrect_new',
+        sourceType: src,
+      });
     }
   }
 
@@ -1689,39 +1973,82 @@ app.get('/api/unit-test/runs', async (req, res) => {
         ? req.query.workType.trim()
         : '1000';
     const folderRoots = getS3FolderRootsForPortalWorkType(workType);
-    const prefix = withS3Base(`${folderRoots[0]}/unit_test_results/`);
-    const runs = await listUnitTestResultCsvKeys(s3Client, BUCKET_NAME, prefix);
-    res.json({ workType, prefix, runs });
+    const seen = new Set();
+    const runs = [];
+    const prefixes = [];
+    for (const root of folderRoots) {
+      const prefix = withS3Base(`${root}/unit_test_results/`);
+      prefixes.push(prefix);
+      const batch = await listUnitTestResultCsvKeys(s3Client, BUCKET_NAME, prefix);
+      for (const run of batch) {
+        if (seen.has(run.key)) continue;
+        seen.add(run.key);
+        runs.push(run);
+      }
+    }
+    runs.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
+    res.json({ workType, prefix: prefixes[0] ?? null, prefixes, runs });
   } catch (error) {
     console.error('GET /api/unit-test/runs:', error);
     res.status(500).json({ error: 'Failed to list unit test runs' });
   }
 });
 
-/** Parse unit-test CSV summary + optional per-image rows. */
+function decodeUnitTestS3KeyParam(raw) {
+  let key = String(raw ?? '').trim();
+  if (!key) return '';
+  try {
+    key = decodeURIComponent(key);
+  } catch {
+    /* use raw */
+  }
+  return key;
+}
+
+function validateUnitTestCsvKey(key) {
+  if (!key.endsWith('.csv') || key.includes('..')) {
+    return 'Invalid s3Key';
+  }
+  return null;
+}
+
+async function fetchUnitTestRunDetailPayload(key, includeRows) {
+  const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+  const csvText = await streamToString(out.Body);
+  const parsed = parseUnitTestCsvSummary(csvText);
+  return {
+    key,
+    summary: parsed.summary,
+    perImageCount: parsed.perImageCount,
+    perImageRows: includeRows ? parsed.perImageRows : undefined,
+  };
+}
+
+/** Parse unit-test CSV (query param — reliable through Vite proxy; prefer over path param). */
+app.get('/api/unit-test/run-detail', async (req, res) => {
+  try {
+    const key = decodeUnitTestS3KeyParam(req.query.s3Key);
+    const keyErr = validateUnitTestCsvKey(key);
+    if (keyErr) return res.status(400).json({ error: keyErr });
+    const includeRows = req.query.includeRows !== 'false';
+    res.json(await fetchUnitTestRunDetailPayload(key, includeRows));
+  } catch (error) {
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ error: 'CSV not found' });
+    }
+    console.error('GET /api/unit-test/run-detail:', error);
+    res.status(500).json({ error: 'Failed to parse unit test CSV' });
+  }
+});
+
+/** Parse unit-test CSV summary + optional per-image rows (legacy path param). */
 app.get('/api/unit-test/runs/:s3Key', async (req, res) => {
   try {
-    let key = req.params.s3Key || '';
-    try {
-      key = decodeURIComponent(key);
-    } catch {
-      /* use raw */
-    }
-    if (!key.endsWith('.csv') || key.includes('..')) {
-      return res.status(400).json({ error: 'Invalid s3Key' });
-    }
-
-    const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
-    const csvText = await streamToString(out.Body);
-    const parsed = parseUnitTestCsvSummary(csvText);
+    const key = decodeUnitTestS3KeyParam(req.params.s3Key);
+    const keyErr = validateUnitTestCsvKey(key);
+    if (keyErr) return res.status(400).json({ error: keyErr });
     const includeRows = req.query.includeRows !== 'false';
-
-    res.json({
-      key,
-      summary: parsed.summary,
-      perImageCount: parsed.perImageCount,
-      perImageRows: includeRows ? parsed.perImageRows : undefined,
-    });
+    res.json(await fetchUnitTestRunDetailPayload(key, includeRows));
   } catch (error) {
     if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
       return res.status(404).json({ error: 'CSV not found' });
@@ -2862,6 +3189,147 @@ app.get('/api/pipeline-iterations', async (req, res) => {
     }
     console.error('GET /api/pipeline-iterations:', e);
     res.status(500).json({ error: e.message || 'Failed to read pipeline iterations' });
+  }
+});
+
+/**
+ * Upload .pt weights for a pipeline iteration (dial_detection or keypoint).
+ * Multipart: iterationId, role (dial_detection | keypoint), file (.pt).
+ */
+app.post('/api/pipeline-iterations/weights', weightsUploadMiddleware, async (req, res) => {
+  try {
+    const iterationId = String(req.body?.iterationId ?? '').trim();
+    const role = parseIterationWeightRole(req.body?.role);
+    if (!iterationId) {
+      return res.status(400).json({ error: 'iterationId is required.' });
+    }
+    if (!role) {
+      return res.status(400).json({ error: 'role must be dial_detection or keypoint.' });
+    }
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ error: 'Missing file field "file" with a non-empty .pt body.' });
+    }
+    const orig = String(req.file.originalname || '').trim().toLowerCase();
+    if (!orig.endsWith('.pt')) {
+      return res.status(400).json({ error: 'File must use a .pt extension.' });
+    }
+
+    const weights = await putPipelineIterationWeightBuffer(iterationId, role, req.file.buffer, {
+      originalFileName: String(req.file.originalname || '').trim() || undefined,
+      source: 'upload',
+      pipeline: req.body?.pipeline,
+      iterationNumber: req.body?.iterationNumber,
+      modelId: req.body?.modelId,
+      iterationFolder: req.body?.iterationFolder ?? req.body?.iterationName,
+    });
+    res.status(201).json({ ok: true, role, weights });
+  } catch (e) {
+    console.error('POST /api/pipeline-iterations/weights:', e);
+    res.status(500).json({ error: e.message || 'Weights upload failed' });
+  }
+});
+
+/**
+ * Pull trained weights from Roboflow export API → S3 for this iteration.
+ * Body: { iterationId, role, datasetSlug?, version?, format? }
+ * Uses linked roboflow metadata when datasetSlug/version omitted.
+ */
+app.post('/api/pipeline-iterations/weights/from-roboflow', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const iterationId = String(body.iterationId ?? '').trim();
+    const role = parseIterationWeightRole(body.role);
+    if (!iterationId) {
+      return res.status(400).json({ error: 'iterationId is required.' });
+    }
+    if (!role) {
+      return res.status(400).json({ error: 'role must be dial_detection or keypoint.' });
+    }
+
+    let datasetSlug = String(body.datasetSlug ?? body.dataset_slug ?? '').trim();
+    let version = body.version ?? body.version_number;
+    if (!datasetSlug || version === undefined || version === null || version === '') {
+      const links = body.roboflowLinks ?? body.roboflow_links;
+      const link =
+        role === 'dial_detection'
+          ? links?.dialDetection ?? links?.dial_detection
+          : links?.keypoint;
+      if (!datasetSlug) datasetSlug = String(link?.datasetSlug ?? link?.dataset_slug ?? '').trim();
+      if (version === undefined || version === null || version === '') {
+        version = link?.version ?? link?.version_number;
+      }
+    }
+    const ver = parseInt(String(version ?? ''), 10);
+    if (!datasetSlug) {
+      return res.status(400).json({
+        error: 'Link a Roboflow project for this role or pass datasetSlug in the body.',
+      });
+    }
+    if (!Number.isFinite(ver) || ver < 1) {
+      return res.status(400).json({ error: 'A positive Roboflow version number is required.' });
+    }
+
+    const format = body.format ? String(body.format).trim() : undefined;
+    const pulled = await pullWeightsPtFromRoboflow({ datasetSlug, version: ver, format });
+    const weights = await putPipelineIterationWeightBuffer(iterationId, role, pulled.buffer, {
+      originalFileName: pulled.fileName,
+      source: 'roboflow',
+      roboflowFormat: pulled.format,
+      pipeline: body.pipeline,
+      iterationNumber: body.iterationNumber,
+      modelId: body.modelId,
+      iterationFolder: body.iterationFolder ?? body.iterationName,
+    });
+    res.status(201).json({
+      ok: true,
+      role,
+      weights,
+      roboflow: {
+        format: pulled.format,
+        exportLink: pulled.exportLink,
+        modelTypeDisplay: pulled.trainMeta?.modelTypeDisplay ?? null,
+        modelType: pulled.trainMeta?.modelType ?? null,
+      },
+    });
+  } catch (e) {
+    console.error('POST /api/pipeline-iterations/weights/from-roboflow:', e);
+    res.status(500).json({ error: e.message || 'Roboflow weights pull failed' });
+  }
+});
+
+/** Signed download URL for iteration weights on S3. Query: iterationId, role */
+app.get('/api/pipeline-iterations/weights-signed-url', async (req, res) => {
+  try {
+    const iterationId = String(req.query.iterationId ?? '').trim();
+    const role = parseIterationWeightRole(req.query.role);
+    if (!iterationId || !role) {
+      return res.status(400).json({ error: 'iterationId and role (dial_detection | keypoint) are required.' });
+    }
+    const folderName = await resolveIterationWeightsFolder(iterationId, {
+      iterationFolder: req.query.iterationFolder ?? req.query.iterationName,
+      pipeline: req.query.pipeline,
+      iterationNumber: req.query.iterationNumber,
+      modelId: req.query.modelId,
+    });
+    const key = iterationWeightS3Key(folderName, role);
+    if (!key) return res.status(400).json({ error: 'Invalid iteration folder name.' });
+
+    try {
+      await s3Client.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+    } catch {
+      return res.status(404).json({ error: 'No weights uploaded for this iteration and role yet.' });
+    }
+
+    const expiresIn = Math.min(
+      86400,
+      Math.max(60, parseInt(process.env.TRAINING_WEIGHTS_SIGNED_URL_TTL_SEC || '3600', 10) || 3600),
+    );
+    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
+    const url = await getSignedUrl(s3Client, command, { expiresIn });
+    res.json({ url, expiresInSeconds: expiresIn, bucket: BUCKET_NAME, key });
+  } catch (e) {
+    console.error('GET /api/pipeline-iterations/weights-signed-url:', e);
+    res.status(500).json({ error: e.message || 'Signed URL failed' });
   }
 });
 

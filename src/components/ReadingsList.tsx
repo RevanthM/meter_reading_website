@@ -72,7 +72,7 @@ const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
 function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boolean {
   switch (cohort) {
     case 'untrained':
-      return r.status === 'incorrect_new';
+      return r.isManuallyReviewed !== true;
     case 'correct':
       return r.status === 'correct';
     case 'wrong':

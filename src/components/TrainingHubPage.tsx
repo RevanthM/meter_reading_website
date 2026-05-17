@@ -43,7 +43,7 @@ function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort):
   if (cohort === 'all') return true;
   switch (cohort) {
     case 'untrained':
-      return r.status === 'incorrect_new';
+      return r.isManuallyReviewed !== true;
     case 'correct':
       return r.status === 'correct';
     case 'wrong':

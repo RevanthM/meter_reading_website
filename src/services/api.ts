@@ -4,6 +4,16 @@ import type { DataSource } from '../context/ReadingsContext';
 
 const API_BASE_URL = '/api';
 
+/** Turn browser network errors into an actionable message (API server not running / wrong origin). */
+function wrapFetchNetworkError(e: unknown, hint: string): Error {
+  if (e instanceof TypeError && /failed to fetch/i.test(e.message)) {
+    return new Error(
+      `${hint} Could not reach the API. Use http://localhost:5173 (with \`npm run dev:all\` or \`npm run server\` on port 3001).`,
+    );
+  }
+  return e instanceof Error ? e : new Error(String(e));
+}
+
 /** Parse successful API body text; if HTML slipped through (SPA fallback), explain likely cause. */
 function parseJsonBody<T>(text: string, httpStatus: number): T {
   const trimmed = text.trim();
@@ -172,6 +182,59 @@ export interface PipelineIterationManualMetrics {
   simDial4ConfidencePct?: number | null;
 }
 
+/** iOS unit-test CSV linked to a pipeline iteration (stored in S3 registry JSON). */
+export interface PipelineIterationUnitTestLink {
+  s3Key: string;
+  fileName?: string | null;
+  linkedAt?: string | null;
+  pipelineId?: string | null;
+  pipelineDisplayName?: string | null;
+  accuracyPercent?: number | null;
+  imagesProcessed?: number | null;
+  generatedUtc?: string | null;
+  appVersionHint?: string | null;
+}
+
+/** Parsed summary block from an iOS unit-test export CSV. */
+export interface UnitTestCsvSummary {
+  pipeline_id?: string;
+  pipeline_display_name?: string;
+  pipeline_version?: string;
+  pipeline_product?: string;
+  images_processed?: string;
+  imagesProcessed?: number;
+  with_filename_ground_truth?: string;
+  withGroundTruth?: number;
+  correct_readings?: string;
+  correct?: number;
+  accuracy_percent?: string;
+  accuracyPercent?: number | null;
+  generated_utc?: string;
+  app_version?: string;
+  [key: string]: string | number | null | undefined;
+}
+
+export interface UnitTestRunIndexRow {
+  key: string;
+  fileName: string;
+  size: number;
+  lastModified: string | null;
+}
+
+export interface UnitTestRunListResponse {
+  workType: string;
+  prefix: string | null;
+  prefixes?: string[];
+  runs: UnitTestRunIndexRow[];
+}
+
+export interface UnitTestRunDetailResponse {
+  key: string;
+  summary: UnitTestCsvSummary;
+  perImageCount: number;
+  perImageRows?: Record<string, string>[];
+}
+
 /** One row in the pipeline / model iteration registry (S3 JSON). */
 export interface PipelineIterationRecord {
   id: string;
@@ -191,6 +254,70 @@ export interface PipelineIterationRecord {
   outcome: string;
   portalStats?: PipelineIterationPortalStats | null;
   manualMetrics?: PipelineIterationManualMetrics | null;
+  /** Unit-test CSV exports from S3 attached to this iteration. */
+  linkedUnitTests?: PipelineIterationUnitTestLink[];
+  /** Model factory assembly-line stage (see factoryStages.ts). */
+  factoryStage?: string | null;
+  /** What this release ships: dial finder, keypoint reader, or both. */
+  modelShip?: PipelineIterationModelShip | null;
+  /** Linked Roboflow projects/versions for this iteration. */
+  roboflowLinks?: PipelineIterationRoboflowLinks | null;
+  /** YOLO .pt weights stored in S3 for this iteration. */
+  modelWeights?: PipelineIterationModelWeights | null;
+}
+
+export interface PipelineIterationWeightMeta {
+  s3Key: string;
+  bucket: string;
+  uploadedAt: string | null;
+  sizeBytes: number | null;
+  originalFileName: string | null;
+  source?: 'upload' | 'roboflow' | null;
+  roboflowFormat?: string | null;
+  weightsFolder?: string | null;
+  weightsPrefix?: string | null;
+}
+
+export interface PipelineIterationModelWeights {
+  dialDetection?: PipelineIterationWeightMeta | null;
+  keypoint?: PipelineIterationWeightMeta | null;
+}
+
+export interface PipelineIterationModelShip {
+  dialDetection?: boolean;
+  keypoint?: boolean;
+}
+
+export interface PipelineIterationRoboflowSplits {
+  train?: number | null;
+  valid?: number | null;
+  test?: number | null;
+}
+
+export interface PipelineIterationRoboflowVersionLink {
+  datasetSlug: string;
+  projectName?: string | null;
+  version?: number | null;
+  role?: 'dial_detection' | 'keypoint' | null;
+  /** e.g. "YOLO26 Keypoint Detection (Small)" */
+  modelTypeDisplay?: string | null;
+  versionName?: string | null;
+  imageCount?: number | null;
+  splits?: PipelineIterationRoboflowSplits | null;
+  versionCreatedAt?: string | null;
+  lastTrainedAt?: string | null;
+  trainStatus?: string | null;
+  mapPercent?: number | null;
+  precisionPercent?: number | null;
+  recallPercent?: number | null;
+  checkpoint?: string | null;
+  /** Roboflow fine-tuned model id, e.g. sempra_keypoint_model/10 */
+  modelId?: string | null;
+}
+
+export interface PipelineIterationRoboflowLinks {
+  dialDetection?: PipelineIterationRoboflowVersionLink | null;
+  keypoint?: PipelineIterationRoboflowVersionLink | null;
 }
 
 export interface PipelineIterationsDoc {
@@ -200,13 +327,147 @@ export interface PipelineIterationsDoc {
 }
 
 export async function fetchPipelineIterations(): Promise<PipelineIterationsDoc> {
-  const response = await fetch(`${API_BASE_URL}/pipeline-iterations`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/pipeline-iterations`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<PipelineIterationsDoc>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Loading pipeline iterations failed.');
+  }
+}
+
+export async function fetchUnitTestRuns(workType: string): Promise<UnitTestRunListResponse> {
+  const q = new URLSearchParams({ workType });
+  try {
+    const response = await fetch(`${API_BASE_URL}/unit-test/runs?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<UnitTestRunListResponse>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Listing unit test CSVs failed.');
+  }
+}
+
+export async function fetchUnitTestRunDetail(
+  s3Key: string,
+  options?: { includeRows?: boolean },
+): Promise<UnitTestRunDetailResponse> {
+  const q = new URLSearchParams({ s3Key });
+  if (options?.includeRows !== true) {
+    q.set('includeRows', 'false');
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/unit-test/run-detail?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<UnitTestRunDetailResponse>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Reading unit test CSV failed.');
+  }
+}
+
+export type PipelineIterationWeightRole = 'dial_detection' | 'keypoint';
+
+export interface UploadPipelineIterationWeightsResponse {
+  ok: boolean;
+  role: PipelineIterationWeightRole;
+  weights: PipelineIterationWeightMeta;
+}
+
+export interface PullPipelineIterationWeightsFromRoboflowResponse
+  extends UploadPipelineIterationWeightsResponse {
+  roboflow?: {
+    format: string;
+    exportLink: string;
+    modelTypeDisplay?: string | null;
+    modelType?: string | null;
+  };
+}
+
+export type PipelineIterationWeightContext = Pick<
+  PipelineIterationRecord,
+  'pipeline' | 'iterationNumber' | 'modelId'
+>;
+
+export async function uploadPipelineIterationWeight(
+  iterationId: string,
+  role: PipelineIterationWeightRole,
+  file: File,
+  context?: PipelineIterationWeightContext,
+): Promise<UploadPipelineIterationWeightsResponse> {
+  const fd = new FormData();
+  fd.set('iterationId', iterationId);
+  fd.set('role', role);
+  fd.set('file', file, file.name);
+  if (context?.pipeline) fd.set('pipeline', context.pipeline);
+  if (context?.iterationNumber != null) fd.set('iterationNumber', String(context.iterationNumber));
+  if (context?.modelId) fd.set('modelId', context.modelId);
+  const response = await fetch(`${API_BASE_URL}/pipeline-iterations/weights`, {
+    method: 'POST',
+    body: fd,
+  });
   const text = await response.text();
   if (!response.ok) {
     const err = parseJsonBody<{ error?: string }>(text, response.status);
     throw new Error(err.error || `HTTP ${response.status}`);
   }
-  return parseJsonBody<PipelineIterationsDoc>(text, response.status);
+  return parseJsonBody<UploadPipelineIterationWeightsResponse>(text, response.status);
+}
+
+export async function pullPipelineIterationWeightFromRoboflow(
+  payload: {
+    iterationId: string;
+    role: PipelineIterationWeightRole;
+    datasetSlug?: string;
+    version?: number;
+    format?: string;
+    roboflowLinks?: PipelineIterationRoboflowLinks | null;
+    pipeline?: string;
+    iterationNumber?: number;
+    modelId?: string;
+  },
+): Promise<PullPipelineIterationWeightsFromRoboflowResponse> {
+  const response = await fetch(`${API_BASE_URL}/pipeline-iterations/weights/from-roboflow`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<PullPipelineIterationWeightsFromRoboflowResponse>(text, response.status);
+}
+
+export async function fetchPipelineIterationWeightSignedUrl(
+  iterationId: string,
+  role: PipelineIterationWeightRole,
+  context?: PipelineIterationWeightContext,
+): Promise<TrainingWeightsSignedUrlResponse> {
+  const params = new URLSearchParams({ iterationId, role });
+  if (context?.pipeline) params.set('pipeline', context.pipeline);
+  if (context?.iterationNumber != null) params.set('iterationNumber', String(context.iterationNumber));
+  if (context?.modelId) params.set('modelId', context.modelId);
+  const response = await fetch(
+    `${API_BASE_URL}/pipeline-iterations/weights-signed-url?${params.toString()}`,
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<TrainingWeightsSignedUrlResponse>(text, response.status);
 }
 
 export async function savePipelineIterations(

@@ -21,6 +21,7 @@ import {
   PanelLeftClose,
   Sparkles,
   Layers,
+  Factory,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -174,10 +175,17 @@ const PortalLayout: FC = () => {
             hint: 'Session counts, trends, exports',
           },
           {
+            path: '/factory',
+            label: 'Model factory',
+            description: 'Assembly line · ship',
+            hint: 'Planning → data → label → train → test → shipped',
+            icon: <Factory size={17} strokeWidth={2} />,
+          },
+          {
             path: '/pipeline-iterations',
-            label: 'Pipeline iterations',
-            description: 'Model runs · compare · edit',
-            hint: 'Manual iteration registry (saved to S3)',
+            label: 'Iterations table',
+            description: 'Spreadsheet · charts',
+            hint: 'Same registry as factory (detailed edit)',
             icon: <Layers size={17} strokeWidth={2} />,
           },
           {

@@ -17,6 +17,7 @@ import DatasetsPage from './components/DatasetsPage';
 import TrainingHubPage from './components/TrainingHubPage';
 import TrainingPipelinePage from './components/TrainingPipelinePage';
 import PipelineIterationsPage from './components/PipelineIterationsPage';
+import ModelFactoryPage from './components/ModelFactoryPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -51,6 +52,7 @@ function AppContent() {
           <Route path="/datasets" element={<DatasetsPage />} />
           <Route path="/training/pipeline/:segment" element={<TrainingPipelinePage />} />
           <Route path="/training" element={<TrainingHubPage />} />
+          <Route path="/factory" element={<ModelFactoryPage />} />
           <Route path="/pipeline-iterations" element={<PipelineIterationsPage />} />
         </Route>
       </Routes>

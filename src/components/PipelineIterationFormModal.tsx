@@ -12,6 +12,8 @@ import {
   computePortalStatsForAppVersion,
   uniqueAppVersionsFromReadings,
 } from '../utils/pipelineIterationStats';
+import PipelineIterationUnitTestLinker from './PipelineIterationUnitTestLinker';
+import FactoryFormExtras from './FactoryFormExtras';
 
 function deepCloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
   return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
@@ -64,6 +66,8 @@ type Props = {
   readings: S3MeterReading[];
   workType: WorkType;
   dataSource: DataSource;
+  /** Show factory stage, ship targets, and Roboflow link fields. */
+  factoryMode?: boolean;
 };
 
 const PipelineIterationFormModal: FC<Props> = ({
@@ -74,6 +78,7 @@ const PipelineIterationFormModal: FC<Props> = ({
   readings,
   workType,
   dataSource,
+  factoryMode = false,
 }) => {
   const [row, setRow] = useState<PipelineIterationRecord>(() => deepCloneRow(initial));
   const [err, setErr] = useState<string | null>(null);
@@ -202,6 +207,8 @@ const PipelineIterationFormModal: FC<Props> = ({
               {err}
             </p>
           ) : null}
+
+          {factoryMode ? <FactoryFormExtras row={row} setRow={setRow} /> : null}
 
           <fieldset className="pipeline-iteration-form-section">
             <legend>Iteration plan (manual)</legend>
@@ -374,6 +381,24 @@ const PipelineIterationFormModal: FC<Props> = ({
           ) : (
             <p className="pipeline-iteration-form-muted">No portal snapshot yet — choose app version and click “Load sessions…”.</p>
           )}
+
+          <PipelineIterationUnitTestLinker
+            workType={workType}
+            modelId={row.modelId}
+            linked={row.linkedUnitTests ?? []}
+            onLinkedChange={(linkedUnitTests) => setRow((r) => ({ ...r, linkedUnitTests }))}
+            onApplyManualMetrics={(patch) =>
+              setRow((r) => ({
+                ...r,
+                manualMetrics: { ...(r.manualMetrics ?? {}), ...patch },
+              }))
+            }
+            onSuggestAppVersion={(appVersion) => {
+              if (!row.appVersion.trim()) {
+                setRow((r) => ({ ...r, appVersion }));
+              }
+            }}
+          />
 
           <fieldset className="pipeline-iteration-form-section">
             <legend>Roboflow (manual)</legend>

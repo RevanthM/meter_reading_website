@@ -4,16 +4,23 @@
  * @see https://docs.roboflow.com/developer/rest-api/manage-images/upload-an-image
  */
 import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { fetchRoboflowVersionDetail } from './roboflowWeights.js';
 
-const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY || '';
-const ROBOFLOW_WORKSPACE = (process.env.ROBOFLOW_WORKSPACE || '').trim();
+/** Read at call time — `src/.env` is loaded in index.js after ES module imports are linked. */
+function roboflowApiKey() {
+  return String(process.env.ROBOFLOW_API_KEY || '').trim();
+}
+
+function roboflowWorkspaceEnv() {
+  return String(process.env.ROBOFLOW_WORKSPACE || '').trim();
+}
 
 let cachedWorkspace = null;
 let cachedWorkspaceAt = 0;
 const WORKSPACE_CACHE_MS = 5 * 60 * 1000;
 
 function isConfigured() {
-  return Boolean(ROBOFLOW_API_KEY);
+  return Boolean(roboflowApiKey());
 }
 
 async function streamToBuffer(stream) {
@@ -25,12 +32,13 @@ async function streamToBuffer(stream) {
 }
 
 async function resolveWorkspaceSlug() {
-  if (ROBOFLOW_WORKSPACE) return ROBOFLOW_WORKSPACE;
+  const fromEnv = roboflowWorkspaceEnv();
+  if (fromEnv) return fromEnv;
   if (!isConfigured()) return null;
   if (cachedWorkspace && Date.now() - cachedWorkspaceAt < WORKSPACE_CACHE_MS) {
     return cachedWorkspace;
   }
-  const url = `https://api.roboflow.com/?api_key=${encodeURIComponent(ROBOFLOW_API_KEY)}`;
+  const url = `https://api.roboflow.com/?api_key=${encodeURIComponent(roboflowApiKey())}`;
   const res = await fetch(url);
   if (!res.ok) {
     const t = await res.text();
@@ -44,6 +52,30 @@ async function resolveWorkspaceSlug() {
   return ws;
 }
 
+/** Roboflow often returns slug as `workspace/project` already — avoid doubling the workspace. */
+function normalizeDatasetSlug(workspaceSlug, slugOrId) {
+  const raw = String(slugOrId || '').trim().replace(/^\/+/, '');
+  if (!raw) return raw;
+  const ws = String(workspaceSlug || '').trim();
+  const parts = raw.split('/').filter(Boolean);
+  if (parts.length >= 3 && ws && parts[0] === ws && parts[1] === ws) {
+    return parts.slice(1).join('/');
+  }
+  if (parts.length >= 2 && ws && parts[0] === ws) {
+    return parts.join('/');
+  }
+  if (ws) return `${ws}/${raw}`;
+  return raw;
+}
+
+export function normalizeRoboflowDatasetSlugParam(datasetSlug, workspaceFallback) {
+  const raw = String(datasetSlug || '').trim();
+  if (!raw) return raw;
+  const parts = raw.split('/').filter(Boolean);
+  const ws = parts[0] || workspaceFallback || '';
+  return normalizeDatasetSlug(ws, raw);
+}
+
 function extractProjects(workspaceJson, workspaceSlug) {
   const raw =
     workspaceJson.projects
@@ -52,7 +84,7 @@ function extractProjects(workspaceJson, workspaceSlug) {
     || [];
   return raw.map((p) => {
     const slug = p.slug || p.id || p.name;
-    const datasetSlug = slug && workspaceSlug ? `${workspaceSlug}/${slug}` : slug;
+    const datasetSlug = normalizeDatasetSlug(workspaceSlug, slug);
     return {
       name: p.name || p.title || slug || 'Project',
       slug,
@@ -64,9 +96,71 @@ function extractProjects(workspaceJson, workspaceSlug) {
   });
 }
 
+function parseVersionNumberFromEntry(v) {
+  const id = v.id ?? v.version ?? v.number;
+  if (typeof id === 'number' && Number.isFinite(id)) return id;
+  const str = String(id ?? '').trim();
+  if (!str) return null;
+  const tail = str.includes('/') ? str.split('/').pop() : str;
+  const n = parseInt(String(tail ?? ''), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function extractProjectVersions(projectJson) {
+  // `project.versions` is a count; the version list lives in top-level `versions[]`.
+  const raw =
+    (Array.isArray(projectJson.versions) ? projectJson.versions : null)
+    || (Array.isArray(projectJson.project?.versionList) ? projectJson.project.versionList : null)
+    || (projectJson.project?.version && typeof projectJson.project.version === 'object'
+      ? [projectJson.project.version]
+      : null)
+    || [];
+  return raw
+    .map((v) => {
+      const model = v.model && typeof v.model === 'object' ? v.model : null;
+      const mapRaw = model?.map ?? v.map ?? v.accuracy;
+      const map =
+        mapRaw === null || mapRaw === undefined || mapRaw === ''
+          ? null
+          : typeof mapRaw === 'number'
+            ? mapRaw
+            : parseFloat(String(mapRaw));
+      return {
+        version: parseVersionNumberFromEntry(v),
+        name: v.name || v.note || null,
+        created: v.created || v.created_at || v.date || null,
+        trainImages: v.images ?? v.train_images ?? v.train ?? null,
+        map: Number.isFinite(map) ? map : null,
+        precision: model?.precision != null ? parseFloat(String(model.precision)) : null,
+        recall: model?.recall != null ? parseFloat(String(model.recall)) : null,
+        hasTrainedModel: Boolean(model?.id || model?.endpoint),
+        modelId: model?.id ? String(model.id) : null,
+        modelUpdated: model?.end ?? model?.updated ?? null,
+      };
+    })
+    .filter((v) => v.version != null)
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0));
+}
+
+function extractProjectImageCounts(projectJson) {
+  const p = projectJson.project || projectJson;
+  const splits = p.splits || p.images || {};
+  const num = (v) => {
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    total: num(p.images ?? p.total_images ?? splits.total),
+    train: num(splits.train ?? p.train),
+    valid: num(splits.valid ?? splits.validation ?? p.valid),
+    test: num(splits.test ?? p.test),
+  };
+}
+
 async function fetchWorkspacePayload() {
   const ws = await resolveWorkspaceSlug();
-  const url = `https://api.roboflow.com/${encodeURIComponent(ws)}?api_key=${encodeURIComponent(ROBOFLOW_API_KEY)}`;
+  const url = `https://api.roboflow.com/${encodeURIComponent(ws)}?api_key=${encodeURIComponent(roboflowApiKey())}`;
   const res = await fetch(url);
   const text = await res.text();
   let json;
@@ -131,6 +225,87 @@ export function registerRoboflowRoutes(app, deps) {
     } catch (e) {
       console.error('Roboflow projects:', e.message);
       res.status(502).json({ error: e.message || 'Failed to list Roboflow projects' });
+    }
+  });
+
+  app.get('/api/roboflow/version', async (req, res) => {
+    try {
+      if (!isConfigured()) {
+        return res.status(503).json({ error: 'Roboflow is not configured (set ROBOFLOW_API_KEY on the server).' });
+      }
+      let datasetSlug = String(req.query.dataset ?? req.query.datasetSlug ?? '').trim();
+      const version = parseInt(String(req.query.version ?? ''), 10);
+      if (!datasetSlug) {
+        return res.status(400).json({ error: 'Query dataset (workspace/project) is required.' });
+      }
+      if (!Number.isFinite(version) || version < 1) {
+        return res.status(400).json({ error: 'Query version must be a positive integer.' });
+      }
+      const { workspaceSlug } = await fetchWorkspacePayload().catch(() => ({ workspaceSlug: '' }));
+      datasetSlug = normalizeRoboflowDatasetSlugParam(
+        datasetSlug,
+        workspaceSlug || roboflowWorkspaceEnv(),
+      );
+      const detail = await fetchRoboflowVersionDetail({ datasetSlug, version });
+      res.json(detail);
+    } catch (e) {
+      console.error('Roboflow version meta:', e.message);
+      res.status(502).json({ error: e.message || 'Failed to load version metadata' });
+    }
+  });
+
+  app.get('/api/roboflow/project', async (req, res) => {
+    try {
+      if (!isConfigured()) {
+        return res.status(503).json({ error: 'Roboflow is not configured (set ROBOFLOW_API_KEY on the server).' });
+      }
+      let datasetSlug = String(req.query.dataset ?? req.query.datasetSlug ?? '').trim();
+      if (!datasetSlug) {
+        return res.status(400).json({ error: 'Query dataset (workspace/project) is required.' });
+      }
+      const { workspaceSlug } = await fetchWorkspacePayload().catch(() => ({ workspaceSlug: '' }));
+      datasetSlug = normalizeRoboflowDatasetSlugParam(
+        datasetSlug,
+        workspaceSlug || roboflowWorkspaceEnv(),
+      );
+      const parts = datasetSlug.split('/').filter(Boolean);
+      if (parts.length < 2) {
+        return res.status(400).json({ error: 'dataset must be workspace/project' });
+      }
+      const ws = parts[0];
+      const projectSlug = parts.slice(1).join('/');
+      const url = `https://api.roboflow.com/${encodeURIComponent(ws)}/${encodeURIComponent(projectSlug)}?api_key=${encodeURIComponent(roboflowApiKey())}`;
+      const rfRes = await fetch(url);
+      const text = await rfRes.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error(`Roboflow project response was not JSON (${rfRes.status})`);
+      }
+      if (!rfRes.ok) {
+        throw new Error(json.error || json.message || `Roboflow HTTP ${rfRes.status}`);
+      }
+      const versions = extractProjectVersions(json);
+      const trainedModels = versions.filter((v) => v.hasTrainedModel);
+      const imageCounts = extractProjectImageCounts(json);
+      res.json({
+        workspace: ws,
+        projectSlug,
+        datasetSlug: `${ws}/${projectSlug}`,
+        name: json.project?.name || json.name || projectSlug,
+        type: json.project?.type || json.type || null,
+        imageCounts,
+        versions,
+        trainedModels,
+        versionCount: json.project?.versions ?? versions.length,
+        annotateUrl: `https://app.roboflow.com/${encodeURIComponent(ws)}/${encodeURIComponent(projectSlug)}/annotate`,
+        modelsUrl: `https://app.roboflow.com/${encodeURIComponent(ws)}/${encodeURIComponent(projectSlug)}/models`,
+        url: `https://app.roboflow.com/${encodeURIComponent(ws)}/${encodeURIComponent(projectSlug)}`,
+      });
+    } catch (e) {
+      console.error('Roboflow project detail:', e.message);
+      res.status(502).json({ error: e.message || 'Failed to load Roboflow project' });
     }
   });
 
@@ -208,7 +383,7 @@ export function registerRoboflowRoutes(app, deps) {
         form.append('file', new Blob([buffer], { type: guessContentType(fileName) }), fileName);
         form.append('batch', batchName);
 
-        const uploadUrl = `https://api.roboflow.com/dataset/${datasetPath}/upload?api_key=${encodeURIComponent(ROBOFLOW_API_KEY)}`;
+        const uploadUrl = `https://api.roboflow.com/dataset/${datasetPath}/upload?api_key=${encodeURIComponent(roboflowApiKey())}`;
 
         try {
           const rfRes = await fetch(uploadUrl, { method: 'POST', body: form });

@@ -32,6 +32,7 @@ function newEmptyRow(): PipelineIterationRecord {
     outcome: '',
     portalStats: null,
     manualMetrics: {},
+    linkedUnitTests: [],
   };
 }
 
@@ -427,6 +428,7 @@ const PipelineIterationsPage: FC = () => {
                     </th>
                     <th>Status</th>
                     <th>Sub</th>
+                    <th title="Linked iOS unit-test CSV exports on S3">UT CSV</th>
                     <th>Outcome</th>
                     <th>List</th>
                     <th>Edit</th>
@@ -455,6 +457,18 @@ const PipelineIterationsPage: FC = () => {
                         </td>
                         <td>{r.currentStatus || '—'}</td>
                         <td>{r.subStatus?.trim() ? r.subStatus : '—'}</td>
+                        <td>
+                          {(r.linkedUnitTests?.length ?? 0) > 0 ? (
+                            <span
+                              className="pipeline-iterations-portal-pill"
+                              title={(r.linkedUnitTests ?? []).map((l) => l.fileName || l.s3Key).join('\n')}
+                            >
+                              {r.linkedUnitTests!.length} linked
+                            </span>
+                          ) : (
+                            <span className="readings-confidence-missing">—</span>
+                          )}
+                        </td>
                         <td className="pipeline-iterations-td-scope">{r.outcome || '—'}</td>
                         <td>
                           {r.appVersion.trim() ? (
