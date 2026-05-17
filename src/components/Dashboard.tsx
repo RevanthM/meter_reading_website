@@ -762,11 +762,11 @@ const Dashboard: FC = () => {
             />
             <KpiMiniCard
               label="Uploaded today"
-              value="—"
+              value={kpiCount(glanceCounts.uploadedTodayCount ?? 0, kpiDataLoading)}
               hint={`${todayHintDisplay} · open readings for per-day drill-down`}
               onClick={() => handleDrillByDay(todayDrillIso)}
               variant="accent"
-              loading={false}
+              loading={kpiDataLoading}
             />
             <KpiMiniCard
               label="Marked correct"

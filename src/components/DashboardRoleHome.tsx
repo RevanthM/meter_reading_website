@@ -145,10 +145,11 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
           />
           <KpiMiniCard
             label="Uploaded today"
-            value="—"
+            value={kpiCount(counts.uploadedTodayCount ?? 0, countsLoading)}
             hint={`${todayHint} · drill down by day`}
             onClick={() => navigate(`/readings/all?date=${encodeURIComponent(todayIso)}`)}
             variant="accent"
+            loading={countsLoading}
           />
           <KpiMiniCard
             label="Not sure / No dials"

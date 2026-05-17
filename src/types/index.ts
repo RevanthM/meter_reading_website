@@ -90,6 +90,8 @@ export type DashboardCounts = {
   incorrectTrainingCount: number;
   noDialsCount: number;
   notSureCount: number;
+  /** Sessions captured on the current portal calendar day (from analytics index). */
+  uploadedTodayCount?: number;
 };
 
 // Status labels for display

@@ -89,7 +89,7 @@ function zonedCalendarParts(d, timeZone) {
   };
 }
 
-function calendarDayKeyInPortalTz(dateString) {
+export function calendarDayKeyInPortalTz(dateString) {
   const d = parseReadingInstant(dateString);
   if (!d) return '';
   const p = zonedCalendarParts(d, PORTAL_DISPLAY_TIME_ZONE);
@@ -666,6 +666,17 @@ export function createImprovementAnalyticsStore({
       });
   }
 
+  /** Sessions whose capture day (portal TZ) matches `dayYmd` (default: today). */
+  async function countSessionsOnPortalDay(source, workType, dayYmd) {
+    const indexDoc = await readIndex(source, workType);
+    const target = dayYmd || calendarDayKeyInPortalTz(new Date().toISOString());
+    let n = 0;
+    for (const c of Object.values(indexDoc.sessions || {})) {
+      if (c?.portalDay === target) n++;
+    }
+    return n;
+  }
+
   async function getStats(source, workType, opts = {}) {
     const range = opts.range && opts.range !== '' ? opts.range : 'all';
     const maxVersions = opts.maxVersions ?? 16;
@@ -774,6 +785,7 @@ export function createImprovementAnalyticsStore({
       return upsertSession(source, workType, contrib);
     },
     getStats,
+    countSessionsOnPortalDay,
     backfill,
     readIndex,
   };

@@ -23,7 +23,7 @@ import {
 import { pullWeightsPtFromRoboflow } from './roboflowWeights.js';
 import { registerApiDocs } from './apiDocs.js';
 import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
-import { createImprovementAnalyticsStore } from './improvementAnalytics.js';
+import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import archiver from 'archiver';
 import multer from 'multer';
@@ -966,6 +966,40 @@ async function getAllLightReadings(source = 'all', workType = '1000') {
   return unique;
 }
 
+async function getAllLightReadingsCached(source = 'all', workType = '1000') {
+  const cacheKey = `light:${source}:${workType}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`⚡ Cache hit for light readings ${source}:${workType} (${cached.length})`);
+    return cached;
+  }
+  const unique = await getAllLightReadings(source, workType);
+  setCache(cacheKey, unique);
+  return unique;
+}
+
+/** Same rule as readings list `?date=YYYY-MM-DD` filter (all sessions, not analytics index). */
+async function countUploadedOnPortalDay(source = 'all', workType = '1000', dayYmd) {
+  const target = dayYmd || calendarDayKeyInPortalTz(new Date().toISOString());
+  const cacheKey = `uploadedToday:${source}:${workType}:${target}`;
+  const cached = getCached(cacheKey);
+  if (typeof cached === 'number') {
+    console.log(`⚡ Cache hit for uploaded today ${source}:${workType} ${target} → ${cached}`);
+    return cached;
+  }
+
+  const fullKey = getCacheKey(source, workType);
+  let readings = getCached(fullKey);
+  if (!readings?.length) {
+    readings = await getAllLightReadingsCached(source, workType);
+  }
+
+  const n = readings.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === target).length;
+  console.log(`📊 Uploaded on ${target} (portal): ${n} session(s)`);
+  setCache(cacheKey, n);
+  return n;
+}
+
 async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = '1000') {
   try {
     const command = new ListObjectsV2Command({
@@ -1358,6 +1392,7 @@ app.get('/api/counts', async (req, res) => {
     const source = req.query.source || 'all';
     const workType = req.query.workType || '1000';
     const counts = await getCountsFromFolders(source, workType);
+    counts.uploadedTodayCount = await countUploadedOnPortalDay(source, workType);
     res.json(counts);
   } catch (error) {
     console.error('Error calculating counts:', error);

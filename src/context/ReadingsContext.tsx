@@ -3,6 +3,7 @@ import type { ReadingStatus, DashboardCounts, WorkType, ReadingsListFilter } fro
 import { isIncorrectPipelineStatus } from '../types';
 import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
+import { calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
 import { useAuth } from './AuthContext';
 
 export type DataSource = 'all' | 'field' | 'simulator';
@@ -120,8 +121,16 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   }, [allReadings, dataSource]);
 
   const counts = useMemo((): DashboardCounts => {
+    const todayIso = calendarDayKeyInPortalTz(new Date().toISOString());
+    const uploadedTodayFromReadings = filteredReadings.filter(
+      (r) => calendarDayKeyInPortalTz(r.dateOfReading) === todayIso,
+    ).length;
+
     if (serverCounts) {
-      return serverCounts;
+      return {
+        ...serverCounts,
+        uploadedTodayCount: uploadedTodayFromReadings,
+      };
     }
     const readings = filteredReadings;
     return {
@@ -133,6 +142,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       incorrectTrainingCount: readings.filter((r) => r.status === 'incorrect_training').length,
       noDialsCount: readings.filter((r) => r.status === 'no_dials').length,
       notSureCount: readings.filter((r) => r.status === 'not_sure').length,
+      uploadedTodayCount: uploadedTodayFromReadings,
     };
   }, [filteredReadings, serverCounts]);
 
