@@ -43,6 +43,7 @@ import { calendarDayKeyInPortalTz, formatReadingShortDate } from '../utils/readi
 
 /** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
+  manually_uploaded: -1,
   incorrect_new: 0,
   incorrect_analyzed: 1,
   incorrect_labeled: 2,

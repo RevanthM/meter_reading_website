@@ -54,7 +54,6 @@ import {
   formatLatLon,
   formatUploadModeLabel,
 } from '../utils/captureLocation';
-
 const PORTAL_WORK_TYPES: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
 export type ReadingDetailLocationState = {
@@ -536,6 +535,7 @@ const ReadingDetail: React.FC = () => {
   const [fetchError, setFetchError] = useState(false);
 
   const reading = directReading || contextReading;
+  const isManualUploadQueue = reading?.status === 'manually_uploaded';
 
   const readingQueueIds = useMemo(() => {
     const st = location.state as ReadingDetailLocationState | null;
@@ -789,7 +789,7 @@ const ReadingDetail: React.FC = () => {
       if (metaDirty || shouldMarkManual) {
         const patch: SessionMetadataPatch = {};
         if (metaDirty) {
-          patch.ml_prediction = mlPrediction;
+          patch.ml_prediction = isManualUploadQueue ? userCorrection : mlPrediction;
           patch.user_correction = userCorrection;
           patch.portal_review_notes = comments;
           if (isReviewerSaveMode) {
@@ -868,6 +868,7 @@ const ReadingDetail: React.FC = () => {
     imageDifficulty,
     isReviewerSaveMode,
     portalWorkMode,
+    isManualUploadQueue,
   ]);
 
   const handleApproveUnitTest = useCallback(async () => {
@@ -1234,7 +1235,8 @@ const ReadingDetail: React.FC = () => {
               ) : null}
             </section>
 
-            {(hasS3Metadata || (isLabelerMode && reading.dialDetails && reading.dialDetails.length > 0)) && (
+            {!isManualUploadQueue &&
+            (hasS3Metadata || (isLabelerMode && reading.dialDetails && reading.dialDetails.length > 0)) && (
               <section className="ml-metrics-section reading-detail-ml">
                 <h2>
                   <Zap size={20} /> Reading check
@@ -1464,11 +1466,41 @@ const ReadingDetail: React.FC = () => {
                 </>
               ) : (
                 <>
+                  {isManualUploadQueue ? (
+                    <>
+                      <p className="reading-detail-field-hint">
+                        Type the 4-digit reading, then choose <strong>Correct</strong> and save. Or use{' '}
+                        <strong>Label uploads</strong> in the sidebar.
+                      </p>
+                      <label className="reading-detail-meta-field" htmlFor="manual-queue-expected">
+                        <span>Correct reading</span>
+                        <input
+                          id="manual-queue-expected"
+                          className="reading-detail-meta-input manual-label-input"
+                          placeholder="0000"
+                          value={userCorrection}
+                          disabled={isSaving}
+                          inputMode="numeric"
+                          maxLength={4}
+                          onChange={(e) =>
+                            setUserCorrection(e.target.value.replace(/\D/g, '').slice(0, 4))
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : null}
+
                   <div className="status-control">
                     <label htmlFor="reading-detail-status">Outcome</label>
                     <select
                       id="reading-detail-status"
-                      value={statusIsIncorrect(selectedStatus) ? REVIEWER_SELECT_INCORRECT : selectedStatus}
+                      value={
+                        selectedStatus === 'manually_uploaded'
+                          ? 'manually_uploaded'
+                          : statusIsIncorrect(selectedStatus)
+                            ? REVIEWER_SELECT_INCORRECT
+                            : selectedStatus
+                      }
                       onChange={(e) => {
                         const raw = e.target.value;
                         if (raw === REVIEWER_SELECT_INCORRECT) {
@@ -1482,6 +1514,9 @@ const ReadingDetail: React.FC = () => {
                         backgroundColor: `${statusColors[selectedStatus]}10`,
                       }}
                     >
+                      {(selectedStatus === 'manually_uploaded' || reading.status === 'manually_uploaded') && (
+                        <option value="manually_uploaded">{statusLabels.manually_uploaded}</option>
+                      )}
                       <option value="correct">{statusLabels.correct}</option>
                       <option value={REVIEWER_SELECT_INCORRECT}>Incorrect</option>
                       <option value="no_dials">{statusLabels.no_dials}</option>

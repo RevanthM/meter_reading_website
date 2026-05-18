@@ -119,6 +119,8 @@ export interface S3MeterReading extends MeterReading {
   isManuallyReviewed?: boolean;
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
   portalMetadataUpdatedBy?: string;
+  /** Portal bulk upload awaiting a 4-digit label. */
+  manualLabelPending?: boolean;
 }
 
 /** Pulled from portal readings for this row’s app version (work type + data source scope). */
@@ -1376,6 +1378,68 @@ export async function removeSessionFromTestDataset(
     throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
   }
   return parseJsonBody(text, response.status);
+}
+
+export type ManualUploadBulkResult = {
+  ok: boolean;
+  sessionId: string;
+  s3SessionPrefix: string;
+  workType: string;
+  sourceType: 'field' | 'simulator';
+  expectedReading: string | null;
+  labeled: boolean;
+  reading: S3MeterReading;
+  fileName?: string;
+};
+
+export type ManualUploadBulkResponse = {
+  ok: boolean;
+  uploaded: number;
+  failed: number;
+  results: ManualUploadBulkResult[];
+  errors: { fileName: string; error: string }[];
+};
+
+export async function createManualUploadBulk(
+  params: {
+    images: File[];
+    workType: WorkType;
+    sourceType?: 'field' | 'simulator';
+    userEmail?: string;
+  },
+  portalWorkMode: PortalWorkMode,
+): Promise<ManualUploadBulkResponse> {
+  const form = new FormData();
+  for (const file of params.images) {
+    form.append('images', file);
+  }
+  form.append('workType', params.workType);
+  if (params.sourceType) form.append('sourceType', params.sourceType);
+
+  const headers: Record<string, string> = {
+    'x-portal-work-mode': portalWorkModeForMetadataHeader(portalWorkMode),
+  };
+  if (params.userEmail) headers['x-user-email'] = params.userEmail;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/manual-uploads/bulk`, {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Bulk upload failed.');
+  }
+  const text = await response.text();
+  const body = parseJsonBody<ManualUploadBulkResponse & { error?: string }>(text, response.status);
+  if (!response.ok && response.status !== 207) {
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+  if (!body.ok && body.uploaded === 0) {
+    throw new Error(body.errors?.[0]?.error || body.error || 'Upload failed');
+  }
+  return body;
 }
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {

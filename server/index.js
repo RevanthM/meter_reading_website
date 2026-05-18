@@ -25,6 +25,7 @@ import { registerApiDocs } from './apiDocs.js';
 import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
+import { registerManualUploadRoutes } from './manualUpload.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -600,6 +601,15 @@ function getAllFolderPrefixes(source, workType) {
     }
   }
 
+  // Portal manual uploads: `{workType}/manually_uploaded/{sessionId}/`
+  for (const root of getS3FolderRootsForPortalWorkType(workType)) {
+    prefixes.push({
+      folder: withS3Base(`${root}/manually_uploaded/`),
+      status: 'manually_uploaded',
+      sourceType: 'simulator',
+    });
+  }
+
   const seen = new Set();
   return prefixes.filter((p) => {
     if (seen.has(p.folder)) return false;
@@ -818,7 +828,12 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       dateOfReading: metadata.timestamp,
       location: formatCaptureLocationFromMetadata(metadata) || 'Location unavailable',
       captureLocation: normalizeCaptureLocation(metadata),
-      type: sourceType,
+      type:
+        metadata.upload_mode === 'field'
+          ? 'field'
+          : metadata.upload_mode === 'simulator'
+            ? 'simulator'
+            : sourceType,
       status,
       workType: metadata.work_type || workType,
       meterValue: metadata.ml_prediction,
@@ -876,6 +891,12 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
         typeof metadata.portal_metadata_updated_by === 'string' && metadata.portal_metadata_updated_by.trim() !== ''
           ? String(metadata.portal_metadata_updated_by).trim().slice(0, 320)
           : undefined,
+      manualLabelPending:
+        metadata.manual_label_pending === true ||
+        (metadata.upload_source === 'portal_manual' &&
+          !String(metadata.user_correction ?? '')
+            .replace(/\D/g, '')
+            .match(/^\d{4}$/)),
       comments:
         metadata.portal_review_notes != null && metadata.portal_review_notes !== ''
           ? String(metadata.portal_review_notes)
@@ -1147,6 +1168,7 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
     incorrectTrainingCount: 0,
     noDialsCount: 0,
     notSureCount: 0,
+    manuallyUploadedCount: 0,
   };
 
   const statusToKey = {
@@ -1157,6 +1179,7 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
     incorrect_training: 'incorrectTrainingCount',
     no_dials: 'noDialsCount',
     not_sure: 'notSureCount',
+    manually_uploaded: 'manuallyUploadedCount',
   };
 
   results.forEach((count, i) => {
@@ -1629,6 +1652,11 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       const v = patch.user_correction == null ? '' : String(patch.user_correction);
       if (v.length > 500) return res.status(400).json({ error: 'user_correction too long (max 500)' });
       meta.user_correction = v;
+      const four = v.replace(/\D/g, '');
+      if (/^\d{4}$/.test(four)) {
+        meta.manual_label_pending = false;
+        meta.feedback_type = 'correct';
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'ml_prediction')) {
@@ -2793,6 +2821,61 @@ registerTestDataReviewRoutes(app, {
   invalidateCache,
 });
 
+const MANUAL_UPLOAD_MAX_BYTES = Math.max(
+  256 * 1024,
+  Math.min(20 * 1024 * 1024, parseInt(process.env.MANUAL_UPLOAD_MAX_BYTES || String(12 * 1024 * 1024), 10) || 12 * 1024 * 1024),
+);
+const MANUAL_UPLOAD_MAX_FILES = Math.max(
+  1,
+  Math.min(100, parseInt(process.env.MANUAL_UPLOAD_MAX_FILES || '50', 10) || 50),
+);
+
+const manualImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MANUAL_UPLOAD_MAX_BYTES, files: 1 },
+});
+
+const manualImageBulkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MANUAL_UPLOAD_MAX_BYTES, files: MANUAL_UPLOAD_MAX_FILES },
+});
+
+function manualUploadMulterError(err, res) {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      error: `Image too large (max ${Math.round(MANUAL_UPLOAD_MAX_BYTES / (1024 * 1024))} MB).`,
+    });
+  }
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(413).json({ error: `Too many files (max ${MANUAL_UPLOAD_MAX_FILES}).` });
+  }
+  return res.status(400).json({ error: err.message || 'Upload parse failed' });
+}
+
+function manualUploadMiddleware(req, res, next) {
+  manualImageUpload.single('image')(req, res, (err) => {
+    if (!err) return next();
+    manualUploadMulterError(err, res);
+  });
+}
+
+function manualBulkUploadMiddleware(req, res, next) {
+  manualImageBulkUpload.array('images', MANUAL_UPLOAD_MAX_FILES)(req, res, (err) => {
+    if (!err) return next();
+    manualUploadMulterError(err, res);
+  });
+}
+
+registerManualUploadRoutes(app, {
+  s3Client,
+  BUCKET_NAME,
+  withS3Base,
+  invalidateCache,
+  parseSession,
+  uploadMiddleware: manualUploadMiddleware,
+  bulkUploadMiddleware: manualBulkUploadMiddleware,
+});
+
 const COPY_TO_TRAINING_MAX_SESSIONS = Math.max(
   1,
   Math.min(500, parseInt(process.env.COPY_TO_TRAINING_MAX_SESSIONS || '80', 10) || 80),
@@ -3125,6 +3208,7 @@ const VALID_LIST_EXPORT_STATUSES = new Set([
   'incorrect_training',
   'no_dials',
   'not_sure',
+  'manually_uploaded',
   'incorrect-queues',
 ]);
 

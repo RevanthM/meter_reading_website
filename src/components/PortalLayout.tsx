@@ -22,6 +22,7 @@ import {
   Sparkles,
   Layers,
   Factory,
+  Upload,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -118,6 +119,23 @@ const PortalLayout: FC = () => {
   } => {
     const dash: NavLeaf = { path: '/', label: 'Home', icon: <LayoutDashboard size={17} /> };
 
+    const manualUploadNav: NavLeaf[] = [
+      {
+        path: '/manual-upload',
+        label: 'Bulk upload',
+        description: 'Many images at once',
+        hint: 'Upload now, label readings on the next screen',
+        icon: <Upload size={17} strokeWidth={2} />,
+      },
+      {
+        path: '/manual-upload/label',
+        label: 'Label uploads',
+        description: '4-digit reading per image',
+        hint: 'Simple grid — type reading and save',
+        icon: <Inbox size={17} strokeWidth={2} />,
+      },
+    ];
+
     if (workMode === 'test_data_reviewer') {
       return {
         roleHint: 'Approve sessions reviewers marked for unit test; browse existing unit test images.',
@@ -128,6 +146,7 @@ const PortalLayout: FC = () => {
             description: 'Charts & KPIs',
             hint: 'Session counts and trends',
           },
+          ...manualUploadNav,
           {
             path: '/test-data/pending',
             label: 'Pending test data',
@@ -171,6 +190,7 @@ const PortalLayout: FC = () => {
             hint: 'Same folder as today; use is_manually_reviewed in metadata (legacy is_human_reviewed still read)',
             icon: <Inbox size={17} strokeWidth={2} />,
           },
+          ...manualUploadNav,
           {
             path: '/readings/incorrect-queues',
             label: 'Wrong (reviewed)',
@@ -206,7 +226,7 @@ const PortalLayout: FC = () => {
 
     if (workMode === 'admin') {
       return {
-        roleHint: 'Iteration registry, Model Training Center, and full lists.',
+        roleHint: 'Iteration registry, Model Training Center, manual uploads, and full lists.',
         mainLinks: [
           {
             ...dash,
@@ -214,6 +234,7 @@ const PortalLayout: FC = () => {
             description: 'Charts & KPIs',
             hint: 'Session counts, trends, exports',
           },
+          ...manualUploadNav,
           {
             path: '/factory',
             label: 'Model factory',

@@ -6,7 +6,8 @@ export type ReadingStatus =
   | 'incorrect_labeled'
   | 'incorrect_training'
   | 'no_dials'
-  | 'not_sure';
+  | 'not_sure'
+  | 'manually_uploaded';
 
 /** S3 / portal pipeline stages after a session is marked incorrect (labeler workflow). */
 export const INCORRECT_PIPELINE_STATUSES: ReadingStatus[] = [
@@ -90,6 +91,7 @@ export type DashboardCounts = {
   incorrectTrainingCount: number;
   noDialsCount: number;
   notSureCount: number;
+  manuallyUploadedCount?: number;
   /** Sessions captured on the current portal calendar day (from analytics index). */
   uploadedTodayCount?: number;
 };
@@ -103,6 +105,7 @@ export const statusLabels: Record<ReadingStatus, string> = {
   incorrect_training: 'Incorrect - Added to Training Dataset',
   no_dials: 'No Dials Detected',
   not_sure: 'Not Sure',
+  manually_uploaded: 'Manual upload',
 };
 
 // Status colors for display
@@ -114,4 +117,5 @@ export const statusColors: Record<ReadingStatus, string> = {
   incorrect_training: '#06b6d4',
   no_dials: '#6b7280',
   not_sure: '#d97706',
+  manually_uploaded: '#6366f1',
 };

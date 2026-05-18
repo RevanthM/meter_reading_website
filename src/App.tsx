@@ -21,6 +21,8 @@ import ModelFactoryPage from './components/ModelFactoryPage';
 import TestDataPendingPage from './components/TestDataPendingPage';
 import UnitTestImagesPage from './components/UnitTestImagesPage';
 import UnitTestImageEditPage from './components/UnitTestImageEditPage';
+import ManualUploadPage from './components/ManualUploadPage';
+import ManualUploadLabelPage from './components/ManualUploadLabelPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -60,6 +62,8 @@ function AppContent() {
           <Route path="/test-data/pending" element={<TestDataPendingPage />} />
           <Route path="/test-data/images" element={<UnitTestImagesPage />} />
           <Route path="/test-data/images/edit/:fileName" element={<UnitTestImageEditPage />} />
+          <Route path="/manual-upload" element={<ManualUploadPage />} />
+          <Route path="/manual-upload/label" element={<ManualUploadLabelPage />} />
         </Route>
       </Routes>
     </div>
