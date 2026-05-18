@@ -12,6 +12,7 @@ on:
         default: amrportal
         type: choice
         options:
+          - amrportal-0518
           - amrportal-prod
           - amrportal
           - meter-reading-dev
