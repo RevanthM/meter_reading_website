@@ -1,7 +1,7 @@
 name: Deploy to Elastic Beanstalk
 
 # Triggers:
-#   - push to main    -> deploys to meter-reading-dev (single instance)
+#   - push to main    -> deploys to amr-portal-prod (single instance, no ALB)
 #   - push to reetika -> deploys to meter-reading-dev
 #   - manual dispatch -> pick the env from a dropdown
 on:
@@ -61,7 +61,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.target_env }}"
           elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            ENV="meter-reading-dev"
+            ENV="amr-portal-prod"
           elif [ "${{ github.ref }}" = "refs/heads/reetika" ]; then
             ENV="meter-reading-dev"
           else
@@ -105,7 +105,7 @@ jobs:
           wait_for_environment_recovery: 300
 
       - name: Sync Roboflow environment variables
-        if: steps.target.outputs.env_name == 'meter-reading-dev'
+        if: steps.target.outputs.env_name == 'amr-portal-prod'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

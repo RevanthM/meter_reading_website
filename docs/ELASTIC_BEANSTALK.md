@@ -1,12 +1,10 @@
 # Deploy to AWS Elastic Beanstalk
 
-Production / primary URL: **`meter-reading-dev`** (single instance, no ALB). Legacy load-balanced: `amr-portal-prod`, `meter-reading-prod`.
-
 | Environment | Branch (auto-deploy) | Purpose |
 |---------------|----------------------|---------|
-| `meter-reading-dev` | `main`, `reetika` | Single-instance portal (no ALB) |
-| `amr-portal-prod` | manual only | Load-balanced prod (legacy) |
-| `meter-reading-prod` | manual only | Legacy prod |
+| `amr-portal-prod` | `main` | Production — single instance, no ALB (clone dev config) |
+| `meter-reading-dev` | `reetika` | Dev / staging |
+| `meter-reading-prod` | manual only | Legacy load-balanced prod |
 
 ## Prerequisites
 
@@ -41,7 +39,7 @@ This creates `.elasticbeanstalk/config.yml` (local only; sensitive bits stay out
 Link the CLI to the environment:
 
 ```bash
-eb use meter-reading-dev
+eb use amr-portal-prod
 # replace with the exact Environment name from the console if different
 ```
 

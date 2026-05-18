@@ -7,7 +7,7 @@ on:
       new_env_name:
         description: "New environment name (terminate same name in EB first if recreating)"
         required: true
-        default: meter-reading-dev
+        default: amr-portal-prod
       template_env:
         description: "Clone env vars + IAM from this environment"
         required: true
