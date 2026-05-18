@@ -2,7 +2,7 @@
 
 | Environment | Branch (auto-deploy) | Purpose |
 |---------------|----------------------|---------|
-| `amr-portal-prod` | `main` | Production — single instance, no ALB (clone dev config) |
+| `amrportal` | `main` | Production — single instance, no ALB (clone dev config) |
 | `meter-reading-dev` | `reetika` | Dev / staging |
 | `meter-reading-prod` | manual only | Legacy load-balanced prod |
 
@@ -39,7 +39,7 @@ This creates `.elasticbeanstalk/config.yml` (local only; sensitive bits stay out
 Link the CLI to the environment:
 
 ```bash
-eb use amr-portal-prod
+eb use amrportal
 # replace with the exact Environment name from the console if different
 ```
 
@@ -51,10 +51,10 @@ Or locally (account with EB permissions):
 
 ```bash
 aws elasticbeanstalk describe-environments --region us-west-2 \
-  --environment-names amr-portal-prod --output table
+  --environment-names amrportal --output table
 ```
 
-After the env is **Ready**, deploy via **Deploy to Elastic Beanstalk** (target `amr-portal-prod`) or push to `main`.
+After the env is **Ready**, deploy via **Deploy to Elastic Beanstalk** (target `amrportal`) or push to `main`.
 
 ## Build and deploy
 

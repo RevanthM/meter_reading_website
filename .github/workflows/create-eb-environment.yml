@@ -7,7 +7,7 @@ on:
       new_env_name:
         description: "New environment name (terminate same name in EB first if recreating)"
         required: true
-        default: amr-portal-prod
+        default: amrportal
       template_env:
         description: "Clone env vars + IAM from this environment"
         required: true
@@ -15,7 +15,7 @@ on:
         type: choice
         options:
           - meter-reading-dev
-          - amr-portal-prod
+          - amrportal
           - meter-reading-prod
       tier_type:
         description: "WebServer tier — Standard = single instance (no ALB)"

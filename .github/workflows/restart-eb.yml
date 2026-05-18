@@ -7,10 +7,11 @@ on:
       target_env:
         description: "Elastic Beanstalk environment"
         required: true
-        default: amr-portal-prod
+        default: amrportal
         type: choice
         options:
           - meter-reading-dev
+          - amrportal
           - amr-portal-prod
           - meter-reading-prod
       abort_update:
