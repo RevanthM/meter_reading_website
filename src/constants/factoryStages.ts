@@ -36,12 +36,15 @@ export type FactoryProductLine = 'p1' | 'p2' | 'p3' | 'unknown';
 export function inferProductLine(modelId: string): FactoryProductLine {
   const m = modelId.trim().toLowerCase();
   if (!m || m === 'tbd') return 'unknown';
+  if (m.includes('sempra') && m.includes('anica')) return 'p3';
   if (m.startsWith('p3.') || /\.p3(\.|$)/.test(m) || m.includes('combined') || m.includes('hybrid')) {
     return 'p3';
   }
-  if (m.includes('sempra') && m.includes('anica')) return 'p3';
-  if (m.startsWith('p1.') || /\.p1(\.|$)/.test(m) || m.includes('sempra')) return 'p1';
-  if (m.startsWith('p2.') || /\.p2(\.|$)/.test(m) || m.includes('anica')) return 'p2';
+  // e.g. sempra.p2 = Sempra pipeline iteration 2 — not product line p2
+  if (m.includes('sempra')) return 'p1';
+  if (m.includes('anica')) return 'p2';
+  if (m.startsWith('p1.') || /\.p1(\.|$)/.test(m)) return 'p1';
+  if (m.startsWith('p2.') || /\.p2(\.|$)/.test(m)) return 'p2';
   return 'unknown';
 }
 

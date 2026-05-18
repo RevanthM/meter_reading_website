@@ -16,7 +16,9 @@
     "build": "tsc -b && vite build",
     "deploy:eb": "npm run build && eb deploy",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "manual:screenshots": "node scripts/capture-user-manual-screenshots.mjs",
+    "manual:pdf": "node scripts/build-user-manual-pdf.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.966.0",
@@ -47,6 +49,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "playwright": "^1.49.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4"

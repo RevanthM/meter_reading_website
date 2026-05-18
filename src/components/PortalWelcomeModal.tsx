@@ -88,7 +88,7 @@ const PortalWelcomeModal: React.FC = () => {
                 unit test images + manifest. <strong>Labeler</strong> copies into training folders; <strong>admin</strong> adds Model Factory.
               </li>
               <li>The <strong>Models</strong> page summarizes app/model versions and session mix for comparing generations over time.</li>
-              <li><strong>Usage</strong> shows sessions, image counts, and distinct users per day from the same S3 metadata (until Dynamo backs it).</li>
+              <li><strong>Usage</strong> shows sessions, image counts, and distinct users per day from session metadata in cloud storage.</li>
             </ul>
           </section>
 

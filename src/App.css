@@ -9232,6 +9232,12 @@ label.training-hub-filter-card-title--input {
   background: color-mix(in srgb, var(--status-correct, #16a34a) 12%, var(--bg-secondary));
 }
 
+.pipeline-iterations-page .pipeline-iterations-banner--warn {
+  border-color: #ca8a04;
+  background: color-mix(in srgb, #ca8a04 14%, var(--bg-secondary));
+  color: var(--text-primary, #0f172a);
+}
+
 .pipeline-iterations-page .pipeline-iterations-banner--muted {
   color: var(--text-muted);
 }
@@ -10186,6 +10192,100 @@ label.training-hub-filter-card-title--input {
   margin: 0.75rem 0 0;
   font-size: 0.82rem;
   color: var(--text-secondary, #475569);
+}
+
+.dashboard-iteration-trend-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.dashboard-iteration-trend-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.dashboard-improvement-metric-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.2rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-tertiary, #f4f6f9);
+}
+
+.dashboard-improvement-metric-btn {
+  padding: 0.35rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary, #475569);
+  background: transparent;
+  cursor: pointer;
+}
+
+.dashboard-improvement-metric-btn:hover {
+  color: var(--text-primary, #0f172a);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 8%, transparent);
+}
+
+.dashboard-improvement-metric-btn--active {
+  color: var(--text-primary, #0f172a);
+  background: var(--bg-elevated, #fff);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.dashboard-pipeline-improvement-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.65rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.dashboard-pipeline-improvement-legend--six {
+  gap: 0.4rem 0.5rem;
+}
+
+.dashboard-pipeline-improvement-chip-label {
+  font-weight: 600;
+}
+
+.dashboard-pipeline-improvement-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.dashboard-pipeline-improvement-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dashboard-pipeline-improvement-chip-delta {
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.pipeline-iterations-charts--embedded {
+  margin-top: 1rem;
+}
+
+.dashboard-iteration-trend-inner--six-rows {
+  min-height: 360px;
 }
 
 /* Model factory */

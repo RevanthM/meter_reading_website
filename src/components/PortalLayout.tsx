@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Cpu,
   History,
-  Shield,
   HelpCircle,
   LogOut,
   Menu,
@@ -37,7 +36,6 @@ type NavLeaf = {
   path: string;
   label: string;
   icon: ReactNode;
-  requiresFirebase?: boolean;
   /** Short second line under the label (sidebar). */
   description?: string;
   /** Extra context on hover (full status name, etc.). */
@@ -71,7 +69,7 @@ const PortalLayout: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const pathname = location.pathname;
-  const { userEmail, logout, user } = useAuth();
+  const { userEmail, logout } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -319,12 +317,8 @@ const PortalLayout: FC = () => {
   }, [workMode, pipelineIterationsNav]);
 
   const accountLinks = useMemo(
-    () =>
-      [
-        { path: '/activity', label: 'Activity log', icon: <History size={17} /> },
-        { path: '/mfa', label: 'Sign-in & MFA', icon: <Shield size={17} />, requiresFirebase: true },
-      ].filter((l) => !(l.requiresFirebase && !user)) as NavLeaf[],
-    [user],
+    () => [{ path: '/activity', label: 'Activity log', icon: <History size={17} /> }],
+    [],
   );
 
   const accountHasActive = anyNavLeafActive(pathname, location.search, accountLinks);
@@ -519,7 +513,7 @@ const PortalLayout: FC = () => {
             >
               <span className="portal-nav-disclosure-title">
                 <span className="portal-nav-disclosure-heading">Account</span>
-                <span className="portal-nav-disclosure-hint">Activity log · MFA</span>
+                <span className="portal-nav-disclosure-hint">Session activity</span>
               </span>
               <ChevronDown
                 size={16}

@@ -14,10 +14,15 @@ import {
   LabelList,
 } from 'recharts';
 import type { PipelineIterationRecord } from '../services/api';
-import { effectiveIterationAccuracyPercent } from '../utils/pipelineIterationStats';
 import { normalizePipelineIterationPrimaryStatus } from '../constants/pipelineIterationRegistry';
+import {
+  buildPipelineIterationChartPoints,
+  chartThemeForLine,
+  filterEvalChartRows,
+  filterRegistryOverviewRows,
+} from '../constants/pipelineChartTheme';
+import { isEstimatedEvalMetrics } from '../utils/iterationMetricsEnrichment';
 
-/** Bar + pie slice colors: completed green, in process yellow, planning blue. */
 const STATUS_VISUAL: Record<string, { fill: string; label: string }> = {
   Completed: { fill: '#16a34a', label: 'Completed' },
   'In Process': { fill: '#eab308', label: 'In process' },
@@ -28,12 +33,6 @@ const STATUS_VISUAL: Record<string, { fill: string; label: string }> = {
 
 function fillForNormalizedStatus(statusNorm: string): string {
   return STATUS_VISUAL[statusNorm]?.fill ?? '#64748b';
-}
-
-function shortLabel(r: PipelineIterationRecord): string {
-  const p = (r.pipeline || '—').trim();
-  const short = p.length > 16 ? `${p.slice(0, 14)}…` : p;
-  return `${short} · #${r.iterationNumber}`;
 }
 
 const tooltipStyle = {
@@ -47,92 +46,123 @@ type Props = {
   rows: PipelineIterationRecord[];
   /** Opens the iteration editor when a bar in the image chart is clicked. */
   onIterationClick?: (iterationId: string) => void;
+  /** Hide page-level heading when embedded on admin dashboard. */
+  embedded?: boolean;
+  /** Un-enriched registry rows (for estimated-metric tooltips). */
+  sourceRows?: PipelineIterationRecord[];
 };
 
-const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
+function pctLabel(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '';
+}
+
+const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded = false, sourceRows }) => {
+  const evalRows = useMemo(() => filterEvalChartRows(rows), [rows]);
+  const overviewRows = useMemo(() => filterRegistryOverviewRows(rows), [rows]);
+  const metricPoints = useMemo(() => buildPipelineIterationChartPoints(rows), [rows]);
+  const rawForEstimate = sourceRows ?? rows;
+
   const statusData = useMemo(() => {
     const map = new Map<string, number>();
-    for (const r of rows) {
+    for (const r of overviewRows) {
       const s = normalizePipelineIterationPrimaryStatus(r.currentStatus) || '(not set)';
       map.set(s, (map.get(s) ?? 0) + 1);
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
-  }, [rows]);
+  }, [overviewRows]);
 
-  const accuracyData = useMemo(() => {
-    return rows
-      .map((r) => {
-        const v = effectiveIterationAccuracyPercent(r);
-        if (v == null || !Number.isFinite(v)) return null;
-        return { label: shortLabel(r), pct: Math.min(100, Math.max(0, v)) };
-      })
-      .filter(Boolean) as { label: string; pct: number }[];
-  }, [rows]);
+  const confidenceData = useMemo(
+    () =>
+      metricPoints
+        .filter((p) => p.confidencePct != null)
+        .map((p) => ({
+          id: p.id,
+          label: p.xLabel,
+          line: p.line,
+          pct: p.confidencePct as number,
+        })),
+    [metricPoints],
+  );
+
+  const accuracyData = useMemo(
+    () =>
+      metricPoints
+        .filter((p) => p.accuracyPct != null)
+        .map((p) => ({
+          id: p.id,
+          label: p.xLabel,
+          line: p.line,
+          pct: p.accuracyPct as number,
+          estimated: (() => {
+            const row = evalRows.find((r) => r.id === p.id);
+            return row ? isEstimatedEvalMetrics(row, rawForEstimate) : false;
+          })(),
+        })),
+    [metricPoints, evalRows, rawForEstimate],
+  );
 
   const reviewData = useMemo(() => {
-    return rows
+    return evalRows
       .map((r) => {
         const v = r.manualMetrics?.manualReviewRatePct;
         if (v == null || !Number.isFinite(v)) return null;
-        return { label: shortLabel(r), review: Math.min(100, Math.max(0, v)) };
+        const line = metricPoints.find((p) => p.id === r.id)?.line;
+        if (!line) return null;
+        return { id: r.id, label: `${r.pipeline.trim()} · #${r.iterationNumber}`, review: Math.min(100, Math.max(0, v)), line };
       })
-      .filter(Boolean) as { label: string; review: number }[];
-  }, [rows]);
+      .filter(Boolean) as { id: string; label: string; review: number; line: typeof metricPoints[0]['line'] }[];
+  }, [evalRows, metricPoints]);
 
   const imageData = useMemo(() => {
-    return rows
+    return evalRows
       .map((r) => {
         const n = r.imageCount ?? r.portalStats?.totalImages ?? null;
         if (n == null || !Number.isFinite(n)) return null;
-        const statusNorm = normalizePipelineIterationPrimaryStatus(r.currentStatus) || '(not set)';
+        const point = metricPoints.find((p) => p.id === r.id);
+        if (!point) return null;
         return {
           id: r.id,
-          label: shortLabel(r),
+          label: point.xLabel,
+          line: point.line,
           images: n,
-          statusNorm,
-          statusLabel: STATUS_VISUAL[statusNorm]?.label ?? statusNorm,
         };
       })
-      .filter(Boolean) as {
-      id: string;
-      label: string;
-      images: number;
-      statusNorm: string;
-      statusLabel: string;
-    }[];
-  }, [rows]);
+      .filter(Boolean) as { id: string; label: string; line: typeof metricPoints[0]['line']; images: number }[];
+  }, [evalRows, metricPoints]);
 
-  if (!rows.length) return null;
+  if (!overviewRows.length && !evalRows.length) return null;
 
   return (
-    <section className="pipeline-iterations-charts" aria-labelledby="pipeline-charts-heading">
-      <h2 id="pipeline-charts-heading">Overview</h2>
+    <section
+      className={`pipeline-iterations-charts${embedded ? ' pipeline-iterations-charts--embedded' : ''}`}
+      aria-labelledby={embedded ? undefined : 'pipeline-charts-heading'}
+    >
+      {!embedded ? <h2 id="pipeline-charts-heading">Overview</h2> : null}
       <p className="pipeline-iterations-charts-hint">
-        Accuracy bars use the best available value per row: manual exact reading %, then UT read accuracy, then portal
-        simulator / all-queue correct %.
+        Six iterations (two per pipeline). Colors match Model factory: <strong>blue</strong> Sempra,{' '}
+        <strong>violet</strong> Anica, <strong>green</strong> combined. Iteration #1 read accuracy may be estimated from
+        later UT/FT in the same pipeline when not yet measured.
       </p>
       <div className="pipeline-iterations-charts-grid">
         <div className="pipeline-iterations-charts-top-row">
           <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--pie">
-            <h3>Iterations by status</h3>
+            <h3>Registry iterations by status</h3>
+            <p className="pipeline-iterations-chart-sub">
+              Six completed eval runs plus combined #3 in training when present.
+            </p>
             {statusData.length > 0 ? (
               <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--pie">
                 <ResponsiveContainer width="100%" height={240}>
                   <PieChart>
-                    <Pie
-                      data={statusData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={0}
-                      outerRadius={82}
-                    >
+                    <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={0} outerRadius={82}>
                       {statusData.map((entry, i) => (
                         <Cell key={i} fill={fillForNormalizedStatus(entry.name)} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number) => [`${v} row(s)`, 'Count']} contentStyle={tooltipStyle} />
+                    <Tooltip
+                      formatter={(v: number, name: string) => [`${v} iteration(s)`, STATUS_VISUAL[name]?.label ?? name]}
+                      contentStyle={tooltipStyle}
+                    />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
                   </PieChart>
                 </ResponsiveContainer>
@@ -144,9 +174,7 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
 
           <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--images">
             <h3>Training / registry image count</h3>
-            <p className="pipeline-iterations-chart-sub">
-              Colors: completed (green), in process (yellow), planning (blue). Click a bar to edit that iteration.
-            </p>
+            <p className="pipeline-iterations-chart-sub">Bar color = pipeline (same as Model factory). Click a bar to edit.</p>
             {imageData.length > 0 ? (
               <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--image-bars">
                 <ResponsiveContainer width="100%" height={260}>
@@ -156,10 +184,7 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
                     <YAxis />
                     <Tooltip
                       contentStyle={tooltipStyle}
-                      formatter={(value: number, _name: string, item: { payload?: { statusLabel?: string } }) => {
-                        const sl = item?.payload?.statusLabel;
-                        return [`${value} images${sl ? ` · ${sl}` : ''}`, 'Iteration'];
-                      }}
+                      formatter={(value: number) => [`${value} images`, 'Count']}
                     />
                     <Bar
                       dataKey="images"
@@ -180,11 +205,11 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
                         fill="var(--text-primary, #0f172a)"
                         fontSize={11}
                         fontWeight={600}
-                        formatter={(v: number | string) => (typeof v === 'number' ? String(v) : v)}
                       />
-                      {imageData.map((d) => (
-                        <Cell key={d.id} fill={fillForNormalizedStatus(d.statusNorm)} />
-                      ))}
+                      {imageData.map((d) => {
+                        const theme = chartThemeForLine(d.line);
+                        return <Cell key={d.id} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
+                      })}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -197,27 +222,60 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
           </div>
         </div>
 
+        {confidenceData.length > 0 ? (
+          <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
+            <h3>Simulator confidence % (avg dials)</h3>
+            <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--tall">
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={confidenceData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" />
+                  <XAxis type="number" domain={[55, 100]} tickFormatter={(v) => `${v}%`} />
+                  <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, 'Confidence']} contentStyle={tooltipStyle} />
+                  <Bar dataKey="pct" name="Confidence %" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="pct" position="right" fontSize={11} fontWeight={600} formatter={pctLabel} />
+                    {confidenceData.map((d) => {
+                      const theme = chartThemeForLine(d.line);
+                      return <Cell key={d.id} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : null}
+
         {accuracyData.length > 0 ? (
           <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
-            <h3>Effective accuracy % (manual → portal fallback)</h3>
+            <h3>Read accuracy % (FT → UT → exact)</h3>
             <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--tall">
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={accuracyData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
+                <BarChart data={accuracyData} layout="vertical" margin={{ left: 8, right: 56, top: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" />
-                  <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                  <YAxis type="category" dataKey="label" width={140} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, 'Accuracy']} contentStyle={tooltipStyle} />
-                  <Bar dataKey="pct" fill="var(--accent-amber, #2563eb)" name="Accuracy %" radius={[0, 4, 4, 0]}>
+                  <XAxis type="number" domain={[55, 100]} tickFormatter={(v) => `${v}%`} />
+                  <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v: number, _n: string, item: { payload?: { estimated?: boolean } }) => [
+                      `${v.toFixed(1)}%${item?.payload?.estimated ? ' (estimated)' : ''}`,
+                      'Accuracy',
+                    ]}
+                  />
+                  <Bar dataKey="pct" name="Accuracy %" radius={[0, 4, 4, 0]}>
                     <LabelList
                       dataKey="pct"
                       position="right"
-                      fill="var(--text-primary, #0f172a)"
                       fontSize={11}
                       fontWeight={600}
-                      formatter={(v: number | string) =>
-                        typeof v === 'number' ? `${v.toFixed(1)}%` : String(v)
-                      }
+                      formatter={(v: number | string, _n: string, item: { payload?: { estimated?: boolean } }) => {
+                        const base = typeof v === 'number' ? `${v.toFixed(0)}%` : String(v);
+                        return item?.payload?.estimated ? `${base}*` : base;
+                      }}
                     />
+                    {accuracyData.map((d) => {
+                      const theme = chartThemeForLine(d.line);
+                      return <Cell key={d.id} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
+                    })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -233,26 +291,27 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick }) => {
                 <BarChart data={reviewData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" />
                   <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                  <YAxis type="category" dataKey="label" width={140} tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, 'Review rate']} contentStyle={tooltipStyle} />
-                  <Bar dataKey="review" fill="var(--status-analyzed, #ca8a04)" name="Review %" radius={[0, 4, 4, 0]}>
-                    <LabelList
-                      dataKey="review"
-                      position="right"
-                      fill="var(--text-primary, #0f172a)"
-                      fontSize={11}
-                      fontWeight={600}
-                      formatter={(v: number | string) =>
-                        typeof v === 'number' ? `${v.toFixed(1)}%` : String(v)
-                      }
-                    />
+                  <Bar dataKey="review" name="Review %" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="review" position="right" fontSize={11} fontWeight={600} formatter={pctLabel} />
+                    {reviewData.map((d) => {
+                      const theme = chartThemeForLine(d.line);
+                      return (
+                        <Cell
+                          key={d.id}
+                          fill={`color-mix(in srgb, ${theme.fill} 55%, ${theme.fillMuted})`}
+                          stroke={theme.stroke}
+                          strokeWidth={1}
+                        />
+                      );
+                    })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
         ) : null}
-
       </div>
     </section>
   );

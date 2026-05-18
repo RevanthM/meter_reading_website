@@ -23,6 +23,10 @@ import {
 import PipelineIterationFormModal from './PipelineIterationFormModal';
 import ModelFactoryIterationRow from './ModelFactoryIterationRow';
 import {
+  applyMay2026SpreadsheetToRegistry,
+  mergeP3TrainingIterationIfMissing,
+} from '../constants/pipelineIterationRegistry';
+import {
   iterationDeleteConfirmMessage,
   newestShippedIterationIdsByPipeline,
   removePipelineIterationRow,
@@ -292,6 +296,22 @@ const ModelFactoryPage: FC = () => {
           <button type="button" className="view-button" onClick={() => navigate('/training')}>
             <Layers size={16} />
             Model Training Center
+          </button>
+          <button
+            type="button"
+            className="view-button"
+            onClick={() => {
+              const next = mergeP3TrainingIterationIfMissing(
+                applyMay2026SpreadsheetToRegistry(rowsRef.current),
+              );
+              setRows(next);
+              rowsRef.current = next;
+              setSaveError(null);
+            }}
+            disabled={loading}
+            title="Six completed eval rows + p3 #3 in training (1700 images) if missing"
+          >
+            Import May 2026 metrics
           </button>
           <button type="button" className="view-button" onClick={openAdd}>
             <Plus size={16} />

@@ -144,8 +144,7 @@ const UsageSummary: React.FC = () => {
             <code>user_name</code> / <code>user_email</code> in metadata when the app fills them in — otherwise they
             appear as &quot;Unknown&quot;. In the <strong>readings list</strong> and <strong>dashboard</strong>, each
             session is grouped by <strong>Pacific</strong> calendar day (<code>America/Los_Angeles</code>) from its
-            timestamp. The tables below still use the server&apos;s UTC day buckets until aggregation is moved. When
-            you move to DynamoDB, you can point this view at pre-aggregated rows instead of scanning.
+            timestamp. The tables below use the server&apos;s UTC day buckets for daily totals.
           </p>
         </section>
 

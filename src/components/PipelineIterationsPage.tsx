@@ -11,6 +11,11 @@ import {
 import PipelineIterationFormModal from './PipelineIterationFormModal';
 import PipelineIterationsCharts from './PipelineIterationsCharts';
 import {
+  ensureMay2026EvalRows,
+  missingMay2026EvalLabels,
+} from '../constants/pipelineIterationRegistry';
+import { enrichIterationRegistryRows } from '../utils/iterationMetricsEnrichment';
+import {
   iterationDeleteConfirmMessage,
   removePipelineIterationRow,
   touchIterationUpdatedAt,
@@ -238,7 +243,7 @@ const PipelineIterationsPage: FC = () => {
     setLoadError(null);
     try {
       const doc = await fetchPipelineIterations();
-      const list = doc.iterations.length ? doc.iterations : [];
+      const list = doc.iterations.length ? ensureMay2026EvalRows(doc.iterations) : [];
       setRows(list);
       rowsRef.current = list;
       setMeta({ updatedAt: doc.updatedAt, updatedBy: doc.updatedBy });
@@ -267,6 +272,13 @@ const PipelineIterationsPage: FC = () => {
     const q = pipelineFilter.trim().toLowerCase();
     return rows.filter((r) => r.pipeline.trim().toLowerCase() === q);
   }, [rows, pipelineFilter]);
+
+  const chartRows = useMemo(
+    () => enrichIterationRegistryRows(filteredRows),
+    [filteredRows],
+  );
+
+  const missingEvalLabels = useMemo(() => missingMay2026EvalLabels(rows), [rows]);
 
   const byPipeline = useMemo(() => {
     const m = new Map<string, PipelineIterationRecord[]>();
@@ -387,6 +399,26 @@ const PipelineIterationsPage: FC = () => {
             {saveError}
           </p>
         ) : null}
+        {!loading && missingEvalLabels.length > 0 ? (
+          <p className="pipeline-iterations-banner pipeline-iterations-banner--warn" role="status">
+            <strong>Missing from S3 registry:</strong> {missingEvalLabels.join(', ')}. Charts will be incomplete
+            until these rows exist.{' '}
+            <button
+              type="button"
+              className="training-hub-text-btn"
+              onClick={() => {
+                setRows((prev) => ensureMay2026EvalRows(prev));
+                setSaveError(null);
+              }}
+            >
+              Add missing rows
+            </button>
+            {' · then '}
+            <button type="button" className="training-hub-text-btn" onClick={() => void handleSaveS3()}>
+              Save to S3
+            </button>
+          </p>
+        ) : null}
 
         <div className="pipeline-iterations-toolbar">
           <label className="pipeline-iterations-filter">
@@ -408,6 +440,18 @@ const PipelineIterationsPage: FC = () => {
             <button type="button" className="view-button" onClick={exportCsv} disabled={!filteredRows.length}>
               <Download size={16} />
               Export CSV (filtered)
+            </button>
+            <button
+              type="button"
+              className="view-button"
+              onClick={() => {
+                setRows((prev) => ensureMay2026EvalRows(prev));
+                setSaveError(null);
+              }}
+              disabled={loading}
+              title="Apply six completed eval rows, then ensure p3 #3 (1700 images, training) exists if missing."
+            >
+              Import May 2026 metrics
             </button>
             <button type="button" className="view-button" onClick={openAdd} disabled={loading}>
               <Plus size={16} aria-hidden />
@@ -440,7 +484,8 @@ const PipelineIterationsPage: FC = () => {
         ) : (
           <>
             <PipelineIterationsCharts
-              rows={filteredRows}
+              rows={chartRows}
+              sourceRows={filteredRows}
               onIterationClick={(id) => {
                 const r = filteredRows.find((x) => x.id === id);
                 if (r) openEdit(r);

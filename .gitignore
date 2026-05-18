@@ -22,6 +22,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# User manual — saved Playwright login (do not commit)
+docs/user-manual/.auth-state.json
+
 # Environment variables
 .env
 .env.local

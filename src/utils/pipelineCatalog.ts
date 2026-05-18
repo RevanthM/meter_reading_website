@@ -1,23 +1,23 @@
 import type { PipelineIterationRecord } from '../services/api';
 
-/** Canonical pipeline choices for the iteration registry. */
+/** Canonical pipeline choices — labels match May 2026 spreadsheet. */
 export const PIPELINE_CATALOG = [
   {
     id: 'pipeline_1',
-    label: 'Sempra - Pipeline 1',
-    value: 'Sempra - Pipeline 1',
+    label: 'Sempra -1 (p1)',
+    value: 'Sempra -1',
     modelPrefix: 'sempra.p1',
   },
   {
     id: 'pipeline_2',
-    label: 'Anica - Pipeline 2',
-    value: 'Anica - Pipeline 2',
+    label: 'Anica - 2 (p2)',
+    value: 'Anica - 2',
     modelPrefix: 'anica.p2',
   },
   {
     id: 'pipeline_3',
-    label: 'Combined (Sempra & Anica) - Pipeline 3',
-    value: 'Combined (Sempra & Anica) - Pipeline 3',
+    label: 'Sempra_Anica - 3 (p3)',
+    value: 'Sempra_Anica - 3',
     modelPrefix: 'combined.p3',
   },
 ] as const;

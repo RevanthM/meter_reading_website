@@ -13,35 +13,31 @@ import {
   ChevronDown,
   Briefcase,
   Download,
-  Cpu,
-  ExternalLink,
 } from 'lucide-react';
 import type { DashboardCounts, ReadingStatus, WorkType } from '../types';
 import { statusColors, statusLabels, workTypeLabels } from '../types';
 import {
   downloadIncorrectRetrainZip,
-  fetchImprovementStats,
   fetchPipelineIterations,
   type ImprovementChartRange,
-  type ModelVersionStats,
   type PipelineIterationRecord,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { DashboardRoleHome } from './DashboardRoleHome';
-import { isAppVersionExcludedFromDashboardViz, type ImprovementStoryBin } from '../utils/dashboardImprovementStats';
 import {
   calendarDayKeyInPortalTz,
   formatPortalWeekdayMedium,
   portalDayKeysRollingWindow,
 } from '../utils/readingDisplayDates';
-import DashboardImprovementChart from './DashboardImprovementChart';
+import {
+  enrichIterationRegistryRows,
+  latestIterationKpis,
+} from '../utils/iterationMetricsEnrichment';
+import { ensureMay2026EvalRows } from '../constants/pipelineIterationRegistry';
+import DashboardIterationTrendChart from './DashboardIterationTrendChart';
+import PipelineIterationsCharts from './PipelineIterationsCharts';
 
-/** Summary strip display (override computed latest-session values). */
-const DASHBOARD_STRIP_CURRENT_CONFIDENCE_PCT = 68.8;
-const DASHBOARD_STRIP_CURRENT_ACCURACY_PCT = 91;
-
-const IMPROVEMENT_CHART_DEFER_MS = 80;
-const IMPROVEMENT_CHART_POLL_MS = 2500;
+const REGISTRY_CHART_DEFER_MS = 80;
 
 /** Run low-priority admin chart work after counts paint (avoids blocking other API calls). */
 function scheduleDeferredDashboardTask(fn: () => void): () => void {
@@ -49,7 +45,7 @@ function scheduleDeferredDashboardTask(fn: () => void): () => void {
     const id = window.requestIdleCallback(() => fn(), { timeout: 2000 });
     return () => window.cancelIdleCallback(id);
   }
-  const t = window.setTimeout(fn, IMPROVEMENT_CHART_DEFER_MS);
+  const t = window.setTimeout(fn, REGISTRY_CHART_DEFER_MS);
   return () => window.clearTimeout(t);
 }
 
@@ -273,111 +269,14 @@ function kpiCount(n: number, loading: boolean): string {
   return loading ? '—' : n.toLocaleString();
 }
 
-const ModelVersionAccuracyBars: FC<{
-  versions: ModelVersionStats[];
-  loading: boolean;
-  onOpenModels: () => void;
-  /** Open all-readings list filtered to this metadata app_version (respects chart time window). */
-  onBrowseVersion?: (appVersion: string) => void;
-}> = ({ versions, loading, onOpenModels, onBrowseVersion }) => {
-  const rows = useMemo(
-    () =>
-      versions
-        .filter((v) => v.appVersion !== 'unknown' && !isAppVersionExcludedFromDashboardViz(v.appVersion))
-        .slice(0, 10),
-    [versions],
-  );
-
-  return (
-    <div className="chart-card chart-card--hero chart-card--model-bars">
-      <div className="chart-header chart-header--stack chart-header--model">
-        <div className="chart-header-titles">
-          <div className="chart-header-row">
-            <Cpu size={18} />
-            <h3>Per app version</h3>
-          </div>
-          <p className="chart-explainer">
-            Cached analytics index by <strong>app_version</strong> (correct-queue share and avg confidence). Use Refresh on
-            the toolbar to rebuild the index from S3 when needed.
-          </p>
-        </div>
-        <button type="button" className="dashboard-card-link dashboard-card-link--header" onClick={onOpenModels}>
-          Models <ExternalLink size={14} aria-hidden />
-        </button>
-      </div>
-      {loading ? (
-        <div className="chart-empty chart-empty--tight">
-          <Loader2 size={28} className="spin" />
-          <span>Loading version mix…</span>
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="chart-empty chart-empty--tight">
-          No version breakdown yet (no <code>app_version</code> on sessions, or use live data).
-        </div>
-      ) : (
-        <div className="model-vs-accuracy-bars">
-          {rows.map((v) => {
-            const pct = Math.min(100, Math.round(v.queueCorrectRate * 1000) / 10);
-            const label = v.appVersion === 'unknown' ? 'Unknown version' : v.appVersion;
-            return (
-              <div key={v.appVersion} className="model-vs-accuracy-row">
-                <div className="model-vs-accuracy-label" title={v.appVersion}>
-                  <div className="model-vs-accuracy-label-row">
-                    <span className="model-vs-accuracy-name">{label}</span>
-                    {onBrowseVersion ? (
-                      <button
-                        type="button"
-                        className="model-vs-accuracy-list-btn"
-                        onClick={() => onBrowseVersion(v.appVersion)}
-                        title="Open readings list for this app version"
-                      >
-                        List
-                      </button>
-                    ) : null}
-                  </div>
-                  <span className="model-vs-accuracy-meta">
-                    {v.sessions.toLocaleString()} sessions
-                    {v.imageCount != null ? ` · ${v.imageCount.toLocaleString()} images` : ''}
-                    {v.avgConfidence != null && Number.isFinite(v.avgConfidence)
-                      ? ` · avg conf ${Math.round(v.avgConfidence * 100)}%`
-                      : ''}
-                  </span>
-                </div>
-                <div className="model-vs-accuracy-track" role="presentation">
-                  <div
-                    className="model-vs-accuracy-fill"
-                    style={{ width: `${pct}%` }}
-                    title={`${pct}% in correct queue`}
-                  />
-                </div>
-                <span className="model-vs-accuracy-pct">{pct}%</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
 /** Time window for dashboard volume + labeled-share charts (drill-down by day still works). */
 type ChartRangeId = ImprovementChartRange;
-
-const CHART_RANGE_IDS: ChartRangeId[] = ['all', '1d', '7d', '14d', '30d'];
 
 const CHART_RANGE_DAY_COUNT: Record<Exclude<ChartRangeId, 'all'>, number> = {
   '1d': 1,
   '7d': 7,
   '14d': 14,
   '30d': 30,
-};
-
-const CHART_RANGE_LABELS: Record<ChartRangeId, string> = {
-  all: 'All time',
-  '1d': 'Today',
-  '7d': 'Last 7 days',
-  '14d': 'Last 14 days',
-  '30d': 'Last 30 days',
 };
 
 /** Query string so the readings list matches the chart chip window (`from`/`to` on upload day, inclusive). */
@@ -403,121 +302,58 @@ const Dashboard: FC = () => {
     setWorkType,
   } = useReadings();
   const [zipExporting, setZipExporting] = useState(false);
-  const [chartRange, setChartRange] = useState<ChartRangeId>('all');
-  const [modelVersions, setModelVersions] = useState<ModelVersionStats[]>([]);
+  const [chartRange] = useState<ChartRangeId>('all');
   const [registryIterations, setRegistryIterations] = useState<PipelineIterationRecord[]>([]);
-  const [improvementBins, setImprovementBins] = useState<ImprovementStoryBin[]>([]);
-  const [improvementLoading, setImprovementLoading] = useState(false);
-  const [improvementWindowCount, setImprovementWindowCount] = useState(0);
-  const [improvementStorageUri, setImprovementStorageUri] = useState<string | null>(null);
+  const [registryLoading, setRegistryLoading] = useState(false);
 
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const portalRole = outletCtx?.workMode ?? 'reviewer';
   const isAdminDashboard = portalRole === 'admin';
 
-  const applyImprovementResponse = useCallback((res: Awaited<ReturnType<typeof fetchImprovementStats>>) => {
-    setImprovementBins(res.bins ?? []);
-    setImprovementWindowCount(res.windowSessionCount ?? 0);
-    setModelVersions(res.versionSummary ?? []);
-    setImprovementStorageUri(res.storage?.uri ?? null);
-    return Boolean(res.building || res.rebuilding);
-  }, []);
-
-  const loadImprovementChart = useCallback(
-    async (refresh = false): Promise<boolean> => {
-      setImprovementLoading(true);
-      try {
-        const res = await fetchImprovementStats(dataSource, workType, chartRange, refresh);
-        const pending = applyImprovementResponse(res);
-        setImprovementLoading(pending);
-        return pending;
-      } catch {
-        setImprovementBins([]);
-        setImprovementWindowCount(0);
-        setModelVersions([]);
-        setImprovementStorageUri(null);
-        setImprovementLoading(false);
-        return false;
-      }
-    },
-    [applyImprovementResponse, chartRange, dataSource, workType],
-  );
-
-  useEffect(() => {
-    if (!isAdminDashboard) {
-      setImprovementLoading(false);
-      setImprovementBins([]);
-      setModelVersions([]);
-      return;
-    }
-    if (countsLoading) return;
-
-    let cancelled = false;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const load = async (refresh: boolean) => {
-      if (cancelled) return;
-      const pending = await loadImprovementChart(refresh);
-      if (cancelled || !pending) return;
-      pollTimer = window.setTimeout(() => void load(false), IMPROVEMENT_CHART_POLL_MS);
-    };
-
-    const cancelDefer = scheduleDeferredDashboardTask(() => {
-      void load(false);
-    });
-
-    return () => {
-      cancelled = true;
-      cancelDefer();
-      if (pollTimer != null) window.clearTimeout(pollTimer);
-    };
-  }, [countsLoading, dataSource, isAdminDashboard, loadImprovementChart, workType, chartRange]);
-
   const glanceCounts = counts;
   const kpiDataLoading = countsLoading;
 
-  const registryStoryHint = useMemo(() => {
-    const rows = registryIterations.filter(
-      (r) =>
-        r.manualMetrics?.exactReadingAccuracyPct != null &&
-        Number.isFinite(r.manualMetrics.exactReadingAccuracyPct),
-    );
-    if (!rows.length) return null;
-    const sorted = [...rows].sort((a, b) => {
-      const ta = new Date(a.startDate || 0).getTime();
-      const tb = new Date(b.startDate || 0).getTime();
-      return tb - ta;
-    });
-    const top = sorted[0];
-    const pct = top.manualMetrics!.exactReadingAccuracyPct!;
-    const pipe = top.pipeline.trim() || '—';
-    return `Latest pipeline registry: ${pipe} · ${pct.toFixed(1)}% exact reading · app ${top.appVersion || '—'}.`;
-  }, [registryIterations]);
+  const enrichedRegistry = useMemo(
+    () => enrichIterationRegistryRows(registryIterations),
+    [registryIterations],
+  );
+
+  const iterationKpis = useMemo(() => latestIterationKpis(enrichedRegistry), [enrichedRegistry]);
+
+  const loadRegistry = useCallback(async () => {
+    setRegistryLoading(true);
+    try {
+      const doc = await fetchPipelineIterations();
+      const list = doc.iterations?.length ? ensureMay2026EvalRows(doc.iterations) : [];
+      setRegistryIterations(list);
+    } catch {
+      setRegistryIterations([]);
+    } finally {
+      setRegistryLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isAdminDashboard) {
       setRegistryIterations([]);
+      setRegistryLoading(false);
       return;
     }
     if (countsLoading) return;
 
     let cancelled = false;
     const cancelDefer = scheduleDeferredDashboardTask(() => {
-      void fetchPipelineIterations()
-        .then((doc) => {
-          if (!cancelled) setRegistryIterations(doc.iterations ?? []);
-        })
-        .catch(() => {
-          if (!cancelled) setRegistryIterations([]);
-        });
+      void loadRegistry().then(() => {
+        if (cancelled) return;
+      });
     });
 
     return () => {
       cancelled = true;
       cancelDefer();
     };
-  }, [countsLoading, isAdminDashboard]);
+  }, [countsLoading, isAdminDashboard, loadRegistry]);
 
   const todayDrillIso = calendarDayKeyInPortalTz(new Date().toISOString());
   const todayHintDisplay = formatPortalWeekdayMedium(new Date().toISOString());
@@ -543,12 +379,6 @@ const Dashboard: FC = () => {
     navigate(`/readings/all?date=${encodeURIComponent(isoDay)}`);
   };
 
-  const handleDrillImprovementByAppVersion = (appVersion: string) => {
-    const suffix = getChartRangeSearchSuffix(chartRange);
-    const conn = suffix ? `${suffix}&` : '?';
-    navigate(`/readings/all${conn}appVersion=${encodeURIComponent(appVersion)}`);
-  };
-
   const labeledSharePct =
     glanceCounts.totalPictures > 0
       ? Math.round((glanceCounts.correctCount / glanceCounts.totalPictures) * 1000) / 10
@@ -557,8 +387,8 @@ const Dashboard: FC = () => {
   const refreshDashboardLight = useCallback(async () => {
     await refreshCounts();
     if (!isAdminDashboard) return;
-    void loadImprovementChart(true);
-  }, [isAdminDashboard, loadImprovementChart, refreshCounts]);
+    await loadRegistry();
+  }, [isAdminDashboard, loadRegistry, refreshCounts]);
 
   const dashboardSubtitle = isAdminDashboard
     ? 'Analytics, registry & full queue overview'
@@ -648,11 +478,11 @@ const Dashboard: FC = () => {
                     ? 'Refresh counts and cached charts (does not reload all sessions)'
                     : 'Refresh folder counts'
                 }
-                aria-busy={countsLoading || (isAdminDashboard && improvementLoading)}
+                aria-busy={countsLoading || (isAdminDashboard && registryLoading)}
               >
                 <RefreshCw
                   size={17}
-                  className={countsLoading || (isAdminDashboard && improvementLoading) ? 'spin' : ''}
+                  className={countsLoading || (isAdminDashboard && registryLoading) ? 'spin' : ''}
                 />
               </button>
             </div>
@@ -697,49 +527,60 @@ const Dashboard: FC = () => {
         />
       ) : (
       <main className="dashboard-content dashboard-content--visual">
-        <section className="dashboard-section dashboard-section--viz dashboard-section--improvement">
+        <section className="dashboard-section dashboard-section--viz dashboard-section--pipeline-registry">
             <div className="dashboard-section-head dashboard-section-head--range-top">
               <div>
-                <h2 className="section-title">Are we improving?</h2>
-                {improvementStorageUri ? (
-                  <p className="dashboard-improvement-storage-hint" title={improvementStorageUri}>
-                    Cached index: <code>{improvementStorageUri.replace(/^s3:\/\//, '')}</code>
+                <h2 className="section-title">Pipeline & model performance</h2>
+                <p className="dashboard-section-sub">
+                  From the{' '}
+                  <button
+                    type="button"
+                    className="training-hub-text-btn"
+                    onClick={() => navigate('/pipeline-iterations')}
+                  >
+                    pipeline iterations registry
+                  </button>
+                  .
+                </p>
+                {registryLoading ? (
+                  <p className="dashboard-section-loading-hint">Loading registry…</p>
+                ) : iterationKpis.label ? (
+                  <p className="dashboard-improvement-registry-hint" role="note">
+                    Latest completed: <strong>{iterationKpis.label}</strong>
+                    {iterationKpis.confidencePct != null
+                      ? ` · sim confidence ${iterationKpis.confidencePct.toFixed(1)}%`
+                      : ''}
+                    {iterationKpis.accuracyPct != null
+                      ? ` · eval accuracy ${iterationKpis.accuracyPct.toFixed(1)}%`
+                      : ''}
                   </p>
                 ) : null}
-                {improvementLoading ? (
-                  <p className="dashboard-section-loading-hint">Loading chart data in the background…</p>
-                ) : null}
-              </div>
-              <div className="dashboard-chart-range" role="group" aria-label="Chart time range">
-                {CHART_RANGE_IDS.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`dashboard-range-chip ${chartRange === id ? 'dashboard-range-chip--active' : ''}`}
-                    onClick={() => setChartRange(id)}
-                  >
-                    {CHART_RANGE_LABELS[id]}
-                  </button>
-                ))}
               </div>
             </div>
-            <div className="dashboard-charts-hero dashboard-charts-hero--single">
-              <DashboardImprovementChart
-                bins={improvementBins}
-                onDrill={handleDrillImprovementByAppVersion}
-                loading={improvementLoading}
-                registryHint={registryStoryHint}
-                windowSessionCount={improvementWindowCount}
-                currentConfidencePct={DASHBOARD_STRIP_CURRENT_CONFIDENCE_PCT}
-                currentAccuracyPct={DASHBOARD_STRIP_CURRENT_ACCURACY_PCT}
-              />
-            </div>
-            <p className="dashboard-improvement-admin-link">
-              <button type="button" className="training-hub-text-btn" onClick={() => navigate('/pipeline-iterations')}>
-                Open pipeline iterations registry
-              </button>{' '}
-              to edit eval rows that power the registry hint.
-            </p>
+            {registryLoading && !enrichedRegistry.length ? (
+              <div className="chart-empty chart-empty--tight">
+                <Loader2 size={28} className="spin" />
+                <span>Loading pipeline registry…</span>
+              </div>
+            ) : enrichedRegistry.length ? (
+              <>
+                <div className="dashboard-charts-hero dashboard-charts-hero--single">
+                  <DashboardIterationTrendChart rows={enrichedRegistry} />
+                </div>
+                <PipelineIterationsCharts rows={enrichedRegistry} sourceRows={registryIterations} embedded />
+              </>
+            ) : (
+              <div className="chart-empty">
+                <p>No pipeline iterations yet.</p>
+                <button
+                  type="button"
+                  className="view-button"
+                  onClick={() => navigate('/pipeline-iterations')}
+                >
+                  Open registry & import May 2026 metrics
+                </button>
+              </div>
+            )}
           </section>
 
         <section className="dashboard-section dashboard-section--glance dashboard-section--action-first">
@@ -856,18 +697,6 @@ const Dashboard: FC = () => {
           </section>
         )}
 
-        <section className="dashboard-section dashboard-section--model-bars-bottom" aria-label="App version accuracy">
-          <ModelVersionAccuracyBars
-            versions={modelVersions}
-            loading={improvementLoading}
-            onOpenModels={() => navigate('/models')}
-            onBrowseVersion={(appVersion) => {
-              const suffix = getChartRangeSearchSuffix(chartRange);
-              const conn = suffix ? `${suffix}&` : '?';
-              navigate(`/readings/all${conn}appVersion=${encodeURIComponent(appVersion)}`);
-            }}
-          />
-        </section>
       </main>
       )}
     </div>
