@@ -1,22 +1,32 @@
 name: Create Elastic Beanstalk environment
 
-# Clone option settings from an existing env (default: meter-reading-dev).
+# Create a new env (e.g. amrportal-prod) on a supported Node.js platform.
+# Clones env vars + IAM from an existing environment; does not copy deprecated stacks.
 on:
   workflow_dispatch:
     inputs:
       new_env_name:
         description: "New environment name (terminate same name in EB first if recreating)"
         required: true
-        default: amrportal
+        default: amrportal-prod
       template_env:
         description: "Clone env vars + IAM from this environment"
         required: true
-        default: meter-reading-dev
+        default: amrportal
         type: choice
         options:
           - meter-reading-dev
           - amrportal
+          - amrportal-prod
           - meter-reading-prod
+      platform_branch:
+        description: "Platform branch (supported — not deprecated Node 20)"
+        required: true
+        default: nodejs22
+        type: choice
+        options:
+          - nodejs24
+          - nodejs22
       tier_type:
         description: "WebServer tier — Standard = single instance (no ALB)"
         required: true
@@ -36,9 +46,12 @@ env:
 jobs:
   create:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Check if environment already exists
         id: exists
         env:
@@ -55,7 +68,7 @@ jobs:
             aws elasticbeanstalk describe-environments \
               --region "${AWS_REGION}" \
               --environment-names "${{ inputs.new_env_name }}" \
-              --query "Environments[0].[Status,Health,CNAME]" \
+              --query "Environments[0].[Status,Health,SolutionStackName,CNAME]" \
               --output table
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -64,24 +77,23 @@ jobs:
             fi
           fi
 
-      - name: Resolve platform from template
+      - name: Resolve platform stack
         if: steps.exists.outputs.exists != 'true'
         id: platform
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          STACK=$(aws elasticbeanstalk describe-environments \
-            --region "${AWS_REGION}" \
-            --environment-names "${{ inputs.template_env }}" \
-            --query "Environments[0].SolutionStackName" \
-            --output text)
-          if [ -z "$STACK" ] || [ "$STACK" = "None" ]; then
-            echo "Template env not found: ${{ inputs.template_env }}" >&2
-            exit 1
-          fi
-          echo "stack=$STACK" >> "$GITHUB_OUTPUT"
-          echo "Using platform: $STACK"
+          case "${{ inputs.platform_branch }}" in
+            nodejs24) NODE_MAJOR=24 ;;
+            nodejs22) NODE_MAJOR=22 ;;
+            *) echo "Unknown platform_branch" >&2; exit 1 ;;
+          esac
+          chmod +x scripts/eb-resolve-platform.sh
+          STACK=$(scripts/eb-resolve-platform.sh "${NODE_MAJOR}" "${AWS_REGION}")
+          echo "stack=${STACK}" >> "$GITHUB_OUTPUT"
+          echo "node_major=${NODE_MAJOR}" >> "$GITHUB_OUTPUT"
+          echo "Using platform: ${STACK}"
 
       - name: Build option settings from template
         if: steps.exists.outputs.exists != 'true'
@@ -180,17 +192,17 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          echo "Waiting for ${{ inputs.new_env_name }} to become Ready (up to ~20 min)…"
-          for i in $(seq 1 60); do
-            read -r STATUS HEALTH CNAME <<< "$(aws elasticbeanstalk describe-environments \
+          echo "Waiting for ${{ inputs.new_env_name }} to become Ready (up to ~25 min)…"
+          for i in $(seq 1 75); do
+            read -r STATUS HEALTH CNAME STACK <<< "$(aws elasticbeanstalk describe-environments \
               --region "${AWS_REGION}" \
               --environment-names "${{ inputs.new_env_name }}" \
-              --query "Environments[0].[Status,Health,CNAME]" \
+              --query "Environments[0].[Status,Health,SolutionStackName,CNAME]" \
               --output text)"
             echo "[$i] Status=$STATUS Health=$HEALTH"
             if [ "$STATUS" = "Ready" ]; then
               echo "URL: http://${CNAME}/"
-              echo "cname=$CNAME" >> "$GITHUB_OUTPUT"
+              echo "Platform: ${STACK}"
               exit 0
             fi
             if [ "$STATUS" = "Terminated" ]; then
@@ -218,14 +230,15 @@ jobs:
           if [ "${{ steps.exists.outputs.exists }}" = "true" ]; then
             echo "Environment already exists — no changes made." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- **Template:** ${{ inputs.template_env }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Template (env vars):** ${{ inputs.template_env }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Platform:** Node.js ${{ steps.platform.outputs.node_major }} (latest AL2023 stack)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Stack:** \`${{ steps.platform.outputs.stack }}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Tier:** ${{ inputs.tier_type }}" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Application:** ${EB_APPLICATION}" >> "$GITHUB_STEP_SUMMARY"
           fi
           aws elasticbeanstalk describe-environments \
             --region "${AWS_REGION}" \
             --environment-names "${{ inputs.new_env_name }}" \
-            --query "Environments[0].[EnvironmentName,Status,Health,CNAME,VersionLabel]" \
+            --query "Environments[0].[EnvironmentName,Status,Health,SolutionStackName,CNAME,VersionLabel]" \
             --output table >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Next: run **Deploy to Elastic Beanstalk** with target \`${{ inputs.new_env_name }}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Next: **Deploy to Elastic Beanstalk** → target \`${{ inputs.new_env_name }}\`." >> "$GITHUB_STEP_SUMMARY"

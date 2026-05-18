@@ -10,6 +10,7 @@ on:
         default: amrportal
         type: choice
         options:
+          - amrportal-prod
           - meter-reading-dev
           - amrportal
           - amr-portal-prod
@@ -76,7 +77,11 @@ jobs:
             -x "deploy.zip"
           ls -lh deploy.zip
 
-      - name: Deploy to Elastic Beanstalk
+      - name: Set version label
+        id: version
+        run: echo "label=${{ github.sha }}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload version and start deployment
         uses: einaregilsson/beanstalk-deploy@v22
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -84,13 +89,27 @@ jobs:
           region: ${{ env.AWS_REGION }}
           application_name: ${{ env.EB_APPLICATION }}
           environment_name: ${{ steps.target.outputs.env_name }}
-          version_label: ${{ github.sha }}-${{ github.run_number }}
-          version_description: "${{ github.event.head_commit.message || github.event.inputs.target_env }} (${{ github.actor }})"
+          version_label: ${{ steps.version.outputs.label }}
+          version_description: "${{ github.event.inputs.target_env }} (${{ github.actor }})"
           deployment_package: deploy.zip
-          wait_for_environment_recovery: 300
+          # Deprecated EB platforms often stay at Info/Grey — never Green — and the
+          # action would fail after wait_for_environment_recovery. We verify Ready below.
+          wait_for_deployment: false
+
+      - name: Wait for Ready (accept Info/Grey health)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          chmod +x scripts/eb-wait-ready.sh
+          scripts/eb-wait-ready.sh \
+            "${{ steps.target.outputs.env_name }}" \
+            "${{ steps.version.outputs.label }}" \
+            "${{ env.AWS_REGION }}" \
+            20
 
       - name: Sync Roboflow environment variables
-        if: steps.target.outputs.env_name == 'amrportal'
+        if: steps.target.outputs.env_name == 'amrportal' || steps.target.outputs.env_name == 'amrportal-prod'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -103,17 +122,20 @@ jobs:
           fi
           WORKSPACE="${ROBOFLOW_WORKSPACE:-analoggasmeter}"
           aws elasticbeanstalk update-environment \
-            --region "${{ env.AWS_REGION }}" \
+            --region "${AWS_REGION}" \
             --environment-name "${{ steps.target.outputs.env_name }}" \
             --option-settings \
               "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_API_KEY,Value=${ROBOFLOW_API_KEY}" \
               "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_WORKSPACE,Value=${WORKSPACE}"
+          aws elasticbeanstalk wait environment-updated \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ steps.target.outputs.env_name }}"
 
       - name: Summary
         run: |
           echo "## Deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Environment:** ${{ steps.target.outputs.env_name }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version label:** ${{ github.sha }}-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version label:** ${{ steps.version.outputs.label }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Triggered by:** ${{ github.actor }} (${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,105 @@
+name: Upgrade Elastic Beanstalk platform
+
+# Updates solution stack to the latest Node.js 20 on Amazon Linux 2023.
+# Run once when the console shows "Deprecated" on the platform.
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Environment to upgrade"
+        required: true
+        default: amrportal
+        type: choice
+        options:
+          - amrportal-prod
+          - meter-reading-dev
+          - amrportal
+          - amr-portal-prod
+          - meter-reading-prod
+      platform_branch:
+        description: "Target Node.js major version"
+        required: true
+        default: nodejs22
+        type: choice
+        options:
+          - nodejs24
+          - nodejs22
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve latest platform stack
+        id: stack
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          CURRENT=$(aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}" \
+            --query "Environments[0].SolutionStackName" \
+            --output text)
+          echo "Current platform: ${CURRENT}"
+
+          case "${{ inputs.platform_branch }}" in
+            nodejs24) NODE_MAJOR=24 ;;
+            nodejs22) NODE_MAJOR=22 ;;
+            *) echo "Unknown platform_branch" >&2; exit 1 ;;
+          esac
+          chmod +x scripts/eb-resolve-platform.sh
+          LATEST=$(scripts/eb-resolve-platform.sh "${NODE_MAJOR}" "${AWS_REGION}")
+          echo "Target platform: ${LATEST}"
+          echo "stack=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "node_major=${NODE_MAJOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Update platform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          if [ "${{ steps.stack.outputs.current }}" = "${{ steps.stack.outputs.stack }}" ]; then
+            echo "Already on latest stack — nothing to do."
+            exit 0
+          fi
+          aws elasticbeanstalk update-environment \
+            --region "${AWS_REGION}" \
+            --environment-name "${{ inputs.target_env }}" \
+            --solution-stack-name "${{ steps.stack.outputs.stack }}"
+
+      - name: Wait until Ready
+        if: steps.stack.outputs.current != steps.stack.outputs.stack
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "Platform update in progress (often 10–20 min)…"
+          aws elasticbeanstalk wait environment-updated \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}"
+          aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ inputs.target_env }}" \
+            --query "Environments[0].[EnvironmentName,SolutionStackName,Status,Health,HealthStatus]" \
+            --output table
+
+      - name: Summary
+        run: |
+          echo "## Platform upgrade: ${{ inputs.target_env }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **From:** \`${{ steps.stack.outputs.current }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **To:** \`${{ steps.stack.outputs.stack }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Then run **Deploy to Elastic Beanstalk** to ship application code." >> "$GITHUB_STEP_SUMMARY"

@@ -2,9 +2,23 @@
 
 | Environment | Deploy | Purpose |
 |---------------|--------|---------|
-| `amrportal` | manual (Actions → **Deploy to Elastic Beanstalk**) | Production — single instance, no ALB |
+| `amrportal-prod` | manual | **New production** — Node.js 22+ on latest AL2023 (e.g. v6.10.3), single instance |
+| `amrportal` | manual | Legacy prod (deprecated Node 20 platform — replace with `amrportal-prod`) |
 | `meter-reading-dev` | manual | Dev / staging |
 | `meter-reading-prod` | manual | Legacy load-balanced prod |
+
+### Create `amrportal-prod`
+
+GitHub Actions → **Create Elastic Beanstalk environment**:
+
+| Input | Recommended |
+|--------|-------------|
+| **new_env_name** | `amrportal-prod` |
+| **template_env** | `amrportal` (copies S3/Firebase/Roboflow env vars + IAM) |
+| **platform_branch** | `nodejs22` (or `nodejs24`) |
+| **tier_type** | `standard` (single instance, no ALB) |
+
+Terminate any old `amrportal-prod` in the EB console first if recreating. When **Ready**, run **Deploy to Elastic Beanstalk** → `amrportal-prod`.
 
 Pushes to `main` / `reetika` do **not** deploy automatically.
 
@@ -57,6 +71,15 @@ aws elasticbeanstalk describe-environments --region us-west-2 \
 ```
 
 After the env is **Ready**, run **Deploy to Elastic Beanstalk** (target `amrportal`) from GitHub Actions when you want to ship.
+
+## Deprecated platform (Info health, deploy “stuck”)
+
+If the EB console shows **Deprecated** on **Node.js 20 / Amazon Linux 2023** and health stays **Info** (not green):
+
+1. The app may still run, but GitHub’s `beanstalk-deploy` action used to **fail** after ~5 minutes because it requires **Green** health.
+2. The **Deploy to Elastic Beanstalk** workflow now waits for **Ready** + your version and accepts **Green** or **Grey** (Info) health.
+3. **Recommended fix:** Actions → **Upgrade Elastic Beanstalk platform** → target `amrportal` (or dev first). That moves to the latest Node 20 AL2023 stack and usually clears the deprecated warning.
+4. If an update is stuck, run **Restart Elastic Beanstalk** with **Abort in-progress update** = true, then redeploy.
 
 ## Build and deploy
 
