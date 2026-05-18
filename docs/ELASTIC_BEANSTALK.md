@@ -2,6 +2,7 @@
 
 | Environment | Deploy | Purpose |
 |---------------|--------|---------|
+| `amrportal-prod-0518` | manual | **Production (May 2026)** — clone of `amrportal-prod` config + Roboflow |
 | `amrportal-prod` | manual | **New production** — Node.js 22+ on latest AL2023 (e.g. v6.10.3), single instance |
 | `amrportal` | manual | Legacy prod (deprecated Node 20 platform — replace with `amrportal-prod`) |
 | `meter-reading-dev` | manual | Dev / staging |
