@@ -5,17 +5,26 @@ on:
   workflow_dispatch:
     inputs:
       new_env_name:
-        description: "New environment name"
+        description: "New environment name (terminate same name in EB first if recreating)"
         required: true
-        default: amr-portal-prod
+        default: meter-reading-dev
       template_env:
-        description: "Clone configuration from this environment"
+        description: "Clone env vars + IAM from this environment"
         required: true
         default: meter-reading-dev
         type: choice
         options:
           - meter-reading-dev
+          - amr-portal-prod
           - meter-reading-prod
+      tier_type:
+        description: "WebServer tier — Standard = single instance (no ALB)"
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - loadbalanced
 
 permissions:
   contents: read
@@ -134,6 +143,17 @@ jobs:
             /tmp/option-settings.json > /tmp/option-settings-with-iam.json
           mv /tmp/option-settings-with-iam.json /tmp/option-settings.json
 
+          if [ "${{ inputs.tier_type }}" = "standard" ]; then
+            echo "tier=Name=WebServer,Type=Standard" >> "$GITHUB_ENV"
+            jq '. + [{Namespace: "aws:elasticbeanstalk:environment", OptionName: "EnvironmentType", Value: "SingleInstance"}]' \
+              /tmp/option-settings.json > /tmp/tier.json
+            mv /tmp/tier.json /tmp/option-settings.json
+            echo "Tier: single instance (no load balancer)"
+          else
+            echo "tier=Name=WebServer,Type=LoadBalanced" >> "$GITHUB_ENV"
+            echo "Tier: load balanced (ALB)"
+          fi
+
           COUNT=$(jq length /tmp/option-settings.json)
           echo "Cloned $COUNT option settings from ${{ inputs.template_env }}"
 
@@ -150,6 +170,7 @@ jobs:
             --application-name "${EB_APPLICATION}" \
             --environment-name "${{ inputs.new_env_name }}" \
             --solution-stack-name "${{ steps.platform.outputs.stack }}" \
+            --tier "${tier}" \
             --cname-prefix "${PREFIX}" \
             --option-settings file:///tmp/option-settings.json
 
@@ -198,6 +219,7 @@ jobs:
             echo "Environment already exists — no changes made." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- **Template:** ${{ inputs.template_env }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Tier:** ${{ inputs.tier_type }}" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Application:** ${EB_APPLICATION}" >> "$GITHUB_STEP_SUMMARY"
           fi
           aws elasticbeanstalk describe-environments \

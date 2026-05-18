@@ -1,7 +1,7 @@
 name: Deploy to Elastic Beanstalk
 
 # Triggers:
-#   - push to main    -> deploys to amr-portal-prod
+#   - push to main    -> deploys to meter-reading-dev (single instance)
 #   - push to reetika -> deploys to meter-reading-dev
 #   - manual dispatch -> pick the env from a dropdown
 on:
@@ -61,7 +61,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.target_env }}"
           elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            ENV="amr-portal-prod"
+            ENV="meter-reading-dev"
           elif [ "${{ github.ref }}" = "refs/heads/reetika" ]; then
             ENV="meter-reading-dev"
           else
@@ -103,6 +103,26 @@ jobs:
           version_description: "${{ github.event.head_commit.message || github.event.inputs.target_env }} (${{ github.actor }})"
           deployment_package: deploy.zip
           wait_for_environment_recovery: 300
+
+      - name: Sync Roboflow environment variables
+        if: steps.target.outputs.env_name == 'meter-reading-dev'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ROBOFLOW_API_KEY: ${{ secrets.ROBOFLOW_API_KEY }}
+          ROBOFLOW_WORKSPACE: ${{ secrets.ROBOFLOW_WORKSPACE }}
+        run: |
+          if [ -z "${ROBOFLOW_API_KEY:-}" ]; then
+            echo "ROBOFLOW_API_KEY secret not set — skip."
+            exit 0
+          fi
+          WORKSPACE="${ROBOFLOW_WORKSPACE:-analoggasmeter}"
+          aws elasticbeanstalk update-environment \
+            --region "${{ env.AWS_REGION }}" \
+            --environment-name "${{ steps.target.outputs.env_name }}" \
+            --option-settings \
+              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_API_KEY,Value=${ROBOFLOW_API_KEY}" \
+              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_WORKSPACE,Value=${WORKSPACE}"
 
       - name: Summary
         run: |

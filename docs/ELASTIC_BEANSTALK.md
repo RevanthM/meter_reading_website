@@ -1,11 +1,11 @@
 # Deploy to AWS Elastic Beanstalk
 
-Production URL: **`amr-portal-prod`** (current). Legacy: [meter-reading-prod](http://meter-reading-prod.eba-wejhhxwm.us-west-2.elasticbeanstalk.com/) (stuck / retired when v2 is live).
+Production / primary URL: **`meter-reading-dev`** (single instance, no ALB). Legacy load-balanced: `amr-portal-prod`, `meter-reading-prod`.
 
 | Environment | Branch (auto-deploy) | Purpose |
 |---------------|----------------------|---------|
-| `amr-portal-prod` | `main` | Production portal |
-| `meter-reading-dev` | `reetika` | Dev / staging |
+| `meter-reading-dev` | `main`, `reetika` | Single-instance portal (no ALB) |
+| `amr-portal-prod` | manual only | Load-balanced prod (legacy) |
 | `meter-reading-prod` | manual only | Legacy prod |
 
 ## Prerequisites
@@ -41,13 +41,13 @@ This creates `.elasticbeanstalk/config.yml` (local only; sensitive bits stay out
 Link the CLI to the environment:
 
 ```bash
-eb use amr-portal-prod
+eb use meter-reading-dev
 # replace with the exact Environment name from the console if different
 ```
 
-## Create a new environment (e.g. `amr-portal-prod`)
+## Create a new environment
 
-GitHub Actions → **Create Elastic Beanstalk environment** → defaults clone from `meter-reading-dev` (IAM profile, S3 env vars, Node platform).
+GitHub Actions → **Create Elastic Beanstalk environment** → set name, pick **standard** (single instance, no ALB), clone env vars from an existing env. **Terminate** an environment with the same name first if recreating.
 
 Or locally (account with EB permissions):
 
