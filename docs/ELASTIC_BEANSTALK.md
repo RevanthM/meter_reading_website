@@ -1,10 +1,12 @@
 # Deploy to AWS Elastic Beanstalk
 
-| Environment | Branch (auto-deploy) | Purpose |
-|---------------|----------------------|---------|
-| `amrportal` | `main` | Production — single instance, no ALB (clone dev config) |
-| `meter-reading-dev` | `reetika` | Dev / staging |
-| `meter-reading-prod` | manual only | Legacy load-balanced prod |
+| Environment | Deploy | Purpose |
+|---------------|--------|---------|
+| `amrportal` | manual (Actions → **Deploy to Elastic Beanstalk**) | Production — single instance, no ALB |
+| `meter-reading-dev` | manual | Dev / staging |
+| `meter-reading-prod` | manual | Legacy load-balanced prod |
+
+Pushes to `main` / `reetika` do **not** deploy automatically.
 
 ## Prerequisites
 
@@ -54,7 +56,7 @@ aws elasticbeanstalk describe-environments --region us-west-2 \
   --environment-names amrportal --output table
 ```
 
-After the env is **Ready**, deploy via **Deploy to Elastic Beanstalk** (target `amrportal`) or push to `main`.
+After the env is **Ready**, run **Deploy to Elastic Beanstalk** (target `amrportal`) from GitHub Actions when you want to ship.
 
 ## Build and deploy
 

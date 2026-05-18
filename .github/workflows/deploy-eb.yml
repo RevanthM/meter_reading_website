@@ -1,20 +1,13 @@
 name: Deploy to Elastic Beanstalk
 
-# Triggers:
-#   - push to main    -> deploys to amrportal (single instance, no ALB)
-#   - push to reetika -> deploys to meter-reading-dev
-#   - manual dispatch -> pick the env from a dropdown
+# Manual deploy only — push to main/reetika does not deploy.
 on:
-  push:
-    branches:
-      - main
-      - reetika
   workflow_dispatch:
     inputs:
       target_env:
         description: "Elastic Beanstalk environment to deploy to"
         required: true
-        default: meter-reading-dev
+        default: amrportal
         type: choice
         options:
           - meter-reading-dev
@@ -59,16 +52,7 @@ jobs:
       - name: Resolve target environment
         id: target
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ENV="${{ github.event.inputs.target_env }}"
-          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            ENV="amrportal"
-          elif [ "${{ github.ref }}" = "refs/heads/reetika" ]; then
-            ENV="meter-reading-dev"
-          else
-            echo "Unsupported ref ${{ github.ref }}" >&2
-            exit 1
-          fi
+          ENV="${{ github.event.inputs.target_env }}"
           echo "env_name=$ENV" >> "$GITHUB_OUTPUT"
           echo "Deploying to $ENV"
 
