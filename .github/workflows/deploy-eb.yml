@@ -10,7 +10,7 @@ on:
         default: amrportal
         type: choice
         options:
-          - amrportal-0518
+          - amrportal-0519
           - amrportal-prod
           - meter-reading-dev
           - amrportal
@@ -110,7 +110,7 @@ jobs:
             20
 
       - name: Sync Roboflow environment variables
-        if: steps.target.outputs.env_name == 'amrportal' || steps.target.outputs.env_name == 'amrportal-prod' || steps.target.outputs.env_name == 'amrportal-0518'
+        if: steps.target.outputs.env_name == 'amrportal' || steps.target.outputs.env_name == 'amrportal-prod' || steps.target.outputs.env_name == 'amrportal-0519'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
