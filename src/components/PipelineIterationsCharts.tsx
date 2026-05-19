@@ -21,6 +21,7 @@ import {
   filterEvalChartRows,
   filterRegistryOverviewRows,
 } from '../constants/pipelineChartTheme';
+import { inferProductLineForRow } from '../constants/factoryStages';
 import { isEstimatedEvalMetrics } from '../utils/iterationMetricsEnrichment';
 
 const STATUS_VISUAL: Record<string, { fill: string; label: string }> = {
@@ -114,21 +115,21 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
   }, [evalRows, metricPoints]);
 
   const imageData = useMemo(() => {
-    return evalRows
+    return overviewRows
       .map((r) => {
         const n = r.imageCount ?? r.portalStats?.totalImages ?? null;
         if (n == null || !Number.isFinite(n)) return null;
-        const point = metricPoints.find((p) => p.id === r.id);
-        if (!point) return null;
+        const line = inferProductLineForRow(r);
+        if (line === 'unknown') return null;
         return {
           id: r.id,
-          label: point.xLabel,
-          line: point.line,
+          label: `${r.pipeline.trim()} · #${r.iterationNumber}`,
+          line,
           images: n,
         };
       })
       .filter(Boolean) as { id: string; label: string; line: typeof metricPoints[0]['line']; images: number }[];
-  }, [evalRows, metricPoints]);
+  }, [overviewRows]);
 
   if (!overviewRows.length && !evalRows.length) return null;
 
@@ -139,9 +140,9 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
     >
       {!embedded ? <h2 id="pipeline-charts-heading">Overview</h2> : null}
       <p className="pipeline-iterations-charts-hint">
-        Six iterations (two per pipeline). Colors match Model factory: <strong>blue</strong> Sempra,{' '}
-        <strong>violet</strong> Anica, <strong>green</strong> combined. Iteration #1 read accuracy may be estimated from
-        later UT/FT in the same pipeline when not yet measured.
+        Up to three iterations per pipeline (including combined p3 #3 in training). Colors match Model factory:{' '}
+        <strong>blue</strong> Sempra, <strong>violet</strong> Anica, <strong>green</strong> combined. Iteration #1 read
+        accuracy may be estimated from later UT/FT in the same pipeline when not yet measured.
       </p>
       <div className="pipeline-iterations-charts-grid">
         <div className="pipeline-iterations-charts-top-row">

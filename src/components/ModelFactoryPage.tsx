@@ -6,6 +6,7 @@ import { useReadings } from '../context/ReadingsContext';
 import {
   fetchPipelineIterations,
   fetchUnitTestRunDownloadUrl,
+  PIPELINE_REGISTRY_UPDATED_EVENT,
   savePipelineIterations,
   type PipelineIterationRecord,
   type PipelineIterationUnitTestLink,
@@ -110,6 +111,14 @@ const ModelFactoryPage: FC = () => {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const onRegistryUpdated = () => {
+      void load();
+    };
+    window.addEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
+    return () => window.removeEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
   }, [load]);
 
   const rowsForView = useMemo(() => {

@@ -59,10 +59,12 @@ export function filterRegistryOverviewRows(rows: PipelineIterationRecord[]): Pip
   });
 }
 
+/** Iterations shown on metric / image charts per product line (includes p3 #3 in training). */
+const CHART_ITERATION_NUMBERS = [1, 2, 3] as const;
+
 /**
- * Six completed eval rows for charts: iteration #1 and #2 per product line.
- * Uses iteration number explicitly (not .slice(0,2)) so a stray "Sempra - 2" #1 row
- * does not hide Sempra -1 #2.
+ * Registry rows for charts: iterations #1–#3 per product line when present.
+ * Uses iteration number explicitly so a stray "Sempra - 2" #1 row does not hide Sempra -1 #2.
  */
 export function filterEvalChartRows(rows: PipelineIterationRecord[]): PipelineIterationRecord[] {
   const out: PipelineIterationRecord[] = [];
@@ -71,7 +73,7 @@ export function filterEvalChartRows(rows: PipelineIterationRecord[]): PipelineIt
       if (String(r.currentStatus).toLowerCase() === 'cancelled') return false;
       return inferProductLineForRow(r) === line;
     });
-    for (const iterNum of [1, 2] as const) {
+    for (const iterNum of CHART_ITERATION_NUMBERS) {
       const row = pickRowForIteration(list, iterNum);
       if (row) out.push(row);
     }

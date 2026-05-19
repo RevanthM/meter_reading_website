@@ -551,6 +551,15 @@ export async function fetchPipelineIterationWeightSignedUrl(
   return parseJsonBody<TrainingWeightsSignedUrlResponse>(text, response.status);
 }
 
+/** Fired after registry JSON is saved so other pages reload from S3. */
+export const PIPELINE_REGISTRY_UPDATED_EVENT = 'pipeline-registry-updated';
+
+export function notifyPipelineRegistryUpdated(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(PIPELINE_REGISTRY_UPDATED_EVENT));
+  }
+}
+
 export async function savePipelineIterations(
   userEmail: string | undefined,
   iterations: PipelineIterationRecord[],
@@ -567,7 +576,9 @@ export async function savePipelineIterations(
     const err = parseJsonBody<{ error?: string }>(text, response.status);
     throw new Error(err.error || `HTTP ${response.status}`);
   }
-  return parseJsonBody<PipelineIterationsDoc>(text, response.status);
+  const doc = parseJsonBody<PipelineIterationsDoc>(text, response.status);
+  notifyPipelineRegistryUpdated();
+  return doc;
 }
 
 export interface WorkTypeInfo {

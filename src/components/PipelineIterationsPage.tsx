@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useReadings } from '../context/ReadingsContext';
 import {
   fetchPipelineIterations,
+  PIPELINE_REGISTRY_UPDATED_EVENT,
   savePipelineIterations,
   type PipelineIterationRecord,
 } from '../services/api';
@@ -254,6 +255,14 @@ const PipelineIterationsPage: FC = () => {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const onRegistryUpdated = () => {
+      void load();
+    };
+    window.addEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
+    return () => window.removeEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
   }, [load]);
 
   const pipelineNames = useMemo(() => {

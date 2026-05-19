@@ -263,7 +263,7 @@ export const PIPELINE_ITERATIONS_SEED_MAY_2026: PipelineIterationRecord[] = [
 
 /**
  * Combined (p3) iteration #3 — in training, 1700 images. Separate from the six completed eval rows.
- * Shown on Model factory (training lane); excluded from dashboard “improvement” charts (those use #1 and #2 only).
+ * Shown on Model factory (training lane); included on registry overview / image-count charts as iteration #3.
  */
 export const PIPELINE_ITERATIONS_SEED_P3_I3_TRAINING: PipelineIterationRecord = {
   id: 'seed-11111111-1111-4111-8111-111111111108',

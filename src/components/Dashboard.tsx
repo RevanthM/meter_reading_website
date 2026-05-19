@@ -19,6 +19,7 @@ import { statusColors, statusLabels, workTypeLabels } from '../types';
 import {
   downloadIncorrectRetrainZip,
   fetchPipelineIterations,
+  PIPELINE_REGISTRY_UPDATED_EVENT,
   type ImprovementChartRange,
   type PipelineIterationRecord,
 } from '../services/api';
@@ -352,6 +353,15 @@ const Dashboard: FC = () => {
       cancelDefer();
     };
   }, [countsLoading, isAdminDashboard, loadRegistry]);
+
+  useEffect(() => {
+    if (!isAdminDashboard) return;
+    const onRegistryUpdated = () => {
+      void loadRegistry();
+    };
+    window.addEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
+    return () => window.removeEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
+  }, [isAdminDashboard, loadRegistry]);
 
   const todayDrillIso = calendarDayKeyInPortalTz(new Date().toISOString());
   const todayHintDisplay = formatPortalWeekdayMedium(new Date().toISOString());
