@@ -655,6 +655,68 @@ function invalidateCache() {
   cache.clear();
 }
 
+/** Drop cached readings/counts/light/uploaded-today for one portal work type (keeps other work types warm). */
+function invalidateReadingsCache(source = 'all', workType = '1000') {
+  const sources = source === 'all' ? ['all', 'field', 'simulator'] : [source, 'all'];
+  const workTypes = workType && WORK_TYPES.includes(workType) ? [workType] : WORK_TYPES;
+  for (const s of sources) {
+    for (const wt of workTypes) {
+      cache.delete(getCacheKey(s, wt));
+      cache.delete(`counts:${s}:${wt}`);
+      cache.delete(`light:${s}:${wt}`);
+      for (const key of cache.keys()) {
+        if (key.startsWith(`uploadedToday:${s}:${wt}:`)) cache.delete(key);
+      }
+    }
+  }
+}
+
+const FOLDER_SUFFIX_TO_STATUS = {
+  correct: 'correct',
+  incorrect: 'incorrect_new',
+  incorrect_analyzed: 'incorrect_analyzed',
+  incorrect_labeled: 'incorrect_labeled',
+  incorrect_training: 'incorrect_training',
+  no_dials: 'no_dials',
+  not_sure: 'not_sure',
+  skipped_review: 'incorrect_new',
+};
+
+function inferStatusAndSourceFromSessionPrefix(prefix) {
+  const norm = normalizeS3SessionPrefix(prefix);
+  const parts = norm.split('/').filter(Boolean);
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const seg = parts[i];
+    if (seg === 'manually_uploaded') {
+      return { status: 'manually_uploaded', sourceType: 'simulator' };
+    }
+    if (seg === 'correct') return { status: 'correct', sourceType: 'field' };
+    if (seg === 'incorrect') return { status: 'incorrect_new', sourceType: 'field' };
+    if (seg.startsWith('f_')) {
+      const suffix = seg.slice(2);
+      return {
+        status: FOLDER_SUFFIX_TO_STATUS[suffix] || 'incorrect_new',
+        sourceType: 'field',
+      };
+    }
+    if (seg.startsWith('s_')) {
+      const suffix = seg.slice(2);
+      return {
+        status: FOLDER_SUFFIX_TO_STATUS[suffix] || 'incorrect_new',
+        sourceType: 'simulator',
+      };
+    }
+  }
+  return { status: 'incorrect_new', sourceType: 'field' };
+}
+
+async function parseSessionAtPrefix(s3SessionPrefix, workTypeHint = '1000') {
+  const norm = normalizeS3SessionPrefix(s3SessionPrefix);
+  if (!norm) return null;
+  const { status, sourceType } = inferStatusAndSourceFromSessionPrefix(norm);
+  return parseSession(norm, status, sourceType, workTypeHint || '1000');
+}
+
 /** When the same session_id appears under multiple S3 prefixes, prefer test-queue / library markers and newest portal update. */
 function readingDuplicatePriority(r) {
   let score = 0;
@@ -1506,7 +1568,9 @@ app.get('/api/readings/:id', async (req, res) => {
     const workTypeHint = typeof req.query.workType === 'string' ? req.query.workType.trim() : '';
     console.log(`\n🔍 Fetching reading: ${id}${workTypeHint ? ` (workType hint: ${workTypeHint})` : ''}`);
 
-    const reading = await findReadingAcrossWorkTypes(id, workTypeHint);
+    const s3SessionPrefix =
+      typeof req.query.s3SessionPrefix === 'string' ? req.query.s3SessionPrefix.trim() : '';
+    const reading = await resolveReadingById(id, { workTypeHint, s3SessionPrefix });
 
     if (!reading) {
       return res.status(404).json({ error: 'Reading not found' });
@@ -1581,13 +1645,21 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
 
     const sessionId = req.params.id;
     const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
-    const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+    const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
+    let reading = clientPrefix
+      ? await parseSessionAtPrefix(clientPrefix, workTypeHint || '1000')
+      : null;
+    if (reading && String(reading.id) !== String(sessionId)) {
+      reading = null;
+    }
+    if (!reading) {
+      reading = await resolveReadingById(sessionId, { workTypeHint, s3SessionPrefix: clientPrefix });
+    }
     if (!reading?.s3SessionPrefix) {
       return res.status(404).json({ error: 'Reading not found or missing s3SessionPrefix' });
     }
 
     const serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
-    const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
     if (clientPrefix && clientPrefix !== serverPrefix) {
       return res.status(400).json({ error: 's3SessionPrefix does not match this session' });
     }
@@ -1784,7 +1856,7 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       }),
     );
 
-    invalidateCache();
+    invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
 
     await loadActivityLog();
     activityLog.unshift({
@@ -1855,24 +1927,42 @@ function normalizeTrainingDatasetFolderPrefix(input) {
 }
 
 /** Copy every object under sourcePrefix into destPrefix (same relative paths). Does not delete source. */
+const COPY_PREFIX_CONCURRENCY = Math.min(
+  32,
+  Math.max(2, parseInt(process.env.COPY_PREFIX_CONCURRENCY || '10', 10) || 10),
+);
+
+async function copyObjectsConcurrently(copyJobs) {
+  for (let i = 0; i < copyJobs.length; i += COPY_PREFIX_CONCURRENCY) {
+    const batch = copyJobs.slice(i, i + COPY_PREFIX_CONCURRENCY);
+    await Promise.all(
+      batch.map(({ sourceKey, destKey }) =>
+        s3Client.send(
+          new CopyObjectCommand({
+            Bucket: BUCKET_NAME,
+            CopySource: `${BUCKET_NAME}/${sourceKey}`,
+            Key: destKey,
+          }),
+        ),
+      ),
+    );
+  }
+}
+
+/** Copy every object under sourcePrefix into destPrefix (same relative paths). Does not delete source. */
 async function copyPrefixTree(sourcePrefix, destPrefix) {
   const src = sourcePrefix.endsWith('/') ? sourcePrefix : `${sourcePrefix}/`;
   const dst = destPrefix.endsWith('/') ? destPrefix : `${destPrefix}/`;
   const keys = await collectAllObjectKeysUnderPrefix(src);
   if (keys.length === 0) return { objectCount: 0 };
+  const copyJobs = [];
   for (const key of keys) {
     const relative = key.startsWith(src) ? key.slice(src.length) : '';
     if (relative === '') continue;
-    const newKey = `${dst}${relative}`;
-    await s3Client.send(
-      new CopyObjectCommand({
-        Bucket: BUCKET_NAME,
-        CopySource: `${BUCKET_NAME}/${key}`,
-        Key: newKey,
-      }),
-    );
+    copyJobs.push({ sourceKey: key, destKey: `${dst}${relative}` });
   }
-  return { objectCount: keys.length };
+  await copyObjectsConcurrently(copyJobs);
+  return { objectCount: copyJobs.length };
 }
 
 async function readTrainingDatasetManifest(folderPrefix) {
@@ -2293,10 +2383,9 @@ app.post('/api/readings/bulk-move', async (req, res) => {
     
     console.log(`✅ Moved ${movedCount}/${readings.length} readings\n`);
 
-    invalidateCache();
-
     const analyticsSource = req.query.source || req.body?.source || 'all';
     const analyticsWorkType = req.query.workType || req.body?.workType || '1000';
+    invalidateReadingsCache(analyticsSource, analyticsWorkType);
     for (let i = 0; i < readings.length; i++) {
       if (!moveResults[i]) continue;
       const item = readings[i];
@@ -2793,32 +2882,44 @@ const EXPORT_INCORRECT_MAX_SESSIONS = Math.max(
   Math.min(10_000, parseInt(process.env.EXPORT_INCORRECT_MAX_SESSIONS || '3000', 10) || 3000),
 );
 
-/** Resolve a reading by session id across work types (same logic as GET /api/readings/:id). */
-async function findReadingAcrossWorkTypes(id, workTypeHint) {
-  let reading = null;
-  if (workTypeHint && WORK_TYPES.includes(workTypeHint)) {
-    const list = await getAllReadings('all', workTypeHint);
-    reading = list.find((r) => r.id === id) || null;
-  }
-  if (!reading) {
-    for (const wt of WORK_TYPES) {
-      if (wt === workTypeHint) continue;
-      const list = await getAllReadings('all', wt);
-      reading = list.find((r) => r.id === id) || null;
-      if (reading) break;
+/** Resolve a reading by session id; uses s3SessionPrefix when provided (avoids full-bucket scans). */
+async function resolveReadingById(id, { workTypeHint = '', s3SessionPrefix = '' } = {}) {
+  const normPrefix = normalizeS3SessionPrefix(s3SessionPrefix);
+  if (normPrefix) {
+    const direct = await parseSessionAtPrefix(normPrefix, workTypeHint || '1000');
+    if (direct && String(direct.id) === String(id)) {
+      return direct;
     }
   }
-  return reading;
+
+  if (workTypeHint && WORK_TYPES.includes(workTypeHint)) {
+    const list = await getAllReadings('all', workTypeHint);
+    const hit = list.find((r) => r.id === id);
+    if (hit) return hit;
+  }
+
+  for (const wt of WORK_TYPES) {
+    if (wt === workTypeHint) continue;
+    const list = await getAllReadings('all', wt);
+    const hit = list.find((r) => r.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** @deprecated Prefer {@link resolveReadingById} with s3SessionPrefix when available. */
+async function findReadingAcrossWorkTypes(id, workTypeHint) {
+  return resolveReadingById(id, { workTypeHint });
 }
 
 registerTestDataReviewRoutes(app, {
   s3Client,
   BUCKET_NAME,
-  findReadingAcrossWorkTypes,
+  resolveReadingById,
   normalizeS3SessionPrefix,
   streamToString,
   getPresignedUrl: getSignedImageUrl,
-  invalidateCache,
+  invalidateReadingsCache,
 });
 
 const MANUAL_UPLOAD_MAX_BYTES = Math.max(
@@ -2870,7 +2971,7 @@ registerManualUploadRoutes(app, {
   s3Client,
   BUCKET_NAME,
   withS3Base,
-  invalidateCache,
+  invalidateReadingsCache,
   parseSession,
   uploadMiddleware: manualUploadMiddleware,
   bulkUploadMiddleware: manualBulkUploadMiddleware,
@@ -2955,16 +3056,11 @@ app.post('/api/training-datasets/copy-sessions', async (req, res) => {
       }
       let sourcePrefix = typeof entry.s3SessionPrefix === 'string' ? entry.s3SessionPrefix.trim() : '';
       if (!sourcePrefix || sourcePrefix.length < 4) {
-        const wt =
-          typeof entry.workType === 'string' && WORK_TYPES.includes(entry.workType.trim())
-            ? entry.workType.trim()
-            : '';
-        const reading = await findReadingAcrossWorkTypes(sessionId, wt || null);
-        if (!reading?.s3SessionPrefix) {
-          errors.push({ sessionId, error: 'reading not found or missing s3SessionPrefix (reload list, pick live S3 rows).' });
-          continue;
-        }
-        sourcePrefix = reading.s3SessionPrefix;
+        errors.push({
+          sessionId,
+          error: 's3SessionPrefix is required (reload the readings list and copy again).',
+        });
+        continue;
       }
       try {
         const { objectCount } = await copySessionIntoTrainingDataset(sourcePrefix, folderPrefix, sessionId);
@@ -3116,7 +3212,7 @@ app.post('/api/training-datasets/weights', weightsUploadMiddleware, async (req, 
     await writeTrainingDatasetManifest(folderPrefix, manifest);
 
     if (sessionPromotion.enabled && sessionPromotion.moved > 0) {
-      invalidateCache();
+      invalidateReadingsCache('all', '1000');
     }
 
     const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';

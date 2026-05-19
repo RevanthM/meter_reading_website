@@ -8,6 +8,7 @@ import {
   savePipelineIterations,
   type PipelineIterationRecord,
 } from '../services/api';
+import ListPageRefreshButton from './ListPageRefreshButton';
 import PipelineIterationFormModal from './PipelineIterationFormModal';
 import PipelineIterationsCharts from './PipelineIterationsCharts';
 import {
@@ -243,7 +244,7 @@ const PipelineIterationsPage: FC = () => {
     setLoadError(null);
     try {
       const doc = await fetchPipelineIterations();
-      const list = doc.iterations.length ? ensureMay2026EvalRows(doc.iterations) : [];
+      const list = doc.iterations ?? [];
       setRows(list);
       rowsRef.current = list;
       setMeta({ updatedAt: doc.updatedAt, updatedBy: doc.updatedBy });
@@ -370,7 +371,8 @@ const PipelineIterationsPage: FC = () => {
   return (
     <div className="readings-list-page pipeline-iterations-page">
       <header className="page-header">
-        <div className="header-content">
+        <div className="header-content list-page-header-with-actions">
+          <div className="list-page-header-lead">
           <button type="button" className="back-button" onClick={() => navigate('/')}>
             <ArrowLeft size={20} />
             <span>Home</span>
@@ -385,6 +387,12 @@ const PipelineIterationsPage: FC = () => {
               </p>
             </div>
           </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => void load()}
+            busy={loading}
+            title="Reload registry from S3"
+          />
         </div>
       </header>
 

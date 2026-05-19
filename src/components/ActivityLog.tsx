@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ListPageRefreshButton from './ListPageRefreshButton';
 import {
   ArrowLeft,
   Gauge,
@@ -56,28 +57,31 @@ const ActivityLog: React.FC = () => {
   const navigate = useNavigate();
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [filterAction, setFilterAction] = useState<string>('all');
 
-  useEffect(() => {
-    const loadActivities = async () => {
-      try {
-        const response = await fetch('/api/activity-log');
-        if (response.ok) {
-          const data = await response.json();
-          setActivities(data);
-        } else {
-          setActivities([]);
-        }
-      } catch {
+  const loadActivities = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/activity-log');
+      if (response.ok) {
+        const data = await response.json();
+        setActivities(data);
+      } else {
         setActivities([]);
-      } finally {
-        setLoading(false);
       }
-    };
-
-    loadActivities();
+    } catch {
+      setActivities([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadActivities();
+  }, [loadActivities]);
 
   const filteredActivities = filterAction === 'all'
     ? activities
@@ -86,7 +90,8 @@ const ActivityLog: React.FC = () => {
   return (
     <div className="activity-page">
       <header className="page-header">
-        <div className="header-content">
+        <div className="header-content list-page-header-with-actions">
+          <div className="list-page-header-lead">
           <button className="back-button" onClick={() => navigate('/')}>
             <ArrowLeft size={18} />
             Back
@@ -98,6 +103,16 @@ const ActivityLog: React.FC = () => {
               <p>Track all reading status changes</p>
             </div>
           </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => {
+              setRefreshing(true);
+              void loadActivities();
+            }}
+            busy={refreshing || loading}
+            disabled={loading}
+            title="Reload activity log"
+          />
         </div>
       </header>
 

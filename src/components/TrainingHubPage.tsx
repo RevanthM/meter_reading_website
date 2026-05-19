@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, Navigate, useOutletContext } from 'react-router-dom';
+import ListPageRefreshButton from './ListPageRefreshButton';
 import {
   ArrowLeft,
   GraduationCap,
@@ -222,6 +223,7 @@ const TrainingHubPage: FC = () => {
   const [dropMessage, setDropMessage] = useState<string | null>(null);
   const [copyProgress, setCopyProgress] = useState<{ total: number; done: number } | null>(null);
   const [bulkPipelinePrefix, setBulkPipelinePrefix] = useState('');
+  const [hubRefreshing, setHubRefreshing] = useState(false);
   const selectAllVisibleInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -243,6 +245,15 @@ const TrainingHubPage: FC = () => {
       setLoading(false);
     }
   }, []);
+
+  const handleHubRefresh = useCallback(async () => {
+    setHubRefreshing(true);
+    try {
+      await Promise.all([refreshData(), load()]);
+    } finally {
+      setHubRefreshing(false);
+    }
+  }, [refreshData, load]);
 
   useEffect(() => {
     void load();
@@ -421,7 +432,8 @@ const TrainingHubPage: FC = () => {
   return (
     <div className="detail-page training-hub-page">
       <header className="page-header training-hub-page-header">
-        <div className="header-content">
+        <div className="header-content list-page-header-with-actions">
+          <div className="list-page-header-lead">
           <button type="button" className="back-button" onClick={() => navigate('/')}>
             <ArrowLeft size={20} />
             <span>Home</span>
@@ -438,6 +450,13 @@ const TrainingHubPage: FC = () => {
               </p>
             </div>
           </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => void handleHubRefresh()}
+            busy={hubRefreshing || loading || readingsLoading}
+            disabled={loading}
+            title="Reload sessions and training pipelines from S3"
+          />
         </div>
       </header>
 

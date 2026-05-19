@@ -1,10 +1,24 @@
 /**
- * Read/write `unittestng_manifest.xlsx` on S3 (unit test image registry).
+ * Unit test image registry on S3 (`unittestng_manifest.json`).
+ * Legacy `unittestng_manifest.xlsx` is read once and migrated to JSON on first access.
+ * iOS unit tests list images by prefix and parse `{prefix}_d{1|2|3}_{reading}.ext` from the filename only.
  */
-import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as XLSX from 'xlsx';
 
-const MANIFEST_FILE = 'unittestng_manifest.xlsx';
+const MANIFEST_JSON_FILE = 'unittestng_manifest.json';
+const MANIFEST_LEGACY_XLSX_FILE = 'unittestng_manifest.xlsx';
+
+const MANIFEST_CACHE_TTL_MS = Math.max(
+  5_000,
+  parseInt(process.env.UNIT_TEST_MANIFEST_CACHE_TTL_MS || '45000', 10) || 45_000,
+);
+/** @type {Map<string, { timestamp: number, key: string, rows: ReturnType<typeof normalizeRow>[] }>} */
+const manifestCache = new Map();
+
+export function invalidateUnitTestManifestCache(workType) {
+  manifestCache.delete(String(workType || '1000').trim() || '1000');
+}
 
 /** @typedef {'normal' | 'difficult' | 'very_difficult'} UnitTestImageDifficulty */
 
@@ -28,7 +42,17 @@ export function unitTestImagesPrefix(workType) {
 export function unitTestManifestKey(workType) {
   const env = String(process.env.UNIT_TEST_MANIFEST_S3_KEY || '').trim();
   if (env) return env.replace('{workType}', String(workType || '1000'));
-  return `${unitTestImagesPrefix(workType)}${MANIFEST_FILE}`;
+  return `${unitTestImagesPrefix(workType)}${MANIFEST_JSON_FILE}`;
+}
+
+export function unitTestManifestLegacyXlsxKey(workType) {
+  return `${unitTestImagesPrefix(workType)}${MANIFEST_LEGACY_XLSX_FILE}`;
+}
+
+/** Skip registry objects when listing flat image keys in the folder. */
+export function isUnitTestManifestObjectKey(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  return lower === MANIFEST_JSON_FILE || lower === MANIFEST_LEGACY_XLSX_FILE;
 }
 
 export function difficultyToCode(difficulty) {
@@ -128,43 +152,103 @@ function normalizeRow(raw) {
   return { image_file_name, expected_meter_value, s3_key, image_difficulty };
 }
 
-export async function readUnitTestManifestRows(s3Client, bucket, workType) {
-  const key = unitTestManifestKey(workType);
+function rowsFromJsonDocument(doc) {
+  const list = Array.isArray(doc?.rows)
+    ? doc.rows
+    : Array.isArray(doc?.images)
+      ? doc.images
+      : [];
+  return list.map(normalizeRow);
+}
+
+function buildJsonDocument(rows) {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    rows: rows.map((r) => ({
+      image_file_name: r.image_file_name,
+      expected_meter_value: r.expected_meter_value,
+      s3_key: r.s3_key,
+      image_difficulty: r.image_difficulty || 'normal',
+    })),
+  };
+}
+
+async function readJsonManifestRows(s3Client, bucket, jsonKey) {
+  const out = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: jsonKey }));
+  const text = await out.Body.transformToString();
+  const doc = JSON.parse(text);
+  return { key: jsonKey, rows: rowsFromJsonDocument(doc) };
+}
+
+async function readLegacyXlsxManifestRows(s3Client, bucket, xlsxKey) {
+  const out = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: xlsxKey }));
+  const buf = Buffer.from(await out.Body.transformToByteArray());
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!sheet) return { key: xlsxKey, rows: [] };
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }).map(normalizeRow);
+  return { key: xlsxKey, rows };
+}
+
+async function legacyXlsxExists(s3Client, bucket, xlsxKey) {
   try {
-    const out = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    const buf = Buffer.from(await out.Body.transformToByteArray());
-    const wb = XLSX.read(buf, { type: 'buffer' });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    if (!sheet) return { key, rows: [] };
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }).map(normalizeRow);
-    return { key, rows };
+    await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: xlsxKey }));
+    return true;
   } catch (e) {
-    if (e?.name === 'NoSuchKey' || e?.$metadata?.httpStatusCode === 404) {
-      return { key, rows: [] };
-    }
+    if (e?.name === 'NoSuchKey' || e?.$metadata?.httpStatusCode === 404) return false;
     throw e;
   }
 }
 
+export async function readUnitTestManifestRows(s3Client, bucket, workType) {
+  const jsonKey = unitTestManifestKey(workType);
+  try {
+    return await readJsonManifestRows(s3Client, bucket, jsonKey);
+  } catch (e) {
+    if (e?.name !== 'NoSuchKey' && e?.$metadata?.httpStatusCode !== 404) {
+      throw e;
+    }
+  }
+
+  const xlsxKey = unitTestManifestLegacyXlsxKey(workType);
+  if (!(await legacyXlsxExists(s3Client, bucket, xlsxKey))) {
+    return { key: jsonKey, rows: [] };
+  }
+
+  const legacy = await readLegacyXlsxManifestRows(s3Client, bucket, xlsxKey);
+  if (legacy.rows.length > 0) {
+    await writeUnitTestManifestRows(s3Client, bucket, workType, legacy.rows);
+    console.log(
+      `📋 Migrated unit test manifest ${legacy.rows.length} row(s) from ${xlsxKey} → ${jsonKey}`,
+    );
+  }
+  return { key: jsonKey, rows: legacy.rows };
+}
+
+export async function readUnitTestManifestRowsCached(s3Client, bucket, workType) {
+  const wt = String(workType || '1000').trim() || '1000';
+  const hit = manifestCache.get(wt);
+  if (hit && Date.now() - hit.timestamp < MANIFEST_CACHE_TTL_MS) {
+    return { key: hit.key, rows: hit.rows };
+  }
+  const fresh = await readUnitTestManifestRows(s3Client, bucket, wt);
+  manifestCache.set(wt, { ...fresh, timestamp: Date.now() });
+  return fresh;
+}
+
 export async function writeUnitTestManifestRows(s3Client, bucket, workType, rows) {
   const key = unitTestManifestKey(workType);
-  const header = ['image_file_name', 'expected_meter_value', 's3_key', 'image_difficulty'];
-  const data = [
-    header,
-    ...rows.map((r) => [r.image_file_name, r.expected_meter_value, r.s3_key, r.image_difficulty || 'normal']),
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'manifest');
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const body = JSON.stringify(buildJsonDocument(rows), null, 2);
   await s3Client.send(
     new PutObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: buf,
-      ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      Body: body,
+      ContentType: 'application/json; charset=utf-8',
     }),
   );
+  invalidateUnitTestManifestCache(workType);
   return key;
 }
 
@@ -172,7 +256,7 @@ export async function writeUnitTestManifestRows(s3Client, bucket, workType, rows
  * Insert or update manifest row by s3_key or image_file_name.
  */
 export async function upsertUnitTestManifestRow(s3Client, bucket, workType, row) {
-  const { rows } = await readUnitTestManifestRows(s3Client, bucket, workType);
+  const { rows } = await readUnitTestManifestRowsCached(s3Client, bucket, workType);
   const next = normalizeRow(row);
   let found = false;
   const updated = rows.map((r) => {
@@ -191,7 +275,7 @@ export async function upsertUnitTestManifestRow(s3Client, bucket, workType, row)
 }
 
 export async function removeUnitTestManifestByS3Key(s3Client, bucket, workType, s3Key) {
-  const { rows } = await readUnitTestManifestRows(s3Client, bucket, workType);
+  const { rows } = await readUnitTestManifestRowsCached(s3Client, bucket, workType);
   const updated = rows.filter((r) => r.s3_key !== s3Key);
   const key = await writeUnitTestManifestRows(s3Client, bucket, workType, updated);
   return { key, rows: updated };

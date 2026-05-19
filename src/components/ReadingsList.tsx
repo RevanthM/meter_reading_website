@@ -40,6 +40,8 @@ import {
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
 import { calendarDayKeyInPortalTz, formatReadingShortDate } from '../utils/readingDisplayDates';
+import ListPageRefreshButton from './ListPageRefreshButton';
+import ListViewLoading from './ListViewLoading';
 
 /** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
@@ -189,8 +191,27 @@ const ReadingsList: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { getReadingsByStatus, bulkUpdateStatus, workType, dataSource, isUsingRealData, ensureReadingsLoaded } =
-    useReadings();
+  const {
+    getReadingsByStatus,
+    bulkUpdateStatus,
+    workType,
+    dataSource,
+    isUsingRealData,
+    ensureReadingsLoaded,
+    refreshData,
+    readingsLoading,
+  } = useReadings();
+
+  const [listRefreshing, setListRefreshing] = useState(false);
+
+  const handleListRefresh = useCallback(async () => {
+    setListRefreshing(true);
+    try {
+      await refreshData();
+    } finally {
+      setListRefreshing(false);
+    }
+  }, [refreshData]);
 
   useEffect(() => {
     void ensureReadingsLoaded();
@@ -619,7 +640,8 @@ const ReadingsList: FC = () => {
   return (
     <div className="readings-list-page">
       <header className="page-header">
-        <div className="header-content">
+        <div className="header-content list-page-header-with-actions">
+          <div className="list-page-header-lead">
           <button className="back-button" onClick={() => navigate('/')}>
             <ArrowLeft size={20} />
             <span>Back to Dashboard</span>
@@ -673,6 +695,13 @@ const ReadingsList: FC = () => {
               </p>
             </div>
           </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => void handleListRefresh()}
+            busy={listRefreshing}
+            disabled={readingsLoading}
+            title="Reload sessions from S3"
+          />
         </div>
       </header>
 
@@ -998,7 +1027,13 @@ const ReadingsList: FC = () => {
       )}
 
       <main className="list-content">
+        {readingsLoading && readings.length === 0 ? (
+          <ListViewLoading message="Loading sessions from S3…" />
+        ) : (
         <div className="table-container">
+          {readingsLoading ? (
+            <ListViewLoading variant="inline" message="Refreshing sessions…" />
+          ) : null}
           <table className="readings-table">
             <thead>
               <tr>
@@ -1177,7 +1212,7 @@ const ReadingsList: FC = () => {
               ))}
             </tbody>
           </table>
-          {readings.length === 0 && (
+          {readings.length === 0 && !readingsLoading ? (
             <div className="empty-state">
               <p>
                 {dateFilterLabel ||
@@ -1190,8 +1225,9 @@ const ReadingsList: FC = () => {
                   : 'No readings found with this status.'}
               </p>
             </div>
-          )}
+          ) : null}
         </div>
+        )}
       </main>
     </div>
   );

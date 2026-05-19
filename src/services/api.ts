@@ -795,9 +795,16 @@ export async function fetchImprovementStats(
   }
 }
 
-export async function fetchReadingById(id: string, workType?: WorkType): Promise<S3MeterReading | null> {
+export async function fetchReadingById(
+  id: string,
+  workType?: WorkType,
+  s3SessionPrefix?: string,
+): Promise<S3MeterReading | null> {
   try {
-    const q = workType ? `?workType=${encodeURIComponent(workType)}` : '';
+    const params = new URLSearchParams();
+    if (workType) params.set('workType', workType);
+    if (s3SessionPrefix) params.set('s3SessionPrefix', s3SessionPrefix);
+    const q = params.toString() ? `?${params}` : '';
     const response = await fetch(`${API_BASE_URL}/readings/${encodeURIComponent(id)}${q}`);
     if (!response.ok) {
       if (response.status === 404) return null;
@@ -1262,18 +1269,51 @@ export interface UnitTestImageRow {
   lastModified?: string | null;
 }
 
-export async function fetchUnitTestImages(workType: WorkType): Promise<{
+export async function fetchUnitTestImages(
+  workType: WorkType,
+  options?: { presignAll?: boolean },
+): Promise<{
   prefix: string;
   manifestKey: string;
   images: UnitTestImageRow[];
 }> {
   const params = new URLSearchParams({ workType });
+  if (options?.presignAll) params.set('presign', '1');
   const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images?${params}`);
   const text = await response.text();
   if (!response.ok) {
     throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
   }
   return parseJsonBody(text, response.status);
+}
+
+export async function presignUnitTestImages(s3Keys: string[]): Promise<Record<string, string>> {
+  const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images/presign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ s3Keys }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  const data = parseJsonBody<{ urls: Record<string, string> }>(text, response.status);
+  return data.urls || {};
+}
+
+export async function fetchUnitTestImageByFileName(
+  workType: WorkType,
+  fileName: string,
+): Promise<UnitTestImageRow> {
+  const params = new URLSearchParams({ workType });
+  const response = await fetch(
+    `${API_BASE_URL}/test-data/unit-test-images/by-file/${encodeURIComponent(fileName)}?${params}`,
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody<UnitTestImageRow>(text, response.status);
 }
 
 export async function updateUnitTestImageExpected(
@@ -1329,6 +1369,7 @@ export async function approveSessionForUnitTest(
   sessionId: string,
   workType: WorkType | undefined,
   userEmail?: string,
+  s3SessionPrefix?: string,
 ): Promise<{ ok: boolean; fileName: string; s3Key: string; reading: S3MeterReading }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -1338,7 +1379,11 @@ export async function approveSessionForUnitTest(
   const response = await fetch(`${API_BASE_URL}/test-data/approve`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ sessionId, workType }),
+    body: JSON.stringify({
+      sessionId,
+      workType,
+      ...(s3SessionPrefix?.trim() ? { s3SessionPrefix: s3SessionPrefix.trim() } : {}),
+    }),
   });
   const text = await response.text();
   if (!response.ok) {

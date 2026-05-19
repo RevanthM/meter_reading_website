@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { ImageIcon, Loader2, Pencil, Trash2 } from 'lucide-react';
-import { deleteUnitTestImage, fetchUnitTestImages, type UnitTestImageRow } from '../services/api';
+import ListPageRefreshButton from './ListPageRefreshButton';
+import ListViewLoading from './ListViewLoading';
+import {
+  deleteUnitTestImage,
+  fetchUnitTestImages,
+  presignUnitTestImages,
+  type UnitTestImageRow,
+} from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
@@ -23,20 +30,36 @@ const UnitTestImagesPage: FC = () => {
   const [images, setImages] = useState<UnitTestImageRow[]>([]);
   const [manifestKey, setManifestKey] = useState('');
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadImages = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
       const data = await fetchUnitTestImages(workType);
-      setImages(data.images);
+      const rows = data.images;
       setManifestKey(data.manifestKey);
+      if (rows.length === 0) {
+        setImages([]);
+        return;
+      }
+      const urls = await presignUnitTestImages(rows.map((img) => img.s3Key));
+      setImages(rows.map((img) => ({ ...img, url: urls[img.s3Key] })));
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
   }, [workType]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadImages();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadImages]);
 
   useEffect(() => {
     if (outletCtx?.workMode !== 'test_data_reviewer') {
@@ -78,6 +101,8 @@ const UnitTestImagesPage: FC = () => {
   return (
     <div className="readings-list-page">
       <header className="page-header">
+        <div className="header-content list-page-header-with-actions">
+          <div className="list-page-header-lead">
         <div className="page-title">
           <ImageIcon size={32} strokeWidth={1.5} />
           <div>
@@ -96,12 +121,19 @@ const UnitTestImagesPage: FC = () => {
             </p>
           </div>
         </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => void handleRefresh()}
+            busy={refreshing || loading}
+            disabled={loading}
+            title="Reload unit test images from S3"
+          />
+        </div>
       </header>
 
-      {loading ? (
-        <p className="training-pipeline-bar-hint">
-          <Loader2 size={18} className="spin" /> Loading…
-        </p>
+      {loading && images.length === 0 ? <ListViewLoading message="Loading unit test images…" /> : null}
+      {loading && images.length > 0 ? (
+        <ListViewLoading variant="inline" message="Refreshing images…" />
       ) : null}
       {err ? <p className="training-hub-inline-error">{err}</p> : null}
 
@@ -109,6 +141,7 @@ const UnitTestImagesPage: FC = () => {
         <p className="pipeline-iterations-empty">No unit test images in this prefix yet.</p>
       ) : null}
 
+      {!loading ? (
       <div className="unit-test-images-grid">
         {images.map((img) => {
           const busy = deletingKey === img.s3Key;
@@ -155,6 +188,7 @@ const UnitTestImagesPage: FC = () => {
           );
         })}
       </div>
+      ) : null}
     </div>
   );
 };

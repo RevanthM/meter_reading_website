@@ -9,6 +9,8 @@ import {
   SlidersHorizontal,
   Upload,
 } from 'lucide-react';
+import ListPageRefreshButton from './ListPageRefreshButton';
+import ListViewLoading from './ListViewLoading';
 import ManualLabelLightbox from './ManualLabelLightbox';
 import { useAuth } from '../context/AuthContext';
 import { useReadings } from '../context/ReadingsContext';
@@ -54,8 +56,14 @@ const ManualUploadLabelPage: FC = () => {
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { userEmail } = useAuth();
-  const { workType, ensureReadingsLoaded, readingsLoading, getReadingsByStatus, refreshData } =
-    useReadings();
+  const {
+    workType,
+    ensureReadingsLoaded,
+    readingsLoading,
+    getReadingsByStatus,
+    upsertReading,
+    refreshData,
+  } = useReadings();
 
   const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
   const canUse = UPLOAD_ROLES.has(portalWorkMode);
@@ -65,6 +73,16 @@ const ManualUploadLabelPage: FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('new');
   const [datePreset, setDatePreset] = useState<DateRangePresetId | ''>('');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleListRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refreshData();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshData]);
 
   useEffect(() => {
     if (!canUse) {
@@ -154,7 +172,7 @@ const ManualUploadLabelPage: FC = () => {
       }
       setSavingId(r.id);
       try {
-        await patchSessionMetadata(
+        const fresh = await patchSessionMetadata(
           r.id,
           workType,
           {
@@ -170,7 +188,7 @@ const ManualUploadLabelPage: FC = () => {
           userEmail || undefined,
           portalWorkMode,
         );
-        await refreshData();
+        upsertReading(fresh);
         setDrafts((prev) => {
           const next = { ...prev };
           delete next[r.id];
@@ -184,7 +202,7 @@ const ManualUploadLabelPage: FC = () => {
         setSavingId(null);
       }
     },
-    [getDraft, portalWorkMode, refreshData, userEmail, workType],
+    [getDraft, portalWorkMode, upsertReading, userEmail, workType],
   );
 
   const saveLabelAndNext = useCallback(async () => {
@@ -196,7 +214,8 @@ const ManualUploadLabelPage: FC = () => {
   return (
     <div className="readings-list-page manual-label-page">
       <header className="page-header">
-        <div className="header-content reading-detail-header">
+        <div className="header-content reading-detail-header list-page-header-with-actions">
+          <div className="list-page-header-lead">
           <button type="button" className="back-button" onClick={() => navigate('/manual-upload')}>
             <ArrowLeft size={20} />
             <span>Back to upload</span>
@@ -208,6 +227,13 @@ const ManualUploadLabelPage: FC = () => {
               <p>Click a photo to zoom. Type a 4-digit reading and save.</p>
             </div>
           </div>
+          </div>
+          <ListPageRefreshButton
+            onRefresh={() => void handleListRefresh()}
+            busy={refreshing || readingsLoading}
+            disabled={readingsLoading}
+            title="Reload manual uploads from S3"
+          />
         </div>
       </header>
 
@@ -284,10 +310,12 @@ const ManualUploadLabelPage: FC = () => {
         </div>
       </div>
 
-      {readingsLoading ? (
-        <p className="training-pipeline-bar-hint manual-label-loading">
-          <Loader2 size={18} className="spin" /> Loading sessions…
-        </p>
+      {readingsLoading && queue.length === 0 ? (
+        <ListViewLoading message="Loading uploaded images…" />
+      ) : null}
+
+      {readingsLoading && queue.length > 0 ? (
+        <ListViewLoading variant="inline" message="Refreshing uploads…" />
       ) : null}
 
       {!readingsLoading && queue.length === 0 ? (

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ArrowLeft, Calendar, Eye, Inbox, Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { ArrowLeft, Calendar, Eye, Inbox, Loader2, XCircle } from 'lucide-react';
+import ListPageRefreshButton from './ListPageRefreshButton';
+import ListViewLoading from './ListViewLoading';
 import { useReadings } from '../context/ReadingsContext';
 import { useAuth } from '../context/AuthContext';
 import { removeSessionFromTestDataset } from '../services/api';
@@ -87,7 +89,7 @@ const TestDataPendingPage: FC = () => {
   return (
     <div className="readings-list-page">
       <header className="page-header">
-        <div className="header-content test-data-pending-header">
+        <div className="header-content test-data-pending-header list-page-header-with-actions">
           <div className="test-data-pending-header-lead">
             <button type="button" className="back-button" onClick={() => navigate('/')}>
               <ArrowLeft size={20} />
@@ -105,25 +107,23 @@ const TestDataPendingPage: FC = () => {
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            className="view-button test-data-pending-refresh-btn"
-            onClick={() => void handleRefresh()}
-            disabled={readingsLoading || refreshing}
-            aria-busy={refreshing}
-          >
-            <RefreshCw size={16} className={refreshing || readingsLoading ? 'spin' : ''} aria-hidden />
-            Refresh
-          </button>
+          <ListPageRefreshButton
+            onRefresh={() => void handleRefresh()}
+            busy={refreshing || readingsLoading}
+            disabled={readingsLoading}
+            title="Reload pending sessions from S3"
+          />
         </div>
       </header>
 
       <main className="list-content">
         <div className="table-container">
-          {readingsLoading ? (
-            <p className="training-pipeline-bar-hint">
-              <Loader2 size={18} className="spin" /> Loading sessions…
-            </p>
+          {readingsLoading && pending.length === 0 ? (
+            <ListViewLoading message="Loading pending sessions…" />
+          ) : null}
+
+          {readingsLoading && pending.length > 0 ? (
+            <ListViewLoading variant="inline" message="Refreshing sessions…" />
           ) : null}
 
           {!readingsLoading && pending.length === 0 ? (

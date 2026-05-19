@@ -1,5 +1,5 @@
 /**
- * Test-data reviewer: approve sessions → unit_test_images + unittestng_manifest.xlsx
+ * Test-data reviewer: approve sessions → unit_test_images + unittestng_manifest.json
  */
 import {
   CopyObjectCommand,
@@ -15,7 +15,8 @@ import {
   removeUnitTestManifestByS3Key,
   unitTestImagesPrefix,
   upsertUnitTestManifestRow,
-  readUnitTestManifestRows,
+  isUnitTestManifestObjectKey,
+  readUnitTestManifestRowsCached,
   writeUnitTestManifestRows,
 } from './unitTestManifest.js';
 
@@ -344,7 +345,7 @@ export async function listUnitTestImages(s3Client, bucket, workType) {
       if (!name || name.includes('/')) continue;
       const lower = name.toLowerCase();
       if (!IMAGE_SUFFIXES.some((s) => lower.endsWith(s))) continue;
-      if (lower === 'unittestng_manifest.xlsx') continue;
+      if (isUnitTestManifestObjectKey(name)) continue;
       images.push({
         s3Key: key,
         fileName: name,
@@ -355,7 +356,7 @@ export async function listUnitTestImages(s3Client, bucket, workType) {
     token = out.NextContinuationToken;
   } while (token);
 
-  const { rows: manifestRows, key: manifestKey } = await readUnitTestManifestRows(s3Client, bucket, workType);
+  const { rows: manifestRows, key: manifestKey } = await readUnitTestManifestRowsCached(s3Client, bucket, workType);
   const byKey = new Map(manifestRows.map((r) => [r.s3_key || `${prefix}${r.image_file_name}`, r]));
 
   return {
@@ -374,25 +375,45 @@ export async function listUnitTestImages(s3Client, bucket, workType) {
   };
 }
 
+export async function getUnitTestImageByFileName(s3Client, bucket, workType, fileName) {
+  const safeName = String(fileName || '').split('/').pop() || '';
+  if (!safeName) return null;
+  const prefix = unitTestImagesPrefix(workType);
+  const s3Key = `${prefix}${safeName}`;
+  const { rows: manifestRows } = await readUnitTestManifestRowsCached(s3Client, bucket, workType);
+  const row = manifestRows.find((r) => r.image_file_name === safeName || r.s3_key === s3Key);
+  const parsed = parseUnitTestImageFileName(safeName);
+  return {
+    s3Key: row?.s3_key || s3Key,
+    fileName: safeName,
+    expectedMeterValue: row?.expected_meter_value || parsed?.expected || null,
+    imageDifficulty: row?.image_difficulty || parsed?.difficulty || 'normal',
+  };
+}
+
 /**
  * @param {import('express').Express} app
- * @param {{ s3Client, BUCKET_NAME: string, findReadingAcrossWorkTypes: Function, normalizeS3SessionPrefix: Function, streamToString: Function, getPresignedUrl: Function, invalidateCache?: Function }} deps
+ * @param {{ s3Client, BUCKET_NAME: string, resolveReadingById: Function, normalizeS3SessionPrefix: Function, streamToString: Function, getPresignedUrl: Function, invalidateReadingsCache?: Function }} deps
  */
 export function registerTestDataReviewRoutes(app, deps) {
   const {
     s3Client,
     BUCKET_NAME,
-    findReadingAcrossWorkTypes,
+    resolveReadingById,
     normalizeS3SessionPrefix,
     streamToString,
     getPresignedUrl,
-    invalidateCache,
+    invalidateReadingsCache,
   } = deps;
 
   app.get('/api/test-data/unit-test-images', async (req, res) => {
     try {
       const workType = String(req.query.workType || '1000').trim() || '1000';
+      const presignAll = req.query.presign === '1' || req.query.presign === 'true';
       const data = await listUnitTestImages(s3Client, BUCKET_NAME, workType);
+      if (!presignAll) {
+        return res.json(data);
+      }
       const images = await Promise.all(
         data.images.map(async (img) => ({
           ...img,
@@ -403,6 +424,50 @@ export function registerTestDataReviewRoutes(app, deps) {
     } catch (e) {
       console.error('GET /api/test-data/unit-test-images:', e);
       res.status(500).json({ error: e.message || 'Failed to list unit test images' });
+    }
+  });
+
+  app.get('/api/test-data/unit-test-images/by-file/:fileName', async (req, res) => {
+    try {
+      const workType = String(req.query.workType || '1000').trim() || '1000';
+      let fileName = req.params.fileName || '';
+      try {
+        fileName = decodeURIComponent(fileName);
+      } catch {
+        /* keep raw */
+      }
+      const row = await getUnitTestImageByFileName(s3Client, BUCKET_NAME, workType, fileName);
+      if (!row) {
+        return res.status(404).json({ error: 'Image not found.' });
+      }
+      const url = await getPresignedUrl(row.s3Key);
+      res.json({ ...row, url, workType });
+    } catch (e) {
+      console.error('GET /api/test-data/unit-test-images/by-file:', e);
+      res.status(500).json({ error: e.message || 'Failed to load unit test image' });
+    }
+  });
+
+  app.post('/api/test-data/unit-test-images/presign', async (req, res) => {
+    try {
+      const keys = req.body?.s3Keys;
+      if (!Array.isArray(keys) || keys.length === 0) {
+        return res.status(400).json({ error: 's3Keys must be a non-empty array.' });
+      }
+      if (keys.length > 250) {
+        return res.status(400).json({ error: 'Too many keys (max 250 per request).' });
+      }
+      const unique = [...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean))];
+      const urls = {};
+      await Promise.all(
+        unique.map(async (s3Key) => {
+          urls[s3Key] = await getPresignedUrl(s3Key);
+        }),
+      );
+      res.json({ urls });
+    } catch (e) {
+      console.error('POST /api/test-data/unit-test-images/presign:', e);
+      res.status(500).json({ error: e.message || 'Failed to presign unit test images' });
     }
   });
 
@@ -474,16 +539,16 @@ export function registerTestDataReviewRoutes(app, deps) {
       }
 
       const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
-      const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
+      const reading = await resolveReadingById(sessionId, {
+        workTypeHint,
+        s3SessionPrefix: clientPrefix,
+      });
       if (!reading?.s3SessionPrefix) {
         return res.status(404).json({ error: 'Reading not found.' });
       }
 
-      let serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
-      const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
-      if (clientPrefix) {
-        serverPrefix = clientPrefix;
-      }
+      const serverPrefix = clientPrefix || normalizeS3SessionPrefix(reading.s3SessionPrefix);
       const metaKey = `${serverPrefix}metadata.json`;
       const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
       const meta = JSON.parse(await streamToString(getOut.Body));
@@ -515,11 +580,14 @@ export function registerTestDataReviewRoutes(app, deps) {
         }),
       );
 
-      if (typeof invalidateCache === 'function') {
-        invalidateCache();
+      if (typeof invalidateReadingsCache === 'function') {
+        invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
       }
 
-      const fresh = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      const fresh = await resolveReadingById(sessionId, {
+        workTypeHint,
+        s3SessionPrefix: serverPrefix,
+      });
       res.json({ ok: true, ...result, reading: fresh });
     } catch (e) {
       console.error('POST /api/test-data/remove-from-dataset:', e);
@@ -540,12 +608,16 @@ export function registerTestDataReviewRoutes(app, deps) {
       }
 
       const workTypeHint = typeof req.body?.workType === 'string' ? req.body.workType.trim() : '';
-      const reading = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      const clientPrefix = normalizeS3SessionPrefix(req.body?.s3SessionPrefix);
+      const reading = await resolveReadingById(sessionId, {
+        workTypeHint,
+        s3SessionPrefix: clientPrefix,
+      });
       if (!reading?.s3SessionPrefix) {
         return res.status(404).json({ error: 'Reading not found.' });
       }
 
-      const serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
+      const serverPrefix = clientPrefix || normalizeS3SessionPrefix(reading.s3SessionPrefix);
       const metaKey = `${serverPrefix}metadata.json`;
       const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
       const meta = JSON.parse(await streamToString(getOut.Body));
@@ -579,11 +651,14 @@ export function registerTestDataReviewRoutes(app, deps) {
         }),
       );
 
-      if (typeof invalidateCache === 'function') {
-        invalidateCache();
+      if (typeof invalidateReadingsCache === 'function') {
+        invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
       }
 
-      const fresh = await findReadingAcrossWorkTypes(sessionId, workTypeHint);
+      const fresh = await resolveReadingById(sessionId, {
+        workTypeHint,
+        s3SessionPrefix: serverPrefix,
+      });
       res.json({ ok: true, ...result, reading: fresh });
     } catch (e) {
       console.error('POST /api/test-data/approve:', e);

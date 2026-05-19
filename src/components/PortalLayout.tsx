@@ -104,11 +104,20 @@ const PortalLayout: FC = () => {
     return false;
   });
 
-  const onWorkModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const next = e.target.value as PortalWorkMode;
-    setWorkMode(next);
-    setStoredPortalWorkMode(next);
-  }, []);
+  const onWorkModeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const next = e.target.value as PortalWorkMode;
+      if (next === workMode) return;
+      setWorkMode(next);
+      setStoredPortalWorkMode(next);
+      setMobileNavOpen(false);
+      // Each role has its own home dashboard; leave role-specific routes (e.g. awaiting review list).
+      if (pathname !== '/') {
+        navigate('/', { replace: true });
+      }
+    },
+    [navigate, pathname, workMode],
+  );
 
   const { mainLinks, moreLinks, roleHint } = useMemo((): {
     mainLinks: NavLeaf[];
@@ -155,7 +164,7 @@ const PortalLayout: FC = () => {
           {
             path: '/test-data/images',
             label: 'Unit test images',
-            description: 'unittestng_manifest.xlsx',
+            description: 'unittestng_manifest.json',
             hint: 'Flat images under unit_test_images/',
             icon: <ListTree size={17} />,
           },

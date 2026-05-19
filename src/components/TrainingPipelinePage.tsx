@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Navigate, Link, useOutletContext } from 'react-router-dom';
 import { ArrowLeft, GraduationCap, Loader2, Download, Upload, Link2, RefreshCw } from 'lucide-react';
+import ListPageRefreshButton from './ListPageRefreshButton';
 import type { FC } from 'react';
 import {
   fetchTrainingDatasets,
@@ -65,6 +66,7 @@ const TrainingPipelinePage: FC = () => {
   const [weightsFile, setWeightsFile] = useState<File | null>(null);
   const [weightsBusy, setWeightsBusy] = useState(false);
   const [weightsUrlBusy, setWeightsUrlBusy] = useState(false);
+  const [pageRefreshing, setPageRefreshing] = useState(false);
   const [weightsMsg, setWeightsMsg] = useState<string | null>(null);
   const weightsInputRef = useRef<HTMLInputElement>(null);
 
@@ -112,6 +114,16 @@ const TrainingPipelinePage: FC = () => {
       setLoading(false);
     }
   }, [segment]);
+
+  const handlePageRefresh = useCallback(async () => {
+    setPageRefreshing(true);
+    try {
+      await load();
+      if (row?.folderPrefix) await loadCopiedPreview(row.folderPrefix);
+    } finally {
+      setPageRefreshing(false);
+    }
+  }, [load, loadCopiedPreview, row?.folderPrefix]);
 
   useEffect(() => {
     void load();
@@ -187,8 +199,8 @@ const TrainingPipelinePage: FC = () => {
   return (
     <div className="detail-page training-pipeline-page">
       <header className="page-header">
-        <div className="header-content training-pipeline-header">
-          <div className="training-pipeline-header-lead">
+        <div className="header-content training-pipeline-header list-page-header-with-actions">
+          <div className="training-pipeline-header-lead list-page-header-lead">
             <button type="button" className="back-button" onClick={() => navigate('/training')}>
               <ArrowLeft size={20} />
               <span>Training</span>
@@ -205,6 +217,12 @@ const TrainingPipelinePage: FC = () => {
               </div>
             </div>
           </div>
+          <ListPageRefreshButton
+            onRefresh={() => void handlePageRefresh()}
+            busy={pageRefreshing || loading}
+            disabled={loading}
+            title="Reload dataset and copied sessions"
+          />
           {!loading && row ? (
             <div className="training-pipeline-header-zip" aria-labelledby="training-pipeline-zip-title">
               <h2 id="training-pipeline-zip-title" className="training-pipeline-header-zip-title">

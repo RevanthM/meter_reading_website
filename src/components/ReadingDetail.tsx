@@ -509,13 +509,54 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   );
 };
 
+function applyDetailFormToReading(
+  base: S3MeterReading,
+  opts: {
+    selectedStatus: ReadingStatus;
+    userCorrection: string;
+    mlPrediction: string;
+    comments: string;
+    localDialRows: DialDetailRow[];
+    datasetDestination: ReviewerDatasetDestination;
+    imageDifficulty: ImageDifficulty;
+    isManualUploadQueue: boolean;
+    isReviewerSaveMode: boolean;
+    markReviewed?: boolean;
+  },
+): S3MeterReading {
+  const reviewerDatasetDestination = opts.isReviewerSaveMode
+    ? opts.datasetDestination
+    : base.reviewerDatasetDestination;
+  return {
+    ...base,
+    status: opts.selectedStatus,
+    expectedValue: opts.userCorrection || undefined,
+    meterValue: opts.isManualUploadQueue ? opts.userCorrection : opts.mlPrediction,
+    comments: opts.comments,
+    dialDetails: opts.localDialRows.length > 0 ? opts.localDialRows : base.dialDetails,
+    reviewerDatasetDestination,
+    reviewerRecommendTraining:
+      reviewerDatasetDestination === 'training' ||
+      (reviewerDatasetDestination == null && base.reviewerRecommendTraining === true),
+    imageDifficulty: opts.isReviewerSaveMode ? opts.imageDifficulty : base.imageDifficulty,
+    isManuallyReviewed: opts.markReviewed ? true : base.isManuallyReviewed,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 const ReadingDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { getReadingById, updateReadingStatus, updateReadingComments, refreshData, workType: contextWorkType } =
-    useReadings();
+  const {
+    getReadingById,
+    updateReadingStatus,
+    updateReadingComments,
+    upsertReading,
+    refreshCounts,
+    workType: contextWorkType,
+  } = useReadings();
   const { userEmail } = useAuth();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
@@ -633,7 +674,7 @@ const ReadingDetail: React.FC = () => {
     setFetchLoading(true);
     setFetchError(false);
 
-    fetchReadingById(id, workTypeForApi)
+    fetchReadingById(id, workTypeForApi, contextReading?.s3SessionPrefix)
       .then((data) => {
         if (!cancelled) {
           if (data) {
@@ -649,7 +690,7 @@ const ReadingDetail: React.FC = () => {
       .finally(() => { if (!cancelled) setFetchLoading(false); });
 
     return () => { cancelled = true; };
-  }, [id, workTypeForApi]);
+  }, [id, workTypeForApi, contextReading?.s3SessionPrefix]);
 
   useEffect(() => {
     if (!reading) return;
@@ -743,14 +784,31 @@ const ReadingDetail: React.FC = () => {
 
       setIsSaving(true);
       try {
-        await updateReadingStatus(r.id, selectedStatus, r);
-        const latest = await fetchReadingById(r.id, workTypeForApi);
-        if (latest) {
-          setDirectReading(latest);
-          updateReadingComments(latest.id, latest.comments || '');
-          setSelectedStatus(latest.status);
-        }
-        await refreshData();
+        const optimistic = applyDetailFormToReading(r, {
+          selectedStatus,
+          userCorrection,
+          mlPrediction,
+          comments,
+          localDialRows,
+          datasetDestination,
+          imageDifficulty,
+          isManualUploadQueue,
+          isReviewerSaveMode,
+        });
+        setDirectReading(optimistic);
+        upsertReading(optimistic);
+        setSelectedStatus(selectedStatus);
+        updateReadingComments(optimistic.id, optimistic.comments || '');
+
+        await updateReadingStatus(r.id, selectedStatus, optimistic);
+        void fetchReadingById(r.id, workTypeForApi, r.s3SessionPrefix).then((latest) => {
+          if (latest) {
+            setDirectReading(latest);
+            upsertReading(latest);
+            setSelectedStatus(latest.status);
+          }
+        });
+
         setIsSaved(true);
         setTimeout(() => setIsSaved(false), 2000);
         return true;
@@ -784,7 +842,25 @@ const ReadingDetail: React.FC = () => {
     const statusWillChange = selectedStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
 
+    const optimistic = applyDetailFormToReading(snapshotForMove, {
+      selectedStatus,
+      userCorrection,
+      mlPrediction,
+      comments,
+      localDialRows,
+      datasetDestination,
+      imageDifficulty,
+      isManualUploadQueue,
+      isReviewerSaveMode,
+      markReviewed: shouldMarkManual,
+    });
+    setDirectReading(optimistic);
+    upsertReading(optimistic);
+    setSelectedStatus(optimistic.status);
+    updateReadingComments(optimistic.id, optimistic.comments || '');
+
     setIsSaving(true);
+    let savedReading: S3MeterReading | null = null;
     try {
       if (metaDirty || shouldMarkManual) {
         const patch: SessionMetadataPatch = {};
@@ -818,28 +894,55 @@ const ReadingDetail: React.FC = () => {
           patch.is_manually_reviewed = true;
         }
 
-        const fresh = await patchSessionMetadata(
+        savedReading = await patchSessionMetadata(
           r.id,
           workTypeForApi,
           { s3SessionPrefix: r.s3SessionPrefix, patch },
           userEmail || undefined,
           portalWorkMode,
         );
-        setDirectReading(fresh);
+        const merged = applyDetailFormToReading(savedReading, {
+          selectedStatus,
+          userCorrection,
+          mlPrediction,
+          comments,
+          localDialRows,
+          datasetDestination,
+          imageDifficulty,
+          isManualUploadQueue,
+          isReviewerSaveMode,
+          markReviewed: shouldMarkManual,
+        });
+        setDirectReading(merged);
+        upsertReading(merged);
+        setSelectedStatus(merged.status);
       }
 
-      if (isReviewerSaveMode && selectedStatus !== snapshotForMove.status) {
-        await updateReadingStatus(snapshotForMove.id, selectedStatus, snapshotForMove);
+      if (isReviewerSaveMode && statusWillChange) {
+        const moveSnapshot = savedReading
+          ? applyDetailFormToReading(savedReading, {
+              selectedStatus,
+              userCorrection,
+              mlPrediction,
+              comments,
+              localDialRows,
+              datasetDestination,
+              imageDifficulty,
+              isManualUploadQueue,
+              isReviewerSaveMode,
+              markReviewed: shouldMarkManual,
+            })
+          : optimistic;
+        await updateReadingStatus(snapshotForMove.id, selectedStatus, moveSnapshot);
+        void fetchReadingById(r.id, workTypeForApi, r.s3SessionPrefix).then((latest) => {
+          if (latest) {
+            setDirectReading(latest);
+            upsertReading(latest);
+            setSelectedStatus(latest.status);
+          }
+        });
       }
 
-      const latest = await fetchReadingById(r.id, workTypeForApi);
-      if (latest) {
-        setDirectReading(latest);
-        updateReadingComments(latest.id, latest.comments || '');
-        setSelectedStatus(latest.status);
-      }
-
-      await refreshData();
       setIsSaved(true);
       setTimeout(() => setIsSaved(false), 2000);
       return true;
@@ -863,7 +966,8 @@ const ReadingDetail: React.FC = () => {
     userEmail,
     updateReadingStatus,
     updateReadingComments,
-    refreshData,
+    upsertReading,
+    refreshCounts,
     datasetDestination,
     imageDifficulty,
     isReviewerSaveMode,
@@ -880,16 +984,22 @@ const ReadingDetail: React.FC = () => {
         const saved = await performSaveAction();
         if (!saved) return;
       }
-      const res = await approveSessionForUnitTest(r.id, workTypeForApi, userEmail || undefined);
+      const res = await approveSessionForUnitTest(
+        r.id,
+        workTypeForApi,
+        userEmail || undefined,
+        r.s3SessionPrefix,
+      );
       setDirectReading(res.reading);
-      await refreshData();
+      upsertReading(res.reading);
+      void refreshCounts({ silent: true });
       window.alert(`Approved — unit test image ${res.fileName} uploaded and manifest updated.`);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Approve failed');
     } finally {
       setApproveBusy(false);
     }
-  }, [contextReading, directReading, isDirty, performSaveAction, refreshData, userEmail, workTypeForApi]);
+  }, [contextReading, directReading, isDirty, performSaveAction, upsertReading, refreshCounts, userEmail, workTypeForApi]);
 
   const handleRemoveFromTestDataset = useCallback(async () => {
     const r = directReading || contextReading;
@@ -903,13 +1013,14 @@ const ReadingDetail: React.FC = () => {
         const saved = await performSaveAction();
         if (!saved) return;
       }
-      await removeSessionFromTestDataset(
+      const res = await removeSessionFromTestDataset(
         r.id,
         workTypeForApi,
         userEmail || undefined,
         r.s3SessionPrefix,
       );
-      await refreshData();
+      if (res.reading) upsertReading(res.reading);
+      void refreshCounts({ silent: true });
       goBackToList();
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Remove from test dataset failed');
@@ -922,7 +1033,8 @@ const ReadingDetail: React.FC = () => {
     goBackToList,
     isDirty,
     performSaveAction,
-    refreshData,
+    refreshCounts,
+    upsertReading,
     userEmail,
     workTypeForApi,
   ]);

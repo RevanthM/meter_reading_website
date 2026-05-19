@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>AMR Portal User Manual</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="/Users/reeti/Desktop/Anica/AMR - Repos/meter_reading_website/docs/user-manual/manual-pdf.css" />
+</head>
+<body>
+<div class="manual-cover">
+  <h1>AMR Portal — User Manual</h1>
+  <p class="subtitle">
+    Meter Reading Operations Portal — review captures, label readings, route sessions to training or unit tests, and manage model-training workflows.
+  </p>
+  <p class="meta">
+    <strong>Audience:</strong> Reviewers · Test-data reviewers · Labelers · Admins<br />
+    <strong>Version:</strong> May 2026
+  </p>
+</div>
+<header id="title-block-header">
+<h1 class="title">AMR Portal User Manual</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#amr-portal-user-manual"
+id="toc-amr-portal-user-manual">AMR Portal — User Manual</a>
+<ul>
+<li><a href="#signing-in" id="toc-signing-in">1. Signing in</a></li>
+<li><a href="#portal-layout-and-roles"
+id="toc-portal-layout-and-roles">2. Portal layout and roles</a></li>
+<li><a href="#work-type-and-data-source"
+id="toc-work-type-and-data-source">3. Work type and data source</a></li>
+<li><a href="#dashboard-home" id="toc-dashboard-home">4. Dashboard
+(Home)</a></li>
+<li><a href="#reviewer-workflow" id="toc-reviewer-workflow">5. Reviewer
+workflow</a></li>
+<li><a href="#manual-bulk-upload-and-labeling"
+id="toc-manual-bulk-upload-and-labeling">6. Manual bulk upload and
+labeling</a></li>
+<li><a href="#session-detail-reading-detail"
+id="toc-session-detail-reading-detail">7. Session detail (reading
+detail)</a></li>
+<li><a href="#test-data-reviewer" id="toc-test-data-reviewer">8. Test
+data reviewer</a></li>
+<li><a href="#labeler-and-model-training"
+id="toc-labeler-and-model-training">9. Labeler and model
+training</a></li>
+<li><a href="#admin-model-factory-and-iterations"
+id="toc-admin-model-factory-and-iterations">10. Admin: Model Factory and
+iterations</a></li>
+<li><a href="#usage-and-models-pages"
+id="toc-usage-and-models-pages">11. Usage and Models pages</a></li>
+<li><a href="#troubleshooting" id="toc-troubleshooting">12.
+Troubleshooting</a></li>
+<li><a href="#appendix-a-status-glossary"
+id="toc-appendix-a-status-glossary">Appendix A — Status
+glossary</a></li>
+<li><a href="#appendix-b-screenshot-index"
+id="toc-appendix-b-screenshot-index">Appendix B — Screenshot
+index</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="amr-portal-user-manual">AMR Portal — User Manual</h1>
+<p><strong>Meter Reading Operations Portal</strong><br />
+Review field and simulator captures, correct readings, route sessions to
+training or unit tests, and manage model-training pipelines.</p>
+<table>
+<tbody>
+<tr>
+<td><strong>Audience</strong></td>
+<td>Reviewers, test-data reviewers, labelers, admins</td>
+</tr>
+<tr>
+<td><strong>Browser</strong></td>
+<td>Chrome or Edge (latest recommended)</td>
+</tr>
+<tr>
+<td><strong>Screenshots</strong></td>
+<td><a href="user-manual/images/">user-manual/images/</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="signing-in">1. Signing in</h2>
+<ol type="1">
+<li>Open the portal URL provided by your administrator.</li>
+<li>Sign in with your <strong>Anica user ID and password</strong>
+(device verification / OTP if your account requires it).</li>
+<li>After login you land on the <strong>Dashboard</strong> with the
+sidebar on the left.</li>
+</ol>
+<figure>
+<img src="user-manual/images/01-login.png" alt="Login screen" />
+<figcaption aria-hidden="true">Login screen</figcaption>
+</figure>
+<p><strong>Access denied?</strong> Contact your IT administrator.</p>
+<hr />
+<h2 id="portal-layout-and-roles">2. Portal layout and roles</h2>
+<h3 id="main-areas">Main areas</h3>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Sidebar</strong></td>
+<td>Navigation, role selector, work type</td>
+</tr>
+<tr>
+<td><strong>Header</strong></td>
+<td>Page title, filters, actions</td>
+</tr>
+<tr>
+<td><strong>Content</strong></td>
+<td>Lists, charts, session detail</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<img src="user-manual/images/03-sidebar-reviewer.png"
+alt="Sidebar — reviewer role" />
+<figcaption aria-hidden="true">Sidebar — reviewer role</figcaption>
+</figure>
+<h3 id="role-selector">Role selector</h3>
+<p>Use the <strong>Role</strong> dropdown at the top of the sidebar. The
+role controls which menu items appear and what you are allowed to
+save.</p>
+<table>
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 41%" />
+<col style="width: 43%" />
+</colgroup>
+<thead>
+<tr>
+<th>Role</th>
+<th>Typical user</th>
+<th>What you can do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>reviewer</strong></td>
+<td>Field QA / operations</td>
+<td>Review new captures, set correct/incorrect, fix readings, send to
+training or test dataset, set image difficulty</td>
+</tr>
+<tr>
+<td><strong>test data reviewer</strong></td>
+<td>ML / QA</td>
+<td>Approve test-dataset picks into unit test images; manage unit test
+manifest</td>
+</tr>
+<tr>
+<td><strong>labeler</strong></td>
+<td>Training ops</td>
+<td>Move sessions through training pipeline folders; Model Training
+Center</td>
+</tr>
+<tr>
+<td><strong>admin</strong></td>
+<td>Platform owner</td>
+<td>Everything labeler has, plus Model Factory, iteration registry, all
+readings, manual upload</td>
+</tr>
+</tbody>
+</table>
+<p>The role is stored in your browser. Pick the role that matches the
+task you are doing.</p>
+<h3 id="welcome-dialog">Welcome dialog</h3>
+<p>On first visit you may see a <strong>Welcome</strong> dialog with a
+status glossary. Close it for this session, dismiss it permanently, or
+reopen it from the sidebar <strong>Help</strong> control.</p>
+<figure>
+<img src="user-manual/images/02-welcome-modal.png"
+alt="Welcome dialog" />
+<figcaption aria-hidden="true">Welcome dialog</figcaption>
+</figure>
+<hr />
+<h2 id="work-type-and-data-source">3. Work type and data source</h2>
+<h3 id="work-type">Work type</h3>
+<p>Meter data is grouped by <strong>work type</strong> (for example
+<code>1000</code>, <code>2000</code>, … <code>5000</code>). Use the
+work-type control in the sidebar to switch buckets. All lists and counts
+apply to the selected work type only.</p>
+<h3 id="field-vs-simulator">Field vs simulator</h3>
+<p>Sessions are tagged as <strong>Field</strong> (real captures) or
+<strong>Simulator</strong> (synthetic). This affects folder names when
+sessions are promoted to “correct” storage. Manual uploads let you pick
+source at upload time.</p>
+<hr />
+<h2 id="dashboard-home">4. Dashboard (Home)</h2>
+<p>The dashboard shows KPIs and shortcuts that depend on your role.</p>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 73%" />
+</colgroup>
+<thead>
+<tr>
+<th>Role</th>
+<th>Dashboard focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>reviewer</strong></td>
+<td>Awaiting review count, correct / wrong queues, uploads today</td>
+</tr>
+<tr>
+<td><strong>test data reviewer</strong></td>
+<td>Pending test data, link to unit test images</td>
+</tr>
+<tr>
+<td><strong>labeler</strong></td>
+<td>Model Training Center, pipeline stage counts</td>
+</tr>
+<tr>
+<td><strong>admin</strong></td>
+<td>Full metrics, improvement charts, links to factory and registry</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<img src="user-manual/images/02-dashboard-reviewer.png"
+alt="Dashboard — reviewer" />
+<figcaption aria-hidden="true">Dashboard — reviewer</figcaption>
+</figure>
+<p>Click any KPI card to open the related list.</p>
+<hr />
+<h2 id="reviewer-workflow">5. Reviewer workflow</h2>
+<h3 id="awaiting-review">5.1 Awaiting review</h3>
+<p><strong>Sidebar → Awaiting review</strong></p>
+<p>Lists captures that are <strong>not manually reviewed</strong>
+yet.</p>
+<figure>
+<img src="user-manual/images/04-awaiting-review-list.png"
+alt="Awaiting review list" />
+<figcaption aria-hidden="true">Awaiting review list</figcaption>
+</figure>
+<p><strong>Typical steps:</strong></p>
+<ol type="1">
+<li>Open a session from the list.</li>
+<li>Inspect images and model reading.</li>
+<li>Set outcome: <strong>Correct</strong>, <strong>Incorrect</strong>,
+<strong>No dials</strong>, or <strong>Not sure</strong>.</li>
+<li>Enter or correct the <strong>4-digit reading</strong> if
+needed.</li>
+<li>Optionally set <strong>image difficulty</strong> (Normal / Difficult
+/ Very difficult).</li>
+<li>Optionally mark <strong>Send to training dataset</strong> or
+<strong>Send to test dataset</strong>.</li>
+<li>Click <strong>Save</strong>.</li>
+</ol>
+<h3 id="wrong-reviewed">5.2 Wrong (reviewed)</h3>
+<p>Sessions already reviewed as incorrect appear in pipeline folders
+(analyzed → labeled → training). Use <strong>Wrong (reviewed)</strong>
+in the sidebar.</p>
+<figure>
+<img src="user-manual/images/11-wrong-queues.png"
+alt="Wrong (reviewed) queues" />
+<figcaption aria-hidden="true">Wrong (reviewed) queues</figcaption>
+</figure>
+<h3 id="correct">5.3 Correct</h3>
+<p><strong>Sidebar → Correct</strong> — sessions accepted as good reads
+after review.</p>
+<figure>
+<img src="user-manual/images/10-correct-list.png" alt="Correct list" />
+<figcaption aria-hidden="true">Correct list</figcaption>
+</figure>
+<h3 id="list-filters">5.4 List filters</h3>
+<p>Most list pages support date presets, search by session ID or
+reading, and cohort filters where applicable. Click a row to open
+<strong>session detail</strong>.</p>
+<hr />
+<h2 id="manual-bulk-upload-and-labeling">6. Manual bulk upload and
+labeling</h2>
+<p>Available for <strong>reviewer</strong>, <strong>test data
+reviewer</strong>, and <strong>admin</strong>.</p>
+<h3 id="bulk-upload">6.1 Bulk upload</h3>
+<p><strong>Sidebar → Bulk upload</strong></p>
+<p>Upload many meter photos at once. Label readings on the next
+screen.</p>
+<figure>
+<img src="user-manual/images/06-bulk-upload.png" alt="Bulk upload" />
+<figcaption aria-hidden="true">Bulk upload</figcaption>
+</figure>
+<table>
+<colgroup>
+<col style="width: 42%" />
+<col style="width: 57%" />
+</colgroup>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Click the drop zone or <strong>Choose files</strong>, or drag
+JPEG/PNG images onto the zone</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Review thumbnails; use <strong>Clear selection</strong> to start
+over</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Choose <strong>Source</strong>: <strong>Simulator</strong> or
+<strong>Field</strong></td>
+</tr>
+<tr>
+<td>4</td>
+<td>Click <strong>Upload N images</strong></td>
+</tr>
+<tr>
+<td>5</td>
+<td>Open <strong>View uploaded images</strong> to label</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<img src="user-manual/images/07-bulk-upload-with-files.png"
+alt="Bulk upload with files selected" />
+<figcaption aria-hidden="true">Bulk upload with files
+selected</figcaption>
+</figure>
+<p><strong>Notes:</strong> Drag-and-drop <strong>adds</strong> files;
+the file picker <strong>replaces</strong> the selection. Batch size is
+limited by the server (typically 50 images).</p>
+<h3 id="label-uploads">6.2 Label uploads</h3>
+<p><strong>Sidebar → Label uploads</strong></p>
+<table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>Shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New</strong></td>
+<td>Uploads still needing a 4-digit reading</td>
+</tr>
+<tr>
+<td><strong>Reviewed</strong></td>
+<td>Labeled uploads</td>
+</tr>
+<tr>
+<td><strong>All</strong></td>
+<td>Everything matching the date filter</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<img src="user-manual/images/08-label-uploads.png"
+alt="Label uploads grid" />
+<figcaption aria-hidden="true">Label uploads grid</figcaption>
+</figure>
+<p><strong>To label:</strong></p>
+<ol type="1">
+<li>Click a thumbnail (opens <strong>lightbox</strong> with zoom and
+pan).</li>
+<li>Type a <strong>4-digit reading</strong> (leading zeros allowed,
+e.g. <code>0047</code>).</li>
+<li>Click <strong>Save label</strong> or <strong>Save &amp;
+next</strong>.</li>
+</ol>
+<figure>
+<img src="user-manual/images/09-label-lightbox.png"
+alt="Label lightbox" />
+<figcaption aria-hidden="true">Label lightbox</figcaption>
+</figure>
+<hr />
+<h2 id="session-detail-reading-detail">7. Session detail (reading
+detail)</h2>
+<p>Open any session from a list to inspect images, readings, and
+metadata.</p>
+<figure>
+<img src="user-manual/images/05-reading-detail.png"
+alt="Session detail" />
+<figcaption aria-hidden="true">Session detail</figcaption>
+</figure>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Status</strong></td>
+<td>Moves session to the matching workflow folder</td>
+</tr>
+<tr>
+<td><strong>User correction / ML prediction</strong></td>
+<td>Updates stored metadata</td>
+</tr>
+<tr>
+<td><strong>Dial digits</strong></td>
+<td>Per-dial edits when dial crops exist</td>
+</tr>
+<tr>
+<td><strong>Training / test dataset</strong></td>
+<td>Reviewer routing flags</td>
+</tr>
+<tr>
+<td><strong>Prev / Next</strong></td>
+<td>Queue navigation when opened from a list</td>
+</tr>
+</tbody>
+</table>
+<p>In <strong>labeler</strong> role, images are read-only here; use
+pipeline pages to move stages and <strong>reviewer</strong> role for
+outcomes.</p>
+<hr />
+<h2 id="test-data-reviewer">8. Test data reviewer</h2>
+<h3 id="pending-test-data">Pending test data</h3>
+<p><strong>Sidebar → Pending test data</strong> — sessions marked for
+the test dataset, not yet approved.</p>
+<figure>
+<img src="user-manual/images/13-test-data-pending.png"
+alt="Pending test data" />
+<figcaption aria-hidden="true">Pending test data</figcaption>
+</figure>
+<h3 id="unit-test-images">Unit test images</h3>
+<p><strong>Sidebar → Unit test images</strong> — flat image folder and
+manifest.</p>
+<figure>
+<img src="user-manual/images/14-test-data-images.png"
+alt="Unit test images" />
+<figcaption aria-hidden="true">Unit test images</figcaption>
+</figure>
+<p>Browse, set difficulty (<code>d1</code> / <code>d2</code> /
+<code>d3</code>), or delete entries (destructive — confirm
+carefully).</p>
+<hr />
+<h2 id="labeler-and-model-training">9. Labeler and model training</h2>
+<p><strong>Sidebar → Model Training</strong> — pipelines, copy sessions,
+export ZIPs, weights.</p>
+<figure>
+<img src="user-manual/images/15-training-hub.png"
+alt="Model Training Center" />
+<figcaption aria-hidden="true">Model Training Center</figcaption>
+</figure>
+<p>Open <strong>Training picks</strong> or pipeline stages (analyzed,
+labeled, in training) from the dashboard or training hub.</p>
+<hr />
+<h2 id="admin-model-factory-and-iterations">10. Admin: Model Factory and
+iterations</h2>
+<table>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr>
+<th>Page</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Model factory</strong></td>
+<td>Planning → data → label → train → test → deployed</td>
+</tr>
+<tr>
+<td><strong>Iterations table</strong></td>
+<td>Registry spreadsheet and charts</td>
+</tr>
+<tr>
+<td><strong>All readings</strong></td>
+<td>Full session list with filters</td>
+</tr>
+</tbody>
+</table>
+<figure>
+<img src="user-manual/images/16-dashboard-admin.png"
+alt="Dashboard — admin" />
+<figcaption aria-hidden="true">Dashboard — admin</figcaption>
+</figure>
+<figure>
+<img src="user-manual/images/17-model-factory.png"
+alt="Model Factory" />
+<figcaption aria-hidden="true">Model Factory</figcaption>
+</figure>
+<figure>
+<img src="user-manual/images/18-pipeline-iterations.png"
+alt="Iterations table" />
+<figcaption aria-hidden="true">Iterations table</figcaption>
+</figure>
+<figure>
+<img src="user-manual/images/19-all-readings.png" alt="All readings" />
+<figcaption aria-hidden="true">All readings</figcaption>
+</figure>
+<p>Admin also has <strong>Bulk upload</strong> and <strong>Label
+uploads</strong> (same as reviewer).</p>
+<hr />
+<h2 id="usage-and-models-pages">11. Usage and Models pages</h2>
+<h3 id="usage">Usage</h3>
+<p>Sessions, image counts, and distinct users <strong>per
+day</strong>.</p>
+<figure>
+<img src="user-manual/images/20-usage.png" alt="Usage summary" />
+<figcaption aria-hidden="true">Usage summary</figcaption>
+</figure>
+<h3 id="models">Models</h3>
+<p>App version mix and session distribution over time.</p>
+<figure>
+<img src="user-manual/images/21-models.png" alt="Models" />
+<figcaption aria-hidden="true">Models</figcaption>
+</figure>
+<hr />
+<h2 id="troubleshooting">12. Troubleshooting</h2>
+<table>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 59%" />
+</colgroup>
+<thead>
+<tr>
+<th>Problem</th>
+<th>What to try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Blank lists after login</td>
+<td>Confirm <strong>work type</strong> in sidebar; wait for loading to
+finish</td>
+</tr>
+<tr>
+<td>Save fails with 403</td>
+<td>Switch to <strong>reviewer</strong> role (admin uses reviewer save
+permissions)</td>
+</tr>
+<tr>
+<td>Upload fails</td>
+<td>Check file type (JPEG/PNG), size limits, and network</td>
+</tr>
+<tr>
+<td>Old UI after deploy</td>
+<td>Hard refresh (Ctrl+Shift+R / Cmd+Shift+R)</td>
+</tr>
+<tr>
+<td>Model Factory empty</td>
+<td>Server must have Roboflow API key configured</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="appendix-a-status-glossary">Appendix A — Status glossary</h2>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Correct</strong></td>
+<td>Reviewed good read</td>
+</tr>
+<tr>
+<td><strong>Awaiting review</strong></td>
+<td>Not manually reviewed yet</td>
+</tr>
+<tr>
+<td><strong>Analyzed</strong></td>
+<td>Incorrect pipeline — diagnostics reviewed</td>
+</tr>
+<tr>
+<td><strong>Labeled</strong></td>
+<td>Ground truth applied for training</td>
+</tr>
+<tr>
+<td><strong>Training</strong></td>
+<td>In or ready for training dataset</td>
+</tr>
+<tr>
+<td><strong>No dials</strong></td>
+<td>No usable dials in image</td>
+</tr>
+<tr>
+<td><strong>Not sure</strong></td>
+<td>Ambiguous — needs human decision</td>
+</tr>
+<tr>
+<td><strong>Manual upload</strong></td>
+<td>Portal bulk upload queue</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="appendix-b-screenshot-index">Appendix B — Screenshot index</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Screen</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>01-login.png</code></td>
+<td>Login</td>
+</tr>
+<tr>
+<td><code>02-dashboard-reviewer.png</code></td>
+<td>Dashboard (reviewer)</td>
+</tr>
+<tr>
+<td><code>02-welcome-modal.png</code></td>
+<td>Welcome dialog</td>
+</tr>
+<tr>
+<td><code>03-sidebar-reviewer.png</code></td>
+<td>Sidebar</td>
+</tr>
+<tr>
+<td><code>04-awaiting-review-list.png</code></td>
+<td>Awaiting review</td>
+</tr>
+<tr>
+<td><code>05-reading-detail.png</code></td>
+<td>Session detail</td>
+</tr>
+<tr>
+<td><code>06-bulk-upload.png</code></td>
+<td>Bulk upload</td>
+</tr>
+<tr>
+<td><code>07-bulk-upload-with-files.png</code></td>
+<td>Bulk upload with selection</td>
+</tr>
+<tr>
+<td><code>08-label-uploads.png</code></td>
+<td>Label grid</td>
+</tr>
+<tr>
+<td><code>09-label-lightbox.png</code></td>
+<td>Label lightbox</td>
+</tr>
+<tr>
+<td><code>10-correct-list.png</code></td>
+<td>Correct queue</td>
+</tr>
+<tr>
+<td><code>11-wrong-queues.png</code></td>
+<td>Wrong (reviewed)</td>
+</tr>
+<tr>
+<td><code>13-test-data-pending.png</code></td>
+<td>Pending test data</td>
+</tr>
+<tr>
+<td><code>14-test-data-images.png</code></td>
+<td>Unit test images</td>
+</tr>
+<tr>
+<td><code>15-training-hub.png</code></td>
+<td>Model Training</td>
+</tr>
+<tr>
+<td><code>16-dashboard-admin.png</code></td>
+<td>Dashboard (admin)</td>
+</tr>
+<tr>
+<td><code>17-model-factory.png</code></td>
+<td>Model Factory</td>
+</tr>
+<tr>
+<td><code>18-pipeline-iterations.png</code></td>
+<td>Iterations table</td>
+</tr>
+<tr>
+<td><code>19-all-readings.png</code></td>
+<td>All readings</td>
+</tr>
+<tr>
+<td><code>20-usage.png</code></td>
+<td>Usage</td>
+</tr>
+<tr>
+<td><code>21-models.png</code></td>
+<td>Models</td>
+</tr>
+</tbody>
+</table>
+<p>Regenerate: <code>npm run manual:screenshots</code> — see <a
+href="user-manual/CAPTURE_SCREENSHOTS.md">CAPTURE_SCREENSHOTS.md</a>.</p>
+<hr />
+<p><em>May 2026 — AMR Portal user manual.</em></p>
+</body>
+</html>

@@ -33,7 +33,6 @@ import {
   enrichIterationRegistryRows,
   latestIterationKpis,
 } from '../utils/iterationMetricsEnrichment';
-import { ensureMay2026EvalRows } from '../constants/pipelineIterationRegistry';
 import DashboardIterationTrendChart from './DashboardIterationTrendChart';
 import PipelineIterationsCharts from './PipelineIterationsCharts';
 
@@ -325,8 +324,7 @@ const Dashboard: FC = () => {
     setRegistryLoading(true);
     try {
       const doc = await fetchPipelineIterations();
-      const list = doc.iterations?.length ? ensureMay2026EvalRows(doc.iterations) : [];
-      setRegistryIterations(list);
+      setRegistryIterations(doc.iterations ?? []);
     } catch {
       setRegistryIterations([]);
     } finally {

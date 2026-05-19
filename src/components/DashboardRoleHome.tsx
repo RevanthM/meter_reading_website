@@ -180,7 +180,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
           <KpiMiniCard
             label="Unit test images"
             value="Browse"
-            hint="Flat folder + unittestng_manifest.xlsx"
+            hint="Flat folder + unittestng_manifest.json (portal only; iOS uses filenames)"
             onClick={() => navigate('/test-data/images')}
             variant="accent"
           />

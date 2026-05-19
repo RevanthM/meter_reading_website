@@ -4,7 +4,10 @@ import { isIncorrectPipelineStatus } from '../types';
 import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
 import { calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
+import { adjustDashboardCountsForStatusMove } from '../utils/readingCounts';
 import { useAuth } from './AuthContext';
+
+type LoadCountsOptions = { /** When true, refresh S3 counts without toggling countsLoading (no KPI flash). */ silent?: boolean };
 
 export type DataSource = 'all' | 'field' | 'simulator';
 
@@ -28,9 +31,11 @@ interface ReadingsContextType {
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
   getReadingsByStatus: (status: ReadingsListFilter) => S3MeterReading[];
   getReadingById: (id: string) => S3MeterReading | undefined;
+  /** Merge one session into the in-memory list (after PATCH / approve without full S3 rescan). */
+  upsertReading: (reading: S3MeterReading) => void;
   refreshData: () => Promise<void>;
-  /** Folder counts only (fast) — used by dashboard refresh without loading all sessions. */
-  refreshCounts: () => Promise<void>;
+  /** Folder counts only (fast). Use `{ silent: true }` after saves so KPIs do not flash loading. */
+  refreshCounts: (options?: LoadCountsOptions) => Promise<void>;
 }
 
 const ReadingsContext = createContext<ReadingsContextType | undefined>(undefined);
@@ -48,18 +53,21 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const readingsLoadStarted = useRef(false);
   const readingsLoadPromise = useRef<Promise<void> | null>(null);
 
-  const loadCounts = useCallback(async (source?: DataSource, wt?: WorkType) => {
-    setCountsLoading(true);
-    setError(null);
+  const loadCounts = useCallback(async (source?: DataSource, wt?: WorkType, options?: LoadCountsOptions) => {
+    const silent = options?.silent === true;
+    if (!silent) {
+      setCountsLoading(true);
+      setError(null);
+    }
     try {
       const counts = await fetchCounts(source, wt);
       setServerCounts(counts);
       setIsUsingRealData(true);
     } catch (err) {
       console.warn('⚠️ Failed to load counts from API:', err);
-      setServerCounts(null);
+      if (!silent) setServerCounts(null);
     } finally {
-      setCountsLoading(false);
+      if (!silent) setCountsLoading(false);
     }
   }, []);
 
@@ -84,7 +92,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       await readingsLoadPromise.current;
       return;
     }
-    if (readingsLoadStarted.current && allReadings.length > 0 && !readingsLoading) {
+    if (readingsLoadStarted.current && allReadings.length > 0) {
       return;
     }
     readingsLoadStarted.current = true;
@@ -95,15 +103,33 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     } finally {
       readingsLoadPromise.current = null;
     }
-  }, [allReadings.length, dataSource, loadReadings, readingsLoading, workType]);
+  }, [allReadings.length, dataSource, loadReadings, workType]);
 
-  const refreshCounts = useCallback(async () => {
-    await loadCounts(dataSource, workType);
-  }, [dataSource, loadCounts, workType]);
+  const refreshCounts = useCallback(
+    async (options?: LoadCountsOptions) => {
+      await loadCounts(dataSource, workType, options);
+    },
+    [dataSource, loadCounts, workType],
+  );
+
+  const bumpCountsForStatusMove = useCallback((fromStatus: ReadingStatus, toStatus: ReadingStatus) => {
+    if (fromStatus === toStatus) return;
+    setServerCounts((prev) => (prev ? adjustDashboardCountsForStatusMove(prev, fromStatus, toStatus) : prev));
+  }, []);
 
   const refreshData = useCallback(async () => {
+    if (readingsLoadPromise.current) {
+      await Promise.all([loadCounts(dataSource, workType), readingsLoadPromise.current]);
+      return;
+    }
     readingsLoadStarted.current = true;
-    await Promise.all([loadCounts(dataSource, workType), loadReadings(dataSource, workType, true)]);
+    const readingsP = loadReadings(dataSource, workType, true);
+    readingsLoadPromise.current = readingsP;
+    try {
+      await Promise.all([loadCounts(dataSource, workType), readingsP]);
+    } finally {
+      readingsLoadPromise.current = null;
+    }
   }, [dataSource, loadCounts, loadReadings, workType]);
 
   useEffect(() => {
@@ -172,6 +198,8 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         setAllReadings((prev) =>
           prev.map((r) => (r.id === id ? { ...r, status, updatedAt: new Date().toISOString() } : r)),
         );
+        bumpCountsForStatusMove(reading.status, status);
+        void loadCounts(dataSource, workType, { silent: true });
 
         console.log(`✅ Moved reading ${id} from ${reading.status} to ${status}`);
       } catch (error) {
@@ -179,7 +207,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         throw error;
       }
     },
-    [allReadings, userEmail],
+    [allReadings, bumpCountsForStatusMove, dataSource, loadCounts, userEmail, workType],
   );
 
   const updateReadingComments = useCallback((id: string, comments: string) => {
@@ -241,6 +269,18 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     [allReadings],
   );
 
+  const upsertReading = useCallback((reading: S3MeterReading) => {
+    setAllReadings((prev) => {
+      const ix = prev.findIndex((r) => r.id === reading.id);
+      if (ix < 0) {
+        return [reading, ...prev];
+      }
+      const next = [...prev];
+      next[ix] = { ...next[ix], ...reading };
+      return next;
+    });
+  }, []);
+
   const loading = countsLoading || readingsLoading;
 
   return (
@@ -264,6 +304,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         bulkUpdateStatus,
         getReadingsByStatus,
         getReadingById,
+        upsertReading,
         refreshData,
         refreshCounts,
       }}

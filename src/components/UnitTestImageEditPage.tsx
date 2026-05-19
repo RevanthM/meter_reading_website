@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate, useOutletContext, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Gauge, ImageIcon, Loader2, Save } from 'lucide-react';
 import {
-  fetchUnitTestImages,
+  fetchUnitTestImageByFileName,
   updateUnitTestImageExpected,
   type ImageDifficulty,
   type UnitTestImageRow,
@@ -79,15 +79,9 @@ const UnitTestImageEditPage: FC = () => {
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    void fetchUnitTestImages(workType)
-      .then((data) => {
+    void fetchUnitTestImageByFileName(workType, fileName)
+      .then((row) => {
         if (cancelled) return;
-        const row = data.images.find((img) => img.fileName === fileName);
-        if (!row) {
-          setErr('Image not found in this work type.');
-          setImage(null);
-          return;
-        }
         setImage(row);
         const p = parseUnitTestImageFileName(row.fileName);
         const expected = (row.expectedMeterValue ?? p?.expected ?? '').trim();

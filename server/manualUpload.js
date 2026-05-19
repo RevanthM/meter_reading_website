@@ -144,7 +144,7 @@ async function createOneManualUpload({
  *   s3Client: import('@aws-sdk/client-s3').S3Client,
  *   BUCKET_NAME: string,
  *   withS3Base: (p: string) => string,
- *   invalidateCache?: () => void,
+ *   invalidateReadingsCache?: (source?: string, workType?: string) => void,
  *   parseSession: Function,
  *   uploadMiddleware: Function,
  *   bulkUploadMiddleware: Function,
@@ -155,7 +155,7 @@ export function registerManualUploadRoutes(app, deps) {
     s3Client,
     BUCKET_NAME,
     withS3Base,
-    invalidateCache,
+    invalidateReadingsCache,
     parseSession,
     uploadMiddleware,
     bulkUploadMiddleware,
@@ -216,7 +216,7 @@ export function registerManualUploadRoutes(app, deps) {
       }
     }
 
-    if (invalidateCache) invalidateCache();
+    if (invalidateReadingsCache) invalidateReadingsCache('all', workType);
 
     const status = results.length > 0 ? (errors.length > 0 ? 207 : 201) : 500;
     return res.status(status).json({

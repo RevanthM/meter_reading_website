@@ -1,0 +1,253 @@
+/* AMR Portal user manual — print / PDF */
+
+@page {
+  size: A4;
+  margin: 22mm 20mm 24mm 20mm;
+}
+
+@page :first {
+  margin-top: 18mm;
+}
+
+:root {
+  --text: #0f172a;
+  --muted: #475569;
+  --border: #e2e8f0;
+  --accent: #2563eb;
+  --bg-soft: #f8fafc;
+}
+
+html {
+  font-size: 11pt;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  line-height: 1.55;
+  color: var(--text);
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Cover */
+.manual-cover {
+  page-break-after: always;
+  min-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2rem 0 3rem;
+  border-bottom: 3px solid var(--accent);
+}
+
+.manual-cover h1 {
+  font-size: 2.1rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+  border: none;
+  color: var(--text);
+}
+
+.manual-cover .subtitle {
+  font-size: 1.05rem;
+  color: var(--muted);
+  margin: 0 0 2rem;
+  max-width: 32rem;
+}
+
+.manual-cover .meta {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.manual-cover .meta strong {
+  color: var(--text);
+}
+
+/* Pandoc auto-TOC */
+#TOC {
+  page-break-after: always;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem 1.5rem;
+  margin: 0 0 2rem;
+}
+
+#TOC::before {
+  content: 'Contents';
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+#TOC ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+#TOC > ul {
+  padding-left: 0;
+}
+
+#TOC ul ul {
+  padding-left: 1.25rem;
+  margin-top: 0.25rem;
+}
+
+#TOC li {
+  margin: 0.35rem 0;
+  line-height: 1.4;
+}
+
+#TOC a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+#TOC a:hover {
+  text-decoration: underline;
+}
+
+/* Headings */
+h1,
+h2,
+h3 {
+  color: var(--text);
+  font-weight: 700;
+  page-break-after: avoid;
+}
+
+h1 {
+  font-size: 1.65rem;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid var(--border);
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin-top: 1.75rem;
+  margin-bottom: 0.6rem;
+}
+
+h3 {
+  font-size: 1.05rem;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Avoid orphaned headings at page bottom */
+h1, h2, h3, h4 {
+  break-after: avoid-page;
+}
+
+p, li {
+  orphans: 3;
+  widows: 3;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0 1.25rem;
+  font-size: 0.92rem;
+  page-break-inside: avoid;
+}
+
+th,
+td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--bg-soft);
+  font-weight: 600;
+}
+
+tr:nth-child(even) td {
+  background: #fafbfc;
+}
+
+/* Images */
+img {
+  display: block;
+  max-width: 100%;
+  max-height: 11cm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  margin: 1rem auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  page-break-inside: avoid;
+}
+
+/* Lists */
+ul, ol {
+  padding-left: 1.35rem;
+}
+
+li {
+  margin: 0.25rem 0;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+
+/* Code */
+code {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--bg-soft);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+/* First h1 after TOC shouldn't duplicate title weirdly */
+#TOC + h1 {
+  margin-top: 0;
+}
+
+/* Appendix page breaks */
+h2#appendix-a--status-glossary,
+h2#appendix-b--screenshot-index {
+  page-break-before: always;
+}
+
+/* Hide pandoc title block if duplicated */
+header.title {
+  display: none;
+}
+
+blockquote {
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+
+@media print {
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
