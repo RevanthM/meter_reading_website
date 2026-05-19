@@ -11,7 +11,12 @@ import {
   INCORRECT_PIPELINE_STATUSES,
   labelerPipelineStatusLabels,
   isIncorrectPipelineStatus,
+  initialReviewerOutcomeStatus,
+  resolveReviewerSaveStatus,
+  statusIsIncorrect,
 } from '../types';
+import { buildTargetSessionPrefixFromSource } from '../utils/s3SessionPrefix';
+import { concatDialDigitsFromRows, reconcileDialRowsForReading } from '../utils/dialDetails';
 import type { DialDetailFromMetadata, DialPoint, S3MeterReading } from '../services/api';
 import {
   ArrowLeft,
@@ -62,10 +67,6 @@ export type ReadingDetailLocationState = {
   listReturn?: { pathname: string; search?: string };
 };
 
-function statusIsIncorrect(status: ReadingStatus): boolean {
-  return status.startsWith('incorrect');
-}
-
 /** Synthetic `<select>` value so any incorrect_* maps to one "Incorrect" row for reviewers. */
 const REVIEWER_SELECT_INCORRECT = '__incorrect__' as const;
 
@@ -105,50 +106,9 @@ function partitionMeterImages(images: MeterImage[]): {
 
 type DialDetailRow = DialDetailFromMetadata;
 
-/** When `metadata.json` has no `dial_details`, still give reviewers one row per dial crop (digits from model reading). */
-function dialRowsFromDialCropImages(
-  images: MeterImage[],
-  meterValue: string | number | null | undefined,
-): DialDetailRow[] {
-  const sorted = images
-    .filter(isDialCropImage)
-    .sort((a, b) => (a.metadata.dialIndex ?? 0) - (b.metadata.dialIndex ?? 0));
-  const mv = meterValue != null ? String(meterValue) : '';
-  return sorted.map((img) => {
-    const pos = img.metadata.dialIndex ?? 0;
-    const ch = mv[pos];
-    let prediction = 0;
-    if (ch !== undefined && ch !== '' && /\d/.test(ch)) {
-      prediction = parseInt(ch, 10);
-    }
-    return {
-      dial: pos + 1,
-      prediction,
-      direction: 'clockwise',
-      confidence: 0,
-    };
-  });
-}
-
-/** Baseline dial editor rows from the server session (explicit dial_details or inferred from dial images). */
+/** Baseline dial editor rows — reconciled with `ml_prediction` when per-dial rows are stale zeros. */
 function baselineDialRowsForReading(reading: S3MeterReading): DialDetailRow[] {
-  if (reading.dialDetails && reading.dialDetails.length > 0) {
-    return reading.dialDetails.map((d) => ({ ...d }));
-  }
-  return dialRowsFromDialCropImages(reading.images, reading.meterValue);
-}
-
-/** Whole-meter digit string from per-dial predictions (dial 1 → left). */
-function concatDialDigitsFromRows(rows: DialDetailRow[]): string {
-  if (!rows.length) return '';
-  return [...rows]
-    .sort((a, b) => a.dial - b.dial)
-    .map((r) => {
-      const n = Math.round(Number(r.prediction));
-      if (!Number.isFinite(n)) return '0';
-      return String(((n % 10) + 10) % 10);
-    })
-    .join('');
+  return reconcileDialRowsForReading(reading).map((d) => ({ ...d }));
 }
 
 function dialRowHasExtendedPipeline(row: DialDetailRow | undefined): boolean {
@@ -540,6 +500,7 @@ function applyDetailFormToReading(
       (reviewerDatasetDestination == null && base.reviewerRecommendTraining === true),
     imageDifficulty: opts.isReviewerSaveMode ? opts.imageDifficulty : base.imageDifficulty,
     isManuallyReviewed: opts.markReviewed ? true : base.isManuallyReviewed,
+    isCorrect: opts.selectedStatus === 'correct',
     updatedAt: new Date().toISOString(),
   };
 }
@@ -657,7 +618,7 @@ const ReadingDetail: React.FC = () => {
 
   const [comments, setComments] = useState(reading?.comments || '');
   const [selectedStatus, setSelectedStatus] = useState<ReadingStatus>(
-    reading?.status || 'incorrect_new'
+    reading ? initialReviewerOutcomeStatus(reading) : 'incorrect_new',
   );
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -695,13 +656,16 @@ const ReadingDetail: React.FC = () => {
   useEffect(() => {
     if (!reading) return;
     setComments(reading.comments || '');
-    setSelectedStatus(reading.status);
+    setSelectedStatus(
+      isReviewerSaveMode ? initialReviewerOutcomeStatus(reading) : reading.status,
+    );
     setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
     const baseRows = baselineDialRowsForReading(reading);
     const fromDials = concatDialDigitsFromRows(baseRows);
     const exp = reading.expectedValue != null ? String(reading.expectedValue).trim() : '';
+    const mvStr = reading.meterValue != null ? String(reading.meterValue).trim() : '';
     setReadingDetachedFromDials(Boolean(exp !== '' && exp !== fromDials));
-    setUserCorrection(exp || fromDials);
+    setUserCorrection(exp || fromDials || mvStr);
     setLocalDialRows(baseRows.map((d) => ({ ...d })));
     initialDialRowsRef.current = baseRows.map((d) => ({ ...d }));
     setDatasetDestination(
@@ -720,6 +684,7 @@ const ReadingDetail: React.FC = () => {
     reading?.reviewerRecommendTraining,
     reading?.reviewerDatasetDestination,
     reading?.imageDifficulty,
+    isReviewerSaveMode,
   ]);
 
   const isDirty = useMemo(() => {
@@ -800,7 +765,7 @@ const ReadingDetail: React.FC = () => {
         setSelectedStatus(selectedStatus);
         updateReadingComments(optimistic.id, optimistic.comments || '');
 
-        await updateReadingStatus(r.id, selectedStatus, optimistic);
+        await updateReadingStatus(r.id, selectedStatus, optimistic, r.status);
         void fetchReadingById(r.id, workTypeForApi, r.s3SessionPrefix).then((latest) => {
           if (latest) {
             setDirectReading(latest);
@@ -831,19 +796,26 @@ const ReadingDetail: React.FC = () => {
       r.reviewerDatasetDestination ?? (r.reviewerRecommendTraining ? 'training' : null);
     const baseDifficulty = r.imageDifficulty ?? null;
 
+    const targetStatus = isReviewerSaveMode
+      ? resolveReviewerSaveStatus(selectedStatus, snapshotForMove.status)
+      : selectedStatus;
+    const desiredIsCorrect = targetStatus === 'correct';
+    const baseIsCorrect = r.isCorrect ?? r.status === 'correct';
+
     const metaDirty =
       userCorrection !== baseExpected ||
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
       datasetDestination !== baseDest ||
-      imageDifficulty !== baseDifficulty;
+      imageDifficulty !== baseDifficulty ||
+      (isReviewerSaveMode && desiredIsCorrect !== baseIsCorrect);
 
-    const statusWillChange = selectedStatus !== snapshotForMove.status;
+    const statusWillChange = targetStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
 
     const optimistic = applyDetailFormToReading(snapshotForMove, {
-      selectedStatus,
+      selectedStatus: targetStatus,
       userCorrection,
       mlPrediction,
       comments,
@@ -861,8 +833,33 @@ const ReadingDetail: React.FC = () => {
 
     setIsSaving(true);
     let savedReading: S3MeterReading | null = null;
+    let patchPrefix = snapshotForMove.s3SessionPrefix;
     try {
+      if (isReviewerSaveMode && statusWillChange && snapshotForMove.s3SessionPrefix) {
+        await updateReadingStatus(
+          snapshotForMove.id,
+          targetStatus,
+          optimistic,
+          snapshotForMove.status,
+        );
+        const movedPrefix = buildTargetSessionPrefixFromSource(
+          snapshotForMove.s3SessionPrefix,
+          snapshotForMove.type,
+          targetStatus,
+        );
+        if (movedPrefix) {
+          patchPrefix = movedPrefix;
+          const withNewPrefix = { ...optimistic, s3SessionPrefix: movedPrefix };
+          setDirectReading(withNewPrefix);
+          upsertReading(withNewPrefix);
+        }
+      }
+
       if (metaDirty || shouldMarkManual) {
+        if (!patchPrefix) {
+          alert('Missing S3 session prefix; cannot save metadata.');
+          return false;
+        }
         const patch: SessionMetadataPatch = {};
         if (metaDirty) {
           patch.ml_prediction = isManualUploadQueue ? userCorrection : mlPrediction;
@@ -893,16 +890,19 @@ const ReadingDetail: React.FC = () => {
         if (shouldMarkManual) {
           patch.is_manually_reviewed = true;
         }
+        if (isReviewerSaveMode) {
+          patch.is_correct = desiredIsCorrect;
+        }
 
         savedReading = await patchSessionMetadata(
-          r.id,
+          snapshotForMove.id,
           workTypeForApi,
-          { s3SessionPrefix: r.s3SessionPrefix, patch },
+          { s3SessionPrefix: patchPrefix, patch },
           userEmail || undefined,
           portalWorkMode,
         );
         const merged = applyDetailFormToReading(savedReading, {
-          selectedStatus,
+          selectedStatus: targetStatus,
           userCorrection,
           mlPrediction,
           comments,
@@ -918,29 +918,16 @@ const ReadingDetail: React.FC = () => {
         setSelectedStatus(merged.status);
       }
 
-      if (isReviewerSaveMode && statusWillChange) {
-        const moveSnapshot = savedReading
-          ? applyDetailFormToReading(savedReading, {
-              selectedStatus,
-              userCorrection,
-              mlPrediction,
-              comments,
-              localDialRows,
-              datasetDestination,
-              imageDifficulty,
-              isManualUploadQueue,
-              isReviewerSaveMode,
-              markReviewed: shouldMarkManual,
-            })
-          : optimistic;
-        await updateReadingStatus(snapshotForMove.id, selectedStatus, moveSnapshot);
-        void fetchReadingById(r.id, workTypeForApi, r.s3SessionPrefix).then((latest) => {
-          if (latest) {
-            setDirectReading(latest);
-            upsertReading(latest);
-            setSelectedStatus(latest.status);
-          }
-        });
+      if (statusWillChange) {
+        void fetchReadingById(snapshotForMove.id, workTypeForApi, patchPrefix ?? undefined).then(
+          (latest) => {
+            if (latest) {
+              setDirectReading(latest);
+              upsertReading(latest);
+              setSelectedStatus(latest.status);
+            }
+          },
+        );
       }
 
       setIsSaved(true);

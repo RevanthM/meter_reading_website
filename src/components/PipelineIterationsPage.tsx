@@ -11,10 +11,7 @@ import {
 import ListPageRefreshButton from './ListPageRefreshButton';
 import PipelineIterationFormModal from './PipelineIterationFormModal';
 import PipelineIterationsCharts from './PipelineIterationsCharts';
-import {
-  ensureMay2026EvalRows,
-  missingMay2026EvalLabels,
-} from '../constants/pipelineIterationRegistry';
+import { ensureMay2026EvalRows } from '../constants/pipelineIterationRegistry';
 import { enrichIterationRegistryRows } from '../utils/iterationMetricsEnrichment';
 import {
   iterationDeleteConfirmMessage,
@@ -279,8 +276,6 @@ const PipelineIterationsPage: FC = () => {
     [filteredRows],
   );
 
-  const missingEvalLabels = useMemo(() => missingMay2026EvalLabels(rows), [rows]);
-
   const byPipeline = useMemo(() => {
     const m = new Map<string, PipelineIterationRecord[]>();
     for (const r of rows) {
@@ -407,27 +402,6 @@ const PipelineIterationsPage: FC = () => {
             {saveError}
           </p>
         ) : null}
-        {!loading && missingEvalLabels.length > 0 ? (
-          <p className="pipeline-iterations-banner pipeline-iterations-banner--warn" role="status">
-            <strong>Missing from S3 registry:</strong> {missingEvalLabels.join(', ')}. Charts will be incomplete
-            until these rows exist.{' '}
-            <button
-              type="button"
-              className="training-hub-text-btn"
-              onClick={() => {
-                setRows((prev) => ensureMay2026EvalRows(prev));
-                setSaveError(null);
-              }}
-            >
-              Add missing rows
-            </button>
-            {' · then '}
-            <button type="button" className="training-hub-text-btn" onClick={() => void handleSaveS3()}>
-              Save to S3
-            </button>
-          </p>
-        ) : null}
-
         <div className="pipeline-iterations-toolbar">
           <label className="pipeline-iterations-filter">
             <span>Filter by pipeline</span>

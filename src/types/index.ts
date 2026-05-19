@@ -21,6 +21,61 @@ export function isIncorrectPipelineStatus(status: ReadingStatus): boolean {
   return INCORRECT_PIPELINE_STATUSES.includes(status);
 }
 
+export function statusIsIncorrect(status: ReadingStatus): boolean {
+  return status.startsWith('incorrect');
+}
+
+/** Reviewer detail default: unreviewed awaiting-review rows start as Correct. */
+export function initialReviewerOutcomeStatus(reading: {
+  status: ReadingStatus;
+  isManuallyReviewed?: boolean;
+}): ReadingStatus {
+  if (reading.isManuallyReviewed) return reading.status;
+  if (reading.status === 'incorrect_new') return 'correct';
+  return reading.status;
+}
+
+/** S3 folder after reviewer save — leaves awaiting-review when marked incorrect. */
+export function resolveReviewerSaveStatus(
+  selected: ReadingStatus,
+  currentStatus: ReadingStatus,
+): ReadingStatus {
+  if (
+    selected === 'correct' ||
+    selected === 'no_dials' ||
+    selected === 'not_sure' ||
+    selected === 'manually_uploaded'
+  ) {
+    return selected;
+  }
+  if (statusIsIncorrect(selected)) {
+    if (currentStatus === 'incorrect_new' && selected === 'incorrect_new') {
+      return 'incorrect_analyzed';
+    }
+    return selected;
+  }
+  return selected;
+}
+
+/** Awaiting-review queue: still in `incorrect_new` and not manually reviewed in metadata. */
+export function isAwaitingReviewerReview(reading: {
+  status: ReadingStatus;
+  isManuallyReviewed?: boolean;
+}): boolean {
+  return reading.status === 'incorrect_new' && reading.isManuallyReviewed !== true;
+}
+
+/** List table badge — reviewed sessions show Reviewed instead of Awaiting review. */
+export function getReadingListStatusDisplay(reading: {
+  status: ReadingStatus;
+  isManuallyReviewed?: boolean;
+}): { label: string; color: string } {
+  if (reading.isManuallyReviewed) {
+    return { label: 'Reviewed', color: '#2563eb' };
+  }
+  return { label: statusLabels[reading.status], color: statusColors[reading.status] };
+}
+
 /** Short labels for the pipeline dropdown (labeler mode). */
 export const labelerPipelineStatusLabels: Record<
   'incorrect_new' | 'incorrect_analyzed' | 'incorrect_labeled' | 'incorrect_training',

@@ -1,10 +1,11 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import type { ReadingStatus, DashboardCounts, WorkType, ReadingsListFilter } from '../types';
-import { isIncorrectPipelineStatus } from '../types';
+import { isAwaitingReviewerReview, isIncorrectPipelineStatus } from '../types';
 import { fetchReadings, fetchCounts, bulkMoveReadings, type S3MeterReading } from '../services/api';
 import { mockReadings } from '../data/mockData';
 import { calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
 import { adjustDashboardCountsForStatusMove } from '../utils/readingCounts';
+import { buildTargetSessionPrefixFromSource } from '../utils/s3SessionPrefix';
 import { useAuth } from './AuthContext';
 
 type LoadCountsOptions = { /** When true, refresh S3 counts without toggling countsLoading (no KPI flash). */ silent?: boolean };
@@ -26,7 +27,13 @@ interface ReadingsContextType {
   setWorkType: (workType: WorkType) => void;
   /** Load full readings on demand (readings list, training hub, edit modal). Skipped on dashboard/factory mount. */
   ensureReadingsLoaded: () => Promise<void>;
-  updateReadingStatus: (id: string, status: ReadingStatus, snapshot?: S3MeterReading) => Promise<void>;
+  updateReadingStatus: (
+    id: string,
+    status: ReadingStatus,
+    snapshot?: S3MeterReading,
+    /** S3 status before optimistic UI update; required when snapshot already has `status`. */
+    fromStatus?: ReadingStatus,
+  ) => Promise<void>;
   updateReadingComments: (id: string, comments: string) => void;
   bulkUpdateStatus: (ids: string[], status: ReadingStatus) => Promise<void>;
   getReadingsByStatus: (status: ReadingsListFilter) => S3MeterReading[];
@@ -151,10 +158,13 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     const uploadedTodayFromReadings = filteredReadings.filter(
       (r) => calendarDayKeyInPortalTz(r.dateOfReading) === todayIso,
     ).length;
+    const awaitingReviewCount = filteredReadings.filter(isAwaitingReviewerReview).length;
 
     if (serverCounts) {
       return {
         ...serverCounts,
+        incorrectNewCount:
+          allReadings.length > 0 ? awaitingReviewCount : serverCounts.incorrectNewCount,
         uploadedTodayCount: uploadedTodayFromReadings,
       };
     }
@@ -162,7 +172,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     return {
       totalPictures: readings.length,
       correctCount: readings.filter((r) => r.status === 'correct').length,
-      incorrectNewCount: readings.filter((r) => r.status === 'incorrect_new').length,
+      incorrectNewCount: awaitingReviewCount,
       incorrectAnalyzedCount: readings.filter((r) => r.status === 'incorrect_analyzed').length,
       incorrectLabeledCount: readings.filter((r) => r.status === 'incorrect_labeled').length,
       incorrectTrainingCount: readings.filter((r) => r.status === 'incorrect_training').length,
@@ -170,38 +180,61 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       notSureCount: readings.filter((r) => r.status === 'not_sure').length,
       uploadedTodayCount: uploadedTodayFromReadings,
     };
-  }, [filteredReadings, serverCounts]);
+  }, [allReadings.length, filteredReadings, serverCounts]);
 
   const updateReadingStatus = useCallback(
-    async (id: string, status: ReadingStatus, snapshot?: S3MeterReading) => {
-      const reading = snapshot ?? allReadings.find((r) => r.id === id);
+    async (
+      id: string,
+      status: ReadingStatus,
+      snapshot?: S3MeterReading,
+      fromStatus?: ReadingStatus,
+    ) => {
+      const fromList = allReadings.find((r) => r.id === id);
+      const reading = snapshot ?? fromList;
       if (!reading) return;
 
-      if (reading.status === status) {
+      const currentStatus = fromStatus ?? fromList?.status ?? reading.status;
+      if (currentStatus === status) {
         return;
       }
 
       try {
+        const moveSourcePrefix =
+          fromList?.s3SessionPrefix ?? snapshot?.s3SessionPrefix ?? reading.s3SessionPrefix;
         await bulkMoveReadings(
           [
             {
               sessionId: reading.id,
               sourceType: reading.type,
-              currentStatus: reading.status,
+              currentStatus,
               targetStatus: status,
-              ...(reading.s3SessionPrefix ? { s3SessionPrefix: reading.s3SessionPrefix } : {}),
+              ...(moveSourcePrefix ? { s3SessionPrefix: moveSourcePrefix } : {}),
             },
           ],
           userEmail || undefined,
         );
 
+        const movedPrefix =
+          moveSourcePrefix && currentStatus !== status
+            ? buildTargetSessionPrefixFromSource(moveSourcePrefix, reading.type, status)
+            : null;
+
         setAllReadings((prev) =>
-          prev.map((r) => (r.id === id ? { ...r, status, updatedAt: new Date().toISOString() } : r)),
+          prev.map((r) =>
+            r.id === id
+              ? {
+                  ...(snapshot ?? r),
+                  status,
+                  ...(movedPrefix ? { s3SessionPrefix: movedPrefix } : {}),
+                  updatedAt: new Date().toISOString(),
+                }
+              : r,
+          ),
         );
-        bumpCountsForStatusMove(reading.status, status);
+        bumpCountsForStatusMove(currentStatus, status);
         void loadCounts(dataSource, workType, { silent: true });
 
-        console.log(`✅ Moved reading ${id} from ${reading.status} to ${status}`);
+        console.log(`✅ Moved reading ${id} from ${currentStatus} to ${status}`);
       } catch (error) {
         console.error('Failed to update status:', error);
         throw error;
@@ -256,6 +289,9 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       if (status === 'all') return filteredReadings;
       if (status === 'incorrect-queues') {
         return filteredReadings.filter((r) => isIncorrectPipelineStatus(r.status));
+      }
+      if (status === 'incorrect_new') {
+        return filteredReadings.filter(isAwaitingReviewerReview);
       }
       return filteredReadings.filter((r) => r.status === status);
     },

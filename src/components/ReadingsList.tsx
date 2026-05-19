@@ -2,7 +2,14 @@ import { useState, useMemo, useCallback, useEffect, type CSSProperties, type FC 
 import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { useReadings } from '../context/ReadingsContext';
 import type { ReadingStatus, ReadingsListFilter } from '../types';
-import { statusLabels, statusColors, INCORRECT_PIPELINE_STATUSES, labelerPipelineStatusLabels } from '../types';
+import {
+  statusLabels,
+  statusColors,
+  INCORRECT_PIPELINE_STATUSES,
+  labelerPipelineStatusLabels,
+  getReadingListStatusDisplay,
+  isAwaitingReviewerReview,
+} from '../types';
 import {
   ArrowLeft,
   Eye,
@@ -78,7 +85,7 @@ const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
 function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boolean {
   switch (cohort) {
     case 'untrained':
-      return r.isManuallyReviewed !== true;
+      return isAwaitingReviewerReview(r);
     case 'correct':
       return r.status === 'correct';
     case 'wrong':
@@ -149,40 +156,38 @@ function effectiveConfidenceForDisplay(r: S3MeterReading): number | undefined {
   return undefined;
 }
 
+type ListSortColumn = 'date' | 'confidence';
+type ListSortDir = 'asc' | 'desc';
+
 function sortReadingsForList(
   readings: S3MeterReading[],
   listStatus: string | undefined,
-  listSort: 'date' | 'confidence',
+  listSort: ListSortColumn,
+  listSortDir: ListSortDir,
 ): S3MeterReading[] {
-  const byDateDesc = (a: S3MeterReading, b: S3MeterReading) =>
-    new Date(b.dateOfReading).getTime() - new Date(a.dateOfReading).getTime();
-  const byConfidenceAscThenDateDesc = (a: S3MeterReading, b: S3MeterReading) => {
+  const dateCmp = (a: S3MeterReading, b: S3MeterReading) =>
+    new Date(a.dateOfReading).getTime() - new Date(b.dateOfReading).getTime();
+  const confCmp = (a: S3MeterReading, b: S3MeterReading) => {
     const ca = effectiveConfidenceForSort(a);
     const cb = effectiveConfidenceForSort(b);
     if (ca !== cb) return ca - cb;
-    return byDateDesc(a, b);
+    return dateCmp(a, b);
   };
 
-  if (listSort === 'confidence') {
-    if (listStatus !== 'all') {
-      return [...readings].sort(byConfidenceAscThenDateDesc);
-    }
-    return [...readings].sort((a, b) => {
-      const pa = LIST_PRIORITY[a.status] ?? 99;
-      const pb = LIST_PRIORITY[b.status] ?? 99;
-      if (pa !== pb) return pa - pb;
-      return byConfidenceAscThenDateDesc(a, b);
-    });
-  }
+  const primaryCmp = listSort === 'confidence' ? confCmp : dateCmp;
+  const sorted = (cmp: (a: S3MeterReading, b: S3MeterReading) => number) => {
+    const out = [...readings].sort(cmp);
+    return listSortDir === 'desc' ? out.reverse() : out;
+  };
 
   if (listStatus !== 'all') {
-    return [...readings].sort(byDateDesc);
+    return sorted(primaryCmp);
   }
-  return [...readings].sort((a, b) => {
+  return sorted((a, b) => {
     const pa = LIST_PRIORITY[a.status] ?? 99;
     const pb = LIST_PRIORITY[b.status] ?? 99;
     if (pa !== pb) return pa - pb;
-    return byDateDesc(a, b);
+    return primaryCmp(a, b);
   });
 }
 
@@ -267,19 +272,36 @@ const ReadingsList: FC = () => {
     const p = new URLSearchParams(location.search);
     return (p.get('sort') || '').trim().toLowerCase();
   }, [location.search]);
-  const effectiveListSort = useMemo((): 'date' | 'confidence' => {
-    if (sortParamRaw === 'confidence') return 'confidence';
-    if (sortParamRaw === 'date') return 'date';
-    if (listStatusKey === 'incorrect_new' || activeCohort === 'untrained') return 'confidence';
-    return 'date';
-  }, [sortParamRaw, listStatusKey, activeCohort]);
+  const sortDirParamRaw = useMemo(() => {
+    const p = new URLSearchParams(location.search);
+    return (p.get('dir') || '').trim().toLowerCase();
+  }, [location.search]);
 
-  const setListSort = useCallback(
-    (mode: 'date' | 'confidence') => {
+  const effectiveListSort = useMemo((): ListSortColumn => {
+    if (sortParamRaw === 'confidence') return 'confidence';
+    return 'date';
+  }, [sortParamRaw]);
+
+  const effectiveListSortDir = useMemo((): ListSortDir => {
+    if (sortDirParamRaw === 'asc' || sortDirParamRaw === 'desc') return sortDirParamRaw;
+    return effectiveListSort === 'date' ? 'desc' : 'asc';
+  }, [sortDirParamRaw, effectiveListSort]);
+
+  const toggleListSort = useCallback(
+    (column: ListSortColumn) => {
       setSearchParams(
         (prev) => {
           const n = new URLSearchParams(prev);
-          n.set('sort', mode === 'confidence' ? 'confidence' : 'date');
+          const currentCol =
+            (n.get('sort') || '').trim().toLowerCase() === 'confidence' ? 'confidence' : 'date';
+          const currentDir = n.get('dir') === 'asc' ? 'asc' : n.get('dir') === 'desc' ? 'desc' : null;
+          if (currentCol === column && currentDir) {
+            n.set('sort', column);
+            n.set('dir', currentDir === 'asc' ? 'desc' : 'asc');
+          } else {
+            n.set('sort', column);
+            n.set('dir', column === 'date' ? 'desc' : 'asc');
+          }
           return n;
         },
         { replace: true },
@@ -323,7 +345,7 @@ const ReadingsList: FC = () => {
       filtered = filtered.filter((r) => matchesReadingsCohort(r, activeCohort));
     }
     const sortKey = filterKey === 'incorrect-queues' ? 'all' : filterKey;
-    return sortReadingsForList(filtered, sortKey, effectiveListSort);
+    return sortReadingsForList(filtered, sortKey, effectiveListSort, effectiveListSortDir);
   }, [
     getReadingsByStatus,
     listStatusKey,
@@ -335,6 +357,7 @@ const ReadingsList: FC = () => {
     capturedParam,
     activeCohort,
     effectiveListSort,
+    effectiveListSortDir,
     location.search,
   ]);
 
@@ -1053,13 +1076,23 @@ const ReadingsList: FC = () => {
                   <button
                     type="button"
                     className={`readings-table-sort-th${effectiveListSort === 'date' ? ' readings-table-sort-th--active' : ''}`}
-                    onClick={() => setListSort('date')}
+                    onClick={() => toggleListSort('date')}
                     aria-pressed={effectiveListSort === 'date'}
-                    title="Newest capture date first"
+                    title={
+                      effectiveListSort === 'date'
+                        ? effectiveListSortDir === 'desc'
+                          ? 'Sorted by date (newest first); click for oldest first'
+                          : 'Sorted by date (oldest first); click for newest first'
+                        : 'Sort by date of reading'
+                    }
                   >
                     <span>Date of reading</span>
                     {effectiveListSort === 'date' ? (
-                      <ArrowDown size={14} className="readings-table-sort-icon" aria-hidden />
+                      effectiveListSortDir === 'desc' ? (
+                        <ArrowDown size={14} className="readings-table-sort-icon" aria-hidden />
+                      ) : (
+                        <ArrowUp size={14} className="readings-table-sort-icon" aria-hidden />
+                      )
                     ) : null}
                   </button>
                 </th>
@@ -1069,13 +1102,23 @@ const ReadingsList: FC = () => {
                   <button
                     type="button"
                     className={`readings-table-sort-th readings-table-sort-th--right readings-table-sort-th--confidence${effectiveListSort === 'confidence' ? ' readings-table-sort-th--active' : ''}`}
-                    onClick={() => setListSort('confidence')}
+                    onClick={() => toggleListSort('confidence')}
                     aria-pressed={effectiveListSort === 'confidence'}
-                    title="Sort by confidence (lowest first)"
+                    title={
+                      effectiveListSort === 'confidence'
+                        ? effectiveListSortDir === 'asc'
+                          ? 'Sorted by confidence (lowest first); click for highest first'
+                          : 'Sorted by confidence (highest first); click for lowest first'
+                        : 'Sort by confidence'
+                    }
                   >
                     <span className="readings-th-confidence-text">Confidence</span>
                     {effectiveListSort === 'confidence' ? (
-                      <ArrowUp size={14} className="readings-table-sort-icon" aria-hidden />
+                      effectiveListSortDir === 'asc' ? (
+                        <ArrowUp size={14} className="readings-table-sort-icon" aria-hidden />
+                      ) : (
+                        <ArrowDown size={14} className="readings-table-sort-icon" aria-hidden />
+                      )
                     ) : null}
                   </button>
                 </th>
@@ -1124,16 +1167,21 @@ const ReadingsList: FC = () => {
                   </td>
                   <td>
                     <span className="readings-status-cell">
+                      {(() => {
+                        const { label, color } = getReadingListStatusDisplay(reading);
+                        return (
                       <span
                         className="status-badge"
                         style={{
-                          backgroundColor: `${statusColors[reading.status]}20`,
-                          color: statusColors[reading.status],
-                          borderColor: statusColors[reading.status],
+                          backgroundColor: `${color}20`,
+                          color,
+                          borderColor: color,
                         }}
                       >
-                        {statusLabels[reading.status]}
+                        {label}
                       </span>
+                        );
+                      })()}
                       {reading.reviewerRecommendTraining ? (
                         <span className="readings-training-pick-badge" title="Reviewer sent to training dataset">
                           Training

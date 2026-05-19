@@ -166,7 +166,7 @@ function improvementBinFromSessions(
       modelSum += m;
       modelN += 1;
     }
-    if (r.status === 'incorrect_new') awaitingReview += 1;
+    if (r.status === 'incorrect_new' && r.isManuallyReviewed !== true) awaitingReview += 1;
     if (TRAINING_FUNNEL_STATUSES.includes(r.status as ReadingStatus)) inTrainingFunnel += 1;
   }
 

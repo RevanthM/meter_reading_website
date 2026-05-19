@@ -238,8 +238,8 @@ function normalizePipelineIterationRow(raw, fallbackId) {
     readyToTestSimulatorSubStatus,
     readyToTestUnitTestSubStatus,
     outcome,
-    portalStats: cloneJsonObject(raw?.portalStats),
-    manualMetrics: cloneJsonObject(raw?.manualMetrics),
+    portalStats: cloneJsonObject(raw?.portalStats ?? raw?.portal_stats),
+    manualMetrics: cloneJsonObject(raw?.manualMetrics ?? raw?.manual_metrics),
     linkedUnitTests: normalizePipelineIterationUnitTestLinks(raw),
     linkedTrainingDatasets: normalizePipelineIterationTrainingDatasetLinks(raw),
     factoryStage: String(raw?.factoryStage ?? raw?.factory_stage ?? '').trim() || null,
@@ -788,6 +788,48 @@ async function getSignedImageUrl(key) {
   return await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
+/** Align per-dial `prediction` with `ml_prediction` when flat rows are stale (e.g. all zeros). */
+function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction) {
+  if (!Array.isArray(dialDetails) || dialDetails.length === 0) return dialDetails;
+  const mv = String(mlPrediction ?? '').replace(/\D/g, '');
+
+  const normalized = dialDetails.map((d, i) => {
+    if (!d || typeof d !== 'object') return d;
+    const c = normalizeSessionConfidenceValue(d.confidence);
+    const dialNum = Number.isInteger(d.dial) && d.dial >= 1 ? d.dial : i + 1;
+    let prediction = d.prediction;
+    if (!Number.isFinite(Number(prediction)) || prediction < 0 || prediction > 9) {
+      const stageDigit = d.stage_3?.digit;
+      if (stageDigit != null && Number.isFinite(Number(stageDigit))) prediction = Number(stageDigit);
+    }
+    let digit = Number.isFinite(Number(prediction)) ? Math.round(Number(prediction)) : 0;
+    digit = ((digit % 10) + 10) % 10;
+    return {
+      ...d,
+      dial: dialNum,
+      prediction: digit,
+      ...(c !== undefined ? { confidence: c } : {}),
+    };
+  });
+
+  if (!mv) return normalized;
+
+  const fromRows = [...normalized]
+    .sort((a, b) => a.dial - b.dial)
+    .map((r) => String(r.prediction))
+    .join('');
+  if (fromRows === mv) return normalized;
+
+  return normalized.map((row, i) => {
+    const dialNum = row.dial >= 1 ? row.dial : i + 1;
+    const ch = mv[dialNum - 1];
+    if (ch && /\d/.test(ch)) {
+      return { ...row, prediction: parseInt(ch, 10) };
+    }
+    return row;
+  });
+}
+
 /** Coerce metadata confidence to 0–1; supports numeric strings and 1–100 percentages. */
 function normalizeSessionConfidenceValue(raw) {
   if (raw == null || raw === '') return undefined;
@@ -905,13 +947,7 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       confidence: normalizeSessionConfidenceValue(metadata.confidence),
       processingTimeMs: metadata.processing_time_ms,
       dialCount: metadata.dial_count,
-      dialDetails: Array.isArray(metadata.dial_details)
-        ? metadata.dial_details.map((d) => {
-            if (!d || typeof d !== 'object') return d;
-            const c = normalizeSessionConfidenceValue(d.confidence);
-            return c !== undefined ? { ...d, confidence: c } : d;
-          })
-        : metadata.dial_details,
+      dialDetails: normalizeDialDetailsFromMetadata(metadata.dial_details, metadata.ml_prediction),
       conditionCode: metadata.condition_code,
       userName: metadata.user_name || metadata.user_email || '',
       imageSource: metadata.image_source || '',
@@ -998,7 +1034,7 @@ async function parseSessionLight(prefix, status, sourceType, workType = '1000') 
       meterValue: metadata.ml_prediction,
       expectedValue: metadata.user_correction || undefined,
       confidence: normalizeSessionConfidenceValue(metadata.confidence),
-      dialDetails: Array.isArray(metadata.dial_details) ? metadata.dial_details : undefined,
+      dialDetails: normalizeDialDetailsFromMetadata(metadata.dial_details, metadata.ml_prediction),
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
       imageCount,
     };
@@ -1661,7 +1697,14 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
 
     const serverPrefix = normalizeS3SessionPrefix(reading.s3SessionPrefix);
     if (clientPrefix && clientPrefix !== serverPrefix) {
-      return res.status(400).json({ error: 's3SessionPrefix does not match this session' });
+      const atClient = await parseSessionAtPrefix(clientPrefix, workTypeHint || '1000');
+      if (atClient && String(atClient.id) !== String(sessionId)) {
+        return res.status(400).json({ error: 's3SessionPrefix does not match this session' });
+      }
+      if (String(reading.id) !== String(sessionId)) {
+        return res.status(400).json({ error: 's3SessionPrefix does not match this session' });
+      }
+      // Stale client prefix (e.g. after folder move or list dedup) — write to canonical serverPrefix.
     }
 
     const patch = req.body?.patch && typeof req.body.patch === 'object' ? req.body.patch : null;
@@ -3823,11 +3866,14 @@ app.post('/api/auth/verify-email-link', async (req, res) => {
 /** Manual pipeline / model iteration rows (stored in S3 JSON). */
 app.get('/api/pipeline-iterations', async (req, res) => {
   try {
-    const key = pipelineIterationsS3Key();
-    const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
-    const txt = await streamToString(out.Body);
-    const data = JSON.parse(txt);
-    const iterations = Array.isArray(data.iterations) ? data.iterations : [];
+    const data = await readPipelineIterationsDoc();
+    const rawList = Array.isArray(data.iterations) ? data.iterations : [];
+    const iterations = rawList.map((r) =>
+      normalizePipelineIterationRow(
+        r,
+        typeof r?.id === 'string' && r.id.trim() ? r.id.trim() : randomUUID(),
+      ),
+    );
     res.json({
       iterations,
       updatedAt: data.updatedAt ?? null,
