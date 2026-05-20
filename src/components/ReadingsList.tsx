@@ -65,11 +65,18 @@ const LIST_PRIORITY: Record<string, number> = {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** List toolbar cohort (replaces pipeline-stage dropdown + legacy trainingPick). */
-const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data', 'recommended'] as const;
+const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data'] as const;
 type ReadingsCohortId = (typeof READINGS_COHORT_IDS)[number];
 
 function isReadingsCohortId(s: string): s is ReadingsCohortId {
   return (READINGS_COHORT_IDS as readonly string[]).includes(s);
+}
+
+/** Legacy URLs used cohort=recommended; map to training. */
+function normalizeReadingsCohortId(s: string): ReadingsCohortId | null {
+  const lower = s.trim().toLowerCase();
+  if (lower === 'recommended') return 'training';
+  return isReadingsCohortId(lower) ? lower : null;
 }
 
 const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
@@ -78,8 +85,6 @@ const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
   wrong: 'Reviewed wrong',
   training: 'Send to training',
   test_data: 'Send to test dataset',
-  /** @deprecated use training */
-  recommended: 'Send to training',
 };
 
 /** Reviewed-outcome cohorts must not intersect the awaiting-review route pool (unreviewed only). */
@@ -101,7 +106,6 @@ function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boo
         (r.status === 'incorrect_new' && r.isManuallyReviewed === true)
       );
     case 'training':
-    case 'recommended':
       return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
     case 'test_data':
       return r.reviewerDatasetDestination === 'test';
@@ -271,10 +275,10 @@ const ReadingsList: FC = () => {
   const capturedParam = useMemo(() => (searchParams.get('captured') || '').trim(), [searchParams]);
 
   const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
-  const cohortFromUrl = isReadingsCohortId(cohortParamRaw) ? cohortParamRaw : null;
-  /** Legacy `?trainingPick=1` behaves like cohort=recommended. */
+  const cohortFromUrl = normalizeReadingsCohortId(cohortParamRaw);
+  /** Legacy `?trainingPick=1` → training cohort. */
   const trainingPickLegacy = searchParams.get('trainingPick') === '1';
-  const activeCohort: ReadingsCohortId | null = cohortFromUrl ?? (trainingPickLegacy ? 'recommended' : null);
+  const activeCohort: ReadingsCohortId | null = cohortFromUrl ?? (trainingPickLegacy ? 'training' : null);
 
   const listStatusKey = (status ?? 'all') as ReadingsListFilter;
 

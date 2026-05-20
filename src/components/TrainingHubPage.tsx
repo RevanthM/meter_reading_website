@@ -29,7 +29,7 @@ const COPY_SESSION_CHUNK = 10;
 
 type DatePreset = 'all' | 'today' | '7d' | '30d' | 'custom';
 
-const HUB_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data', 'recommended'] as const;
+const HUB_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data'] as const;
 type TrainingHubCohortId = (typeof HUB_COHORT_IDS)[number];
 type TrainingHubCohort = 'all' | TrainingHubCohortId;
 
@@ -39,7 +39,6 @@ const HUB_COHORT_LABELS: Record<TrainingHubCohortId, string> = {
   wrong: 'Reviewed wrong',
   training: 'Send to training',
   test_data: 'Send to test dataset',
-  recommended: 'Send to training',
 };
 
 function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort): boolean {
@@ -56,7 +55,6 @@ function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort):
         r.status === 'incorrect_training'
       );
     case 'training':
-    case 'recommended':
       return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
     case 'test_data':
       return r.reviewerDatasetDestination === 'test';
