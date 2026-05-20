@@ -15,8 +15,8 @@ import {
   updateUnitTestImageExpected,
   type ImageDifficulty,
   type UnitTestImageRow,
-  type WorkType,
 } from '../services/api';
+import type { WorkType } from '../types';
 import {
   dialDigitsFromExpected,
   expectedFromDialDigits,
