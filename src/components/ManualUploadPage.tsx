@@ -9,9 +9,14 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ArrowLeft, ImagePlus, Images, Loader2, Upload } from 'lucide-react';
+import { ArrowLeft, Cpu, ImagePlus, Images, ListChecks, Loader2, Upload, X } from 'lucide-react';
 import { useReadings } from '../context/ReadingsContext';
-import { createManualUploadBulk } from '../services/api';
+import {
+  createManualUploadBulk,
+  createPortalInferenceUploadBulk,
+  fetchMeterInferenceStatus,
+  type PortalInferenceBulkResult,
+} from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 
 const UPLOAD_ROLES = new Set(['reviewer', 'test_data_reviewer', 'admin']);
@@ -51,15 +56,37 @@ const ManualUploadPage: FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<{ uploaded: number; failed: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{
+    uploaded: number;
+    failed: number;
+    withModel?: boolean;
+    samplePrediction?: string;
+    modelSessions?: PortalInferenceBulkResult[];
+  } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepthRef = useRef(0);
+  const [inferenceReady, setInferenceReady] = useState<boolean | null>(null);
+  const [inferenceModalOpen, setInferenceModalOpen] = useState(false);
 
   useEffect(() => {
     if (!canUpload) {
       navigate('/', { replace: true });
     }
   }, [canUpload, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchMeterInferenceStatus()
+      .then((s) => {
+        if (!cancelled) setInferenceReady(s.ready);
+      })
+      .catch(() => {
+        if (!cancelled) setInferenceReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const previewUrls = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
 
@@ -89,6 +116,7 @@ const ManualUploadPage: FC = () => {
       return merged;
     });
     setLastResult(null);
+    setInferenceModalOpen(false);
     setError(null);
   }, []);
 
@@ -155,39 +183,78 @@ const ManualUploadPage: FC = () => {
     [openFilePicker],
   );
 
-  const handleUpload = useCallback(async () => {
-    setError(null);
-    setLastResult(null);
-    if (files.length === 0) {
-      setError('Choose one or more meter images.');
-      return;
-    }
-    setSubmitting(true);
-    setProgress(`Uploading ${files.length} image${files.length === 1 ? '' : 's'}…`);
-    try {
-      const res = await createManualUploadBulk(
-        { images: files, workType, sourceType },
-        portalWorkMode,
+  const handleUpload = useCallback(
+    async (runModel: boolean) => {
+      setError(null);
+      setLastResult(null);
+      setInferenceModalOpen(false);
+      if (files.length === 0) {
+        setError('Choose one or more meter images.');
+        return;
+      }
+      if (runModel && inferenceReady === false) {
+        setError(
+          'Model inference is not configured on this server. Set METER_DETECTION_MODEL and METER_KEYPOINT_MODEL in the API .env, or use Upload only.',
+        );
+        return;
+      }
+      setSubmitting(true);
+      setProgress(
+        runModel
+          ? `Running model & uploading ${files.length} image${files.length === 1 ? '' : 's'}…`
+          : `Uploading ${files.length} image${files.length === 1 ? '' : 's'}…`,
       );
-      await refreshData();
-      setLastResult({ uploaded: res.uploaded, failed: res.failed });
-      if (res.uploaded > 0) {
-        setFiles([]);
+      try {
+        const res = runModel
+          ? await createPortalInferenceUploadBulk({ images: files, workType, sourceType }, portalWorkMode)
+          : await createManualUploadBulk({ images: files, workType, sourceType }, portalWorkMode);
+        void refreshData();
+        const modelResults = runModel ? res.results : undefined;
+        const samplePrediction = runModel ? modelResults?.[0]?.mlPrediction : undefined;
+        setLastResult({
+          uploaded: res.uploaded,
+          failed: res.failed,
+          withModel: runModel,
+          samplePrediction,
+          modelSessions: modelResults,
+        });
+        if (runModel && res.uploaded > 0 && (modelResults?.length ?? 0) > 0) {
+          setInferenceModalOpen(true);
+        }
+        if (res.uploaded > 0) {
+          setFiles([]);
+          setProgress(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+        if (res.failed > 0 && res.uploaded === 0) {
+          setError(res.errors[0]?.error || 'All uploads failed.');
+        } else if (res.failed > 0) {
+          setError(`${res.failed} file(s) failed; ${res.uploaded} uploaded.`);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Upload failed');
         setProgress(null);
-        if (fileInputRef.current) fileInputRef.current.value = '';
+      } finally {
+        setSubmitting(false);
       }
-      if (res.failed > 0 && res.uploaded === 0) {
-        setError(res.errors[0]?.error || 'All uploads failed.');
-      } else if (res.failed > 0) {
-        setError(`${res.failed} file(s) failed; ${res.uploaded} uploaded.`);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-      setProgress(null);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [files, portalWorkMode, refreshData, sourceType, workType]);
+    },
+    [files, inferenceReady, portalWorkMode, refreshData, sourceType, workType],
+  );
+
+  useEffect(() => {
+    if (!inferenceModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInferenceModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [inferenceModalOpen]);
+
+  const showInferenceModal =
+    inferenceModalOpen &&
+    lastResult?.withModel &&
+    lastResult.uploaded > 0 &&
+    (lastResult.modelSessions?.length ?? 0) > 0;
 
   return (
     <div className="detail-page">
@@ -201,7 +268,7 @@ const ManualUploadPage: FC = () => {
             <Upload size={32} strokeWidth={1.5} />
             <div>
               <h1>Bulk upload</h1>
-              <p>Upload many images, then label them on the next screen</p>
+              <p>Upload images for labeling, or run the Combined P3 model into Awaiting review</p>
             </div>
           </div>
         </div>
@@ -214,9 +281,7 @@ const ManualUploadPage: FC = () => {
           <h2 className="manual-upload-card-title">
             <ImagePlus size={20} aria-hidden /> Meter images
           </h2>
-          <p className="manual-upload-card-lead">
-            Add one or many photos. You will label readings on the next screen.
-          </p>
+          <p className="manual-upload-card-lead">Add one or many photos.</p>
           <div
             className={`manual-upload-dropzone${dragOver ? ' is-drag-over' : ''}`}
             role="button"
@@ -303,13 +368,36 @@ const ManualUploadPage: FC = () => {
           </div>
         </section>
 
-        {(progress || error || (lastResult && lastResult.uploaded > 0)) ? (
+        {inferenceReady === false ? (
+          <div className="manual-upload-banner manual-upload-banner--warn" role="status">
+            <p>
+              <strong>Upload &amp; run model</strong> needs Python + detector/keypoint <code>.pt</code> paths in{' '}
+              <code>src/.env</code> (<code>METER_KEYPOINT_MODEL</code>, etc.). Restart the API after editing, or
+              use <strong>Upload only</strong>.
+            </p>
+          </div>
+        ) : inferenceReady === true ? (
+          <p className="reading-detail-field-hint manual-upload-inference-ok">
+            Python inference is ready (Combined P3 · detector + keypoint).
+          </p>
+        ) : null}
+
+        {(progress ||
+          error ||
+          (lastResult && lastResult.uploaded > 0 && !lastResult.withModel) ||
+          (lastResult?.withModel && lastResult.failed > 0)) ? (
           <div className="manual-upload-messages">
             {progress ? <p className="manual-upload-status-line">{progress}</p> : null}
-            {lastResult && lastResult.uploaded > 0 ? (
+            {lastResult && lastResult.uploaded > 0 && !lastResult.withModel ? (
               <p className="manual-upload-success">
-                Uploaded {lastResult.uploaded} image{lastResult.uploaded === 1 ? '' : 's'}.
+                Uploaded {lastResult.uploaded} image{lastResult.uploaded === 1 ? '' : 's'} for manual labeling.
                 {lastResult.failed > 0 ? ` (${lastResult.failed} failed)` : ''}
+              </p>
+            ) : null}
+            {lastResult?.withModel && lastResult.failed > 0 ? (
+              <p className="manual-upload-error">
+                {lastResult.failed} file{lastResult.failed === 1 ? '' : 's'} failed
+                {lastResult.uploaded > 0 ? `; ${lastResult.uploaded} uploaded` : ''}.
               </p>
             ) : null}
             {error ? <p className="manual-upload-error">{error}</p> : null}
@@ -321,11 +409,26 @@ const ManualUploadPage: FC = () => {
             type="button"
             className="save-button manual-upload-primary-btn"
             disabled={submitting || files.length === 0}
-            onClick={() => void handleUpload()}
+            title={
+              inferenceReady === false
+                ? 'Configure METER_DETECTION_MODEL and METER_KEYPOINT_MODEL on the API server'
+                : 'Run Combined P3 inference and queue in Awaiting review'
+            }
+            onClick={() => void handleUpload(true)}
+          >
+            {submitting ? <Loader2 size={18} className="spin" /> : <Cpu size={18} />}
+            {submitting ? 'Working…' : `Upload & run model (${files.length || 0})`}
+          </button>
+          <button
+            type="button"
+            className="manual-upload-secondary-btn manual-upload-secondary-btn--block"
+            disabled={submitting || files.length === 0}
+            onClick={() => void handleUpload(false)}
           >
             {submitting ? <Loader2 size={18} className="spin" /> : <Upload size={18} />}
-            {submitting ? 'Uploading…' : `Upload ${files.length || ''} image${files.length === 1 ? '' : 's'}`}
+            Upload only (label later)
           </button>
+
           <button
             type="button"
             className="manual-upload-secondary-btn manual-upload-secondary-btn--block"
@@ -333,12 +436,103 @@ const ManualUploadPage: FC = () => {
             onClick={() => navigate('/manual-upload/label')}
           >
             <Images size={18} aria-hidden />
-            View uploaded images
+            View manual uploads
           </button>
         </footer>
         </aside>
         </div>
       </main>
+
+      {showInferenceModal && lastResult?.modelSessions ? (
+        <div
+          className="manual-upload-result-modal-overlay"
+          role="presentation"
+          onClick={() => setInferenceModalOpen(false)}
+        >
+          <div
+            className="manual-upload-result-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="manual-upload-result-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="manual-upload-result-modal-head">
+              <h2 id="manual-upload-result-modal-title">Model predictions</h2>
+              <button
+                type="button"
+                className="manual-upload-result-modal-close"
+                aria-label="Close"
+                onClick={() => setInferenceModalOpen(false)}
+              >
+                <X size={22} aria-hidden />
+              </button>
+            </header>
+            <div className="manual-upload-result-modal-body">
+              <p className="manual-upload-result-modal-lead">
+                Uploaded {lastResult.uploaded} session{lastResult.uploaded === 1 ? '' : 's'} with location{' '}
+                <strong>Portal UI</strong>.
+                {lastResult.failed > 0 ? ` ${lastResult.failed} file(s) failed.` : ''}
+              </p>
+              <div className="manual-upload-inference-results manual-upload-inference-results--modal">
+                {lastResult.modelSessions.map((session) => (
+                  <article key={session.sessionId} className="manual-upload-inference-session">
+                    <p className="manual-upload-inference-session-title">
+                      {session.fileName ? (
+                        <span className="manual-upload-inference-file">{session.fileName}</span>
+                      ) : null}
+                      <strong className="manual-upload-inference-reading">
+                        {session.mlPrediction || '—'}
+                      </strong>
+                    </p>
+                    {session.dialSummaries?.length ? (
+                      <ul className="manual-upload-dial-digits" aria-label="Per-dial predictions">
+                        {session.dialSummaries.map((d) => (
+                          <li key={d.dial}>
+                            Dial {d.dial}: <strong>{d.digit}</strong>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {session.dialPreviewUrls?.length ? (
+                      <div
+                        className="manual-upload-dial-previews"
+                        role="group"
+                        aria-label={`Dial crops for ${session.fileName || session.sessionId}`}
+                      >
+                        {session.dialPreviewUrls.map((url, i) => (
+                          <figure key={`${session.sessionId}-dial-${i + 1}`}>
+                            <img
+                              src={url}
+                              alt={`Dial ${i + 1} crop`}
+                              className="manual-upload-dial-preview-img"
+                            />
+                            <figcaption>
+                              {session.dialSummaries?.[i] != null ? session.dialSummaries[i].digit : '—'}
+                            </figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </div>
+            <footer className="manual-upload-result-modal-footer">
+              <button
+                type="button"
+                className="save-button manual-upload-result-modal-cta"
+                onClick={() => {
+                  setInferenceModalOpen(false);
+                  navigate('/readings/incorrect_new');
+                }}
+              >
+                <ListChecks size={18} aria-hidden />
+                Awaiting review
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

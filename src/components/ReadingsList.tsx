@@ -82,6 +82,11 @@ const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
   recommended: 'Send to training',
 };
 
+/** Reviewed-outcome cohorts must not intersect the awaiting-review route pool (unreviewed only). */
+function cohortUsesGlobalReadingsPool(cohort: ReadingsCohortId): boolean {
+  return cohort !== 'untrained';
+}
+
 function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boolean {
   switch (cohort) {
     case 'untrained':
@@ -89,7 +94,12 @@ function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boo
     case 'correct':
       return r.status === 'correct';
     case 'wrong':
-      return r.status === 'incorrect_analyzed' || r.status === 'incorrect_labeled' || r.status === 'incorrect_training';
+      return (
+        r.status === 'incorrect_analyzed' ||
+        r.status === 'incorrect_labeled' ||
+        r.status === 'incorrect_training' ||
+        (r.status === 'incorrect_new' && r.isManuallyReviewed === true)
+      );
     case 'training':
     case 'recommended':
       return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
@@ -317,7 +327,9 @@ const ReadingsList: FC = () => {
 
   const readings = useMemo(() => {
     const filterKey = listStatusKey;
-    const base = getReadingsByStatus(filterKey);
+    const base = getReadingsByStatus(
+      activeCohort && cohortUsesGlobalReadingsPool(activeCohort) ? 'all' : filterKey,
+    );
     let filtered = base;
     if (ISO_DAY.test(dateFilter)) {
       filtered = base.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === dateFilter);

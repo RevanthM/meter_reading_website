@@ -10001,6 +10001,16 @@ label.training-hub-filter-card-title--input {
   grid-column: 1 / -1;
 }
 
+.pipeline-iteration-form-scope .pipeline-iteration-form-scope-input {
+  min-height: 9.5rem;
+  resize: vertical;
+  line-height: 1.55;
+  font-size: 0.95rem;
+  font-family: var(--font-display, 'Outfit', sans-serif);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .pipeline-iteration-form-hint {
   margin: 0.5rem 0 0;
   font-size: 0.78rem;
@@ -12103,6 +12113,190 @@ label.training-hub-filter-card-title--input {
 
 .manual-upload-col--side .manual-upload-messages {
   margin: 0;
+}
+
+.manual-upload-banner {
+  margin: 0 0 var(--spacing-md);
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.manual-upload-banner--warn {
+  background: rgba(254, 243, 199, 0.9);
+  border: 1px solid #f59e0b;
+  color: #92400e;
+}
+
+.manual-upload-banner p {
+  margin: 0;
+}
+
+.manual-upload-inference-ok {
+  margin: 0 0 var(--spacing-sm);
+}
+
+.manual-upload-inference-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.65rem;
+}
+
+.manual-upload-inference-session {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.manual-upload-inference-session-title {
+  margin: 0 0 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.manual-upload-inference-file {
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manual-upload-inference-reading {
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+}
+
+.manual-upload-dial-digits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82rem;
+}
+
+.manual-upload-dial-previews {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.manual-upload-dial-previews figure {
+  margin: 0;
+  text-align: center;
+}
+
+.manual-upload-dial-preview-img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: #111;
+}
+
+.manual-upload-dial-previews figcaption {
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.manual-upload-result-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg);
+  background: var(--modal-overlay-bg);
+  backdrop-filter: blur(2px);
+}
+
+.manual-upload-result-modal {
+  width: min(100%, 560px);
+  max-height: min(90vh, 820px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.manual-upload-result-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.manual-upload-result-modal-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.manual-upload-result-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.manual-upload-result-modal-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.manual-upload-result-modal-body {
+  padding: var(--spacing-md) var(--spacing-lg);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.manual-upload-result-modal-lead {
+  margin: 0 0 var(--spacing-md);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.manual-upload-inference-results--modal {
+  margin-top: 0;
+}
+
+.manual-upload-result-modal-footer {
+  padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.manual-upload-result-modal-cta {
+  width: 100%;
+  justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .manual-upload-primary-btn {

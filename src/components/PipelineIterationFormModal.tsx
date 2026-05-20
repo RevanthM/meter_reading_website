@@ -543,13 +543,15 @@ const PipelineIterationFormModal: FC<Props> = ({
                   onChange={(e) => setRow({ ...row, plannedEndDate: e.target.value })}
                 />
               </label>
-              <label className="pipeline-iteration-form-span2">
+              <label className="pipeline-iteration-form-span2 pipeline-iteration-form-scope">
                 Scope{' '}
                 <textarea
-                  rows={2}
+                  className="pipeline-iteration-form-scope-input"
+                  rows={Math.min(16, Math.max(6, row.scope.split('\n').length + 2))}
                   value={row.scope}
                   onChange={(e) => setRow({ ...row, scope: e.target.value })}
-                  placeholder="Training scope / notes"
+                  placeholder="Training scope / notes (e.g. dataset changes, crop size, known issues)"
+                  spellCheck
                 />
               </label>
               <label>

@@ -1456,6 +1456,93 @@ export type ManualUploadBulkResponse = {
   errors: { fileName: string; error: string }[];
 };
 
+export type PortalInferenceDialSummary = {
+  dial: number;
+  digit: number;
+  direction?: string;
+};
+
+export type PortalInferenceBulkResult = {
+  ok: boolean;
+  sessionId: string;
+  s3SessionPrefix: string;
+  workType: string;
+  sourceType: string;
+  mlPrediction: string;
+  inferencePipeline?: string;
+  dialSummaries?: PortalInferenceDialSummary[];
+  /** data:image/jpeg;base64,... thumbnails for upload success UI */
+  dialPreviewUrls?: string[];
+  reading: S3MeterReading;
+  fileName?: string;
+};
+
+export type PortalInferenceBulkResponse = {
+  ok: boolean;
+  uploaded: number;
+  failed: number;
+  results: PortalInferenceBulkResult[];
+  errors: { fileName: string; error: string }[];
+};
+
+export async function fetchMeterInferenceStatus(): Promise<{
+  ready: boolean;
+  enabled: boolean;
+  checks: Record<string, boolean>;
+}> {
+  const response = await fetch(`${API_BASE_URL}/meter-inference/status`);
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+  return body;
+}
+
+export async function createPortalInferenceUploadBulk(
+  params: {
+    images: File[];
+    workType: WorkType;
+    sourceType?: 'field' | 'simulator';
+    userEmail?: string;
+  },
+  portalWorkMode: PortalWorkMode,
+): Promise<PortalInferenceBulkResponse> {
+  const form = new FormData();
+  for (const file of params.images) {
+    form.append('images', file);
+  }
+  form.append('workType', params.workType);
+  if (params.sourceType) form.append('sourceType', params.sourceType);
+
+  const headers: Record<string, string> = {
+    'x-portal-work-mode': portalWorkModeForMetadataHeader(portalWorkMode),
+  };
+  if (params.userEmail) headers['x-user-email'] = params.userEmail;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/portal-uploads/infer-bulk`, {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Upload with model failed.');
+  }
+  const text = await response.text();
+  const body = parseJsonBody<PortalInferenceBulkResponse & { error?: string; status?: unknown }>(
+    text,
+    response.status,
+  );
+  if (!response.ok && response.status !== 207) {
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+  if (!body.ok && body.uploaded === 0) {
+    throw new Error(body.errors?.[0]?.error || body.error || 'Upload with model failed');
+  }
+  return body;
+}
+
 export async function createManualUploadBulk(
   params: {
     images: File[];
