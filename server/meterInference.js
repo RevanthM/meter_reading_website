@@ -1,6 +1,6 @@
 /**
- * Portal meter inference — local Python Combined P3 (detector + keypoint + Stage D).
- * Uses a persistent worker process so models are loaded once per server lifetime.
+ * Portal meter inference — DISABLED (not registered in server/index.js).
+ * Local Python Combined P3 (detector + keypoint + Stage D); requires YOLO weights on the API host.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';

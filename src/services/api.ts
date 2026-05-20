@@ -1456,6 +1456,7 @@ export type ManualUploadBulkResponse = {
   errors: { fileName: string; error: string }[];
 };
 
+/* Portal local Python inference (Upload & run model) — disabled; see server/meterInference.js
 export type PortalInferenceDialSummary = {
   dial: number;
   digit: number;
@@ -1471,7 +1472,6 @@ export type PortalInferenceBulkResult = {
   mlPrediction: string;
   inferencePipeline?: string;
   dialSummaries?: PortalInferenceDialSummary[];
-  /** data:image/jpeg;base64,... thumbnails for upload success UI */
   dialPreviewUrls?: string[];
   reading: S3MeterReading;
   fileName?: string;
@@ -1542,6 +1542,7 @@ export async function createPortalInferenceUploadBulk(
   }
   return body;
 }
+*/
 
 export async function createManualUploadBulk(
   params: {

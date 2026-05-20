@@ -1,5 +1,6 @@
 /**
- * Portal "Upload & run model" → local Python Combined P3 → awaiting-review S3 sessions.
+ * Portal "Upload & run model" — DISABLED (not registered in server/index.js).
+ * Local Python Combined P3 → awaiting-review S3 sessions.
  */
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {

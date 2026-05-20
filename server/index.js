@@ -26,7 +26,8 @@ import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCs
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
-import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
+// Portal local Python inference disabled (requires a machine with YOLO weights).
+// import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -3021,14 +3022,14 @@ registerManualUploadRoutes(app, {
   bulkUploadMiddleware: manualBulkUploadMiddleware,
 });
 
-registerPortalInferenceRoutes(app, {
-  s3Client,
-  BUCKET_NAME,
-  withS3Base,
-  invalidateReadingsCache,
-  parseSession,
-  bulkUploadMiddleware: manualBulkUploadMiddleware,
-});
+// registerPortalInferenceRoutes(app, {
+//   s3Client,
+//   BUCKET_NAME,
+//   withS3Base,
+//   invalidateReadingsCache,
+//   parseSession,
+//   bulkUploadMiddleware: manualBulkUploadMiddleware,
+// });
 
 const COPY_TO_TRAINING_MAX_SESSIONS = Math.max(
   1,
