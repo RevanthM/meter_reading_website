@@ -5,10 +5,14 @@ import {
   type FactoryProductLine,
 } from './factoryStages';
 import {
+  avgAppDialAccuracyPct,
+  avgAppDialConfidencePct,
   avgFtDialAccuracyPct,
+  avgSimDialAccuracyPct,
   avgSimDialConfidencePct,
   avgUtDialAccuracyPct,
 } from '../utils/iterationMetricsEnrichment';
+import { normalizeManualMetricPct } from '../utils/metricNumbers';
 
 /** Matches Model factory product-line chips (p1 sky · p2 violet · p3 emerald). */
 export const FACTORY_PRODUCT_LINE_CHART: Record<
@@ -22,8 +26,30 @@ export const FACTORY_PRODUCT_LINE_CHART: Record<
 
 export const PIPELINE_CHART_LINES: Exclude<FactoryProductLine, 'unknown'>[] = ['p1', 'p2', 'p3'];
 
+export type ChartPipelineFilter = 'all' | Exclude<FactoryProductLine, 'unknown'>;
+
 export function chartThemeForLine(line: Exclude<FactoryProductLine, 'unknown'>) {
   return FACTORY_PRODUCT_LINE_CHART[line];
+}
+
+/** Filter registry rows for charts by product line (color-coded p1 / p2 / p3). */
+export function filterRowsByProductLine(
+  rows: PipelineIterationRecord[],
+  filter: ChartPipelineFilter,
+): PipelineIterationRecord[] {
+  if (filter === 'all') return rows;
+  return rows.filter((r) => inferProductLineForRow(r) === filter);
+}
+
+function meanFinite(nums: number[]): number | null {
+  if (!nums.length) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function portalPct(raw: number | null | undefined): number | null {
+  if (raw == null || !Number.isFinite(raw)) return null;
+  const v = raw <= 1 && raw >= 0 ? raw * 100 : raw;
+  return Math.round(v * 100) / 100;
 }
 
 function chartRowRichness(row: PipelineIterationRecord): number {
@@ -33,6 +59,11 @@ function chartRowRichness(row: PipelineIterationRecord): number {
   if (m?.readAccuracyUt != null) n += 4;
   if (m?.exactReadingAccuracyPct != null) n += 2;
   if (avgSimDialConfidencePct(m) != null) n += 1;
+  for (let d = 1; d <= 4; d += 1) {
+    if (normalizeManualMetricPct(m?.[`simDial${d}ConfidencePct` as keyof typeof m]) != null) n += 2;
+    if (normalizeManualMetricPct(m?.[`dial${d}UtPct` as keyof typeof m]) != null) n += 2;
+    if (normalizeManualMetricPct(m?.[`dial${d}FtPct` as keyof typeof m]) != null) n += 2;
+  }
   return n;
 }
 
@@ -63,8 +94,8 @@ export function filterRegistryOverviewRows(rows: PipelineIterationRecord[]): Pip
 const CHART_ITERATION_NUMBERS = [1, 2, 3] as const;
 
 /**
- * Registry rows for charts: iterations #1–#3 per product line when present.
- * Uses iteration number explicitly so a stray "Sempra - 2" #1 row does not hide Sempra -1 #2.
+ * Registry rows for metric charts: all non-cancelled iterations per product line, sorted.
+ * When duplicate iteration #s exist, keeps the richest row for that slot.
  */
 export function filterEvalChartRows(rows: PipelineIterationRecord[]): PipelineIterationRecord[] {
   const out: PipelineIterationRecord[] = [];
@@ -73,22 +104,104 @@ export function filterEvalChartRows(rows: PipelineIterationRecord[]): PipelineIt
       if (String(r.currentStatus).toLowerCase() === 'cancelled') return false;
       return inferProductLineForRow(r) === line;
     });
-    for (const iterNum of CHART_ITERATION_NUMBERS) {
+    const iterNums = [...new Set(list.map((r) => r.iterationNumber))].sort((a, b) => a - b);
+    for (const iterNum of iterNums.length ? iterNums : CHART_ITERATION_NUMBERS) {
       const row = pickRowForIteration(list, iterNum);
       if (row) out.push(row);
     }
   }
-  return out;
+  return out.sort((a, b) => {
+    const la = inferProductLineForRow(a);
+    const lb = inferProductLineForRow(b);
+    const ia = PIPELINE_CHART_LINES.indexOf(la as Exclude<FactoryProductLine, 'unknown'>);
+    const ib = PIPELINE_CHART_LINES.indexOf(lb as Exclude<FactoryProductLine, 'unknown'>);
+    if (ia !== ib) return ia - ib;
+    return a.iterationNumber - b.iterationNumber;
+  });
+}
+
+/** read − sim when both sides exist (positive = read ahead). */
+export function simReadGapPct(read: number | null, sim: number | null): number | null {
+  if (read == null || sim == null || !Number.isFinite(read) || !Number.isFinite(sim)) return null;
+  return Math.round((read - sim) * 100) / 100;
 }
 
 export function simConfidencePct(row: PipelineIterationRecord): number | null {
   const v = avgSimDialConfidencePct(row.manualMetrics);
-  if (v == null || !Number.isFinite(v)) return null;
-  return Math.round(v * 100) / 100;
+  if (v != null && Number.isFinite(v)) return Math.round(v * 100) / 100;
+  const p = row.portalStats;
+  if (p?.avgSessionConfidence != null && Number.isFinite(p.avgSessionConfidence)) {
+    return portalPct(p.avgSessionConfidence);
+  }
+  return null;
 }
 
-/** Read accuracy: field test → unit test → exact reading → UT dial avg. */
+/** App / on-device read confidence (avg app dial confidence → app bbox/keypoint). */
+export function readConfidencePct(row: PipelineIterationRecord): number | null {
+  const m = row.manualMetrics;
+  const dial = avgAppDialConfidencePct(m);
+  if (dial != null) return Math.round(dial * 100) / 100;
+  const appConf = meanFinite(
+    [m?.appAvgBboxConfidence, m?.appAvgKeypointConfidence].filter(
+      (v): v is number => v != null && Number.isFinite(v),
+    ),
+  );
+  if (appConf != null) return Math.round(appConf * 100) / 100;
+  return null;
+}
+
+/** Simulator accuracy: sim dials → laptop summary → portal UT dials. */
+export function simAccuracyPct(row: PipelineIterationRecord): number | null {
+  const m = row.manualMetrics;
+  const simDial = avgSimDialAccuracyPct(m);
+  if (simDial != null) return Math.round(simDial * 100) / 100;
+  if (m?.readAccuracySimulatorLaptop != null && Number.isFinite(m.readAccuracySimulatorLaptop)) {
+    return m.readAccuracySimulatorLaptop;
+  }
+  const utAvg = avgUtDialAccuracyPct(m);
+  if (utAvg != null) return Math.round(utAvg * 100) / 100;
+
+  const p = row.portalStats;
+  if (p) {
+    if (p.digitMatchUtPct != null && Number.isFinite(p.digitMatchUtPct)) return portalPct(p.digitMatchUtPct);
+    const utDials = meanFinite(
+      [p.dial1UtPct, p.dial2UtPct, p.dial3UtPct, p.dial4UtPct].filter(
+        (v): v is number => v != null && Number.isFinite(v),
+      ),
+    );
+    if (utDials != null) return Math.round(utDials * 100) / 100;
+  }
+  return null;
+}
+
+/** Read / app accuracy: app dials → UT/FT row summaries → portal FT dials. */
 export function readAccuracyPct(row: PipelineIterationRecord): number | null {
+  const m = row.manualMetrics;
+  const appDial = avgAppDialAccuracyPct(m);
+  if (appDial != null) return Math.round(appDial * 100) / 100;
+  if (m?.readAccuracyUt != null && Number.isFinite(m.readAccuracyUt)) return m.readAccuracyUt;
+  if (m?.readAccuracyFtRow != null && Number.isFinite(m.readAccuracyFtRow)) return m.readAccuracyFtRow;
+  if (m?.exactReadingAccuracyPct != null && Number.isFinite(m.exactReadingAccuracyPct)) {
+    return m.exactReadingAccuracyPct;
+  }
+  const ftAvg = avgFtDialAccuracyPct(m);
+  if (ftAvg != null) return Math.round(ftAvg * 100) / 100;
+
+  const p = row.portalStats;
+  if (p) {
+    if (p.digitMatchFtPct != null && Number.isFinite(p.digitMatchFtPct)) return portalPct(p.digitMatchFtPct);
+    const ftDials = meanFinite(
+      [p.dial1FtPct, p.dial2FtPct, p.dial3FtPct, p.dial4FtPct].filter(
+        (v): v is number => v != null && Number.isFinite(v),
+      ),
+    );
+    if (ftDials != null) return Math.round(ftDials * 100) / 100;
+  }
+  return null;
+}
+
+/** Eval accuracy (FT → UT → exact → portal queue) — not used on sim-vs-read charts. */
+export function evalAccuracyPct(row: PipelineIterationRecord): number | null {
   const m = row.manualMetrics;
   if (m?.readAccuracyFtRow != null && Number.isFinite(m.readAccuracyFtRow)) return m.readAccuracyFtRow;
   const ftAvg = avgFtDialAccuracyPct(m);
@@ -99,12 +212,45 @@ export function readAccuracyPct(row: PipelineIterationRecord): number | null {
   }
   const utAvg = avgUtDialAccuracyPct(m);
   if (utAvg != null) return Math.round(utAvg * 100) / 100;
+
+  const p = row.portalStats;
+  if (p) {
+    if (p.digitMatchFtPct != null && Number.isFinite(p.digitMatchFtPct)) return portalPct(p.digitMatchFtPct);
+    const ftDials = meanFinite(
+      [p.dial1FtPct, p.dial2FtPct, p.dial3FtPct, p.dial4FtPct].filter(
+        (v): v is number => v != null && Number.isFinite(v),
+      ),
+    );
+    if (ftDials != null) return Math.round(ftDials * 100) / 100;
+    if (p.digitMatchUtPct != null && Number.isFinite(p.digitMatchUtPct)) return portalPct(p.digitMatchUtPct);
+    const utDials = meanFinite(
+      [p.dial1UtPct, p.dial2UtPct, p.dial3UtPct, p.dial4UtPct].filter(
+        (v): v is number => v != null && Number.isFinite(v),
+      ),
+    );
+    if (utDials != null) return Math.round(utDials * 100) / 100;
+    if (p.queueCorrectRateAll != null && Number.isFinite(p.queueCorrectRateAll)) {
+      return portalPct(p.queueCorrectRateAll);
+    }
+  }
   return null;
 }
 
-/** @deprecated use readAccuracyPct */
+/** Manual review rate %, or estimated from portal non-correct share when manual is blank. */
+export function manualReviewRatePct(row: PipelineIterationRecord): number | null {
+  const v = row.manualMetrics?.manualReviewRatePct;
+  if (v != null && Number.isFinite(v)) return Math.min(100, Math.max(0, v));
+  const correct = row.portalStats?.queueCorrectRateAll;
+  if (correct != null && Number.isFinite(correct)) {
+    const pct = correct <= 1 ? (1 - correct) * 100 : 100 - correct;
+    return Math.round(Math.min(100, Math.max(0, pct)) * 100) / 100;
+  }
+  return null;
+}
+
+/** @deprecated use evalAccuracyPct */
 export function primaryEvalAccuracyPct(row: PipelineIterationRecord): number | null {
-  return readAccuracyPct(row);
+  return evalAccuracyPct(row);
 }
 
 export type PipelineIterationChartPoint = {
@@ -113,9 +259,84 @@ export type PipelineIterationChartPoint = {
   pipeline: string;
   iterationNumber: number;
   xLabel: string;
-  confidencePct: number | null;
-  accuracyPct: number | null;
+  simConfidencePct: number | null;
+  readConfidencePct: number | null;
+  simAccuracyPct: number | null;
+  readAccuracyPct: number | null;
+  /** read − sim confidence */
+  confGapPct: number | null;
+  /** read − sim accuracy */
+  accGapPct: number | null;
+  /** Full-meter / eval golden accuracy (FT → UT → exact). */
+  exactReadingPct: number | null;
 };
+
+export type PerDialMetricRow = {
+  dial: string;
+  simConf: number | null;
+  appConf: number | null;
+  simAcc: number | null;
+  appAcc: number | null;
+};
+
+const DIAL_NUMS = [1, 2, 3, 4] as const;
+
+function dialField(
+  m: PipelineIterationRecord['manualMetrics'],
+  prefix: 'simDial' | 'appDial',
+  n: (typeof DIAL_NUMS)[number],
+  metric: 'ConfidencePct' | 'AccuracyPct',
+): number | null {
+  if (!m) return null;
+  const key = `${prefix}${n}${metric}` as keyof NonNullable<typeof m>;
+  return normalizeManualMetricPct(m[key]);
+}
+
+function manualUtDialPct(m: PipelineIterationRecord['manualMetrics'], n: (typeof DIAL_NUMS)[number]): number | null {
+  if (!m) return null;
+  const key = `dial${n}UtPct` as keyof NonNullable<typeof m>;
+  return normalizeManualMetricPct(m[key]);
+}
+
+function manualFtDialPct(m: PipelineIterationRecord['manualMetrics'], n: (typeof DIAL_NUMS)[number]): number | null {
+  if (!m) return null;
+  const key = `dial${n}FtPct` as keyof NonNullable<typeof m>;
+  return normalizeManualMetricPct(m[key]);
+}
+
+function portalDialPct(
+  row: PipelineIterationRecord,
+  kind: 'ut' | 'ft',
+  n: (typeof DIAL_NUMS)[number],
+): number | null {
+  const p = row.portalStats;
+  if (!p) return null;
+  const key = `dial${n}${kind === 'ut' ? 'Ut' : 'Ft'}Pct` as keyof typeof p;
+  return portalPct(p[key] as number | null | undefined);
+}
+
+/**
+ * Per-dial sim/app confidence & accuracy for one registry row.
+ * Accuracy falls back to dial1–4 UT % (sim/UT) and FT % (app/field) when simDial/appDial accuracy columns are empty.
+ */
+export function perDialMetricsFromRow(row: PipelineIterationRecord): PerDialMetricRow[] {
+  const m = row.manualMetrics;
+  return DIAL_NUMS.map((n) => ({
+    dial: `Dial ${n}`,
+    simConf: dialField(m, 'simDial', n, 'ConfidencePct'),
+    appConf: dialField(m, 'appDial', n, 'ConfidencePct'),
+    simAcc:
+      dialField(m, 'simDial', n, 'AccuracyPct') ?? manualUtDialPct(m, n) ?? portalDialPct(row, 'ut', n),
+    appAcc:
+      dialField(m, 'appDial', n, 'AccuracyPct') ?? manualFtDialPct(m, n) ?? portalDialPct(row, 'ft', n),
+  }));
+}
+
+export function rowHasPerDialMetrics(row: PipelineIterationRecord): boolean {
+  return perDialMetricsFromRow(row).some(
+    (d) => d.simConf != null || d.appConf != null || d.simAcc != null || d.appAcc != null,
+  );
+}
 
 export function buildPipelineIterationChartPoints(
   rows: PipelineIterationRecord[],
@@ -129,8 +350,13 @@ export function buildPipelineIterationChartPoints(
       pipeline: productLineDisplay(line),
       iterationNumber: r.iterationNumber,
       xLabel: `${short} · #${r.iterationNumber}`,
-      confidencePct: simConfidencePct(r),
-      accuracyPct: readAccuracyPct(r),
+      simConfidencePct: simConfidencePct(r),
+      readConfidencePct: readConfidencePct(r),
+      simAccuracyPct: simAccuracyPct(r),
+      readAccuracyPct: readAccuracyPct(r),
+      confGapPct: simReadGapPct(readConfidencePct(r), simConfidencePct(r)),
+      accGapPct: simReadGapPct(readAccuracyPct(r), simAccuracyPct(r)),
+      exactReadingPct: evalAccuracyPct(r),
     };
   });
 }
@@ -140,8 +366,10 @@ export type PipelineGroupedChartRow = {
   line: Exclude<FactoryProductLine, 'unknown'>;
   slots: {
     iterationNumber: number;
-    confidencePct: number | null;
-    accuracyPct: number | null;
+    simConfidencePct: number | null;
+    readConfidencePct: number | null;
+    simAccuracyPct: number | null;
+    readAccuracyPct: number | null;
   }[];
 };
 
@@ -159,8 +387,10 @@ export function buildPipelineGroupedChartRows(
       line,
       slots: list.map((r) => ({
         iterationNumber: r.iterationNumber,
-        confidencePct: simConfidencePct(r),
-        accuracyPct: readAccuracyPct(r),
+        simConfidencePct: simConfidencePct(r),
+        readConfidencePct: readConfidencePct(r),
+        simAccuracyPct: simAccuracyPct(r),
+        readAccuracyPct: readAccuracyPct(r),
       })),
     });
   }
@@ -181,8 +411,10 @@ export function flattenPipelineMetricGroups(rows: PipelineIterationRecord[]): Ar
     };
     group.slots.forEach((slot, idx) => {
       const n = idx + 1;
-      flat[`conf_${n}`] = slot.confidencePct;
-      flat[`acc_${n}`] = slot.accuracyPct;
+      flat[`simConf_${n}`] = slot.simConfidencePct;
+      flat[`readConf_${n}`] = slot.readConfidencePct;
+      flat[`simAcc_${n}`] = slot.simAccuracyPct;
+      flat[`readAcc_${n}`] = slot.readAccuracyPct;
       flat[`iterNum_${n}`] = slot.iterationNumber;
     });
     return flat as Record<string, string | number | null> & {
@@ -194,10 +426,10 @@ export function flattenPipelineMetricGroups(rows: PipelineIterationRecord[]): Ar
 
 export function pipelineImprovementSummary(row: PipelineGroupedChartRow): string | null {
   if (row.slots.length < 2) return null;
-  const first = row.slots[0].accuracyPct;
-  const last = row.slots[row.slots.length - 1].accuracyPct;
+  const first = row.slots[0].readAccuracyPct;
+  const last = row.slots[row.slots.length - 1].readAccuracyPct;
   if (first == null || last == null) return null;
   const delta = last - first;
   const sign = delta >= 0 ? '+' : '';
-  return `#${row.slots[0].iterationNumber} → #${row.slots[row.slots.length - 1].iterationNumber}: ${sign}${delta.toFixed(1)} pts accuracy`;
+  return `#${row.slots[0].iterationNumber} → #${row.slots[row.slots.length - 1].iterationNumber}: ${sign}${delta.toFixed(1)} pts read accuracy`;
 }

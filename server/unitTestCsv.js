@@ -5,11 +5,49 @@
 
 import { ListObjectsV2Command } from '@aws-sdk/client-s3';
 
+/** iOS export: d1/d2/d3 = normal / difficult / very_difficult (not meter dials). */
+const IMAGE_DIFFICULTY_TIERS = [
+  { code: 'd1', label: 'Normal' },
+  { code: 'd2', label: 'Difficult' },
+  { code: 'd3', label: 'Very difficult' },
+];
+
+/**
+ * @param {Record<string, string>} raw keys like d1_image_count, d1_accuracy_percent
+ */
+function buildImageDifficultyBreakdown(raw) {
+  return IMAGE_DIFFICULTY_TIERS.map(({ code, label }) => {
+    const imageCount = parseInt(raw[`${code}_image_count`] || '0', 10) || 0;
+    const withGroundTruth = parseInt(raw[`${code}_with_ground_truth`] || '0', 10) || 0;
+    const correct = parseInt(raw[`${code}_correct`] || '0', 10) || 0;
+    const accRaw = raw[`${code}_accuracy_percent`];
+    let accuracyPct = null;
+    if (accRaw != null && accRaw !== '') {
+      const v = parseFloat(accRaw);
+      if (Number.isFinite(v)) accuracyPct = Math.round(v * 10) / 10;
+    } else if (withGroundTruth > 0) {
+      accuracyPct = Math.round((1000 * correct) / withGroundTruth) / 10;
+    }
+    let confidencePct = null;
+    const confRaw = raw[`${code}_average_confidence`];
+    if (confRaw != null && confRaw !== '') {
+      const n = parseFloat(confRaw);
+      if (Number.isFinite(n)) {
+        const pct = n <= 1 && n >= 0 ? n * 100 : n;
+        confidencePct = Math.round(pct * 10) / 10;
+      }
+    }
+    return { code, label, imageCount, withGroundTruth, correct, accuracyPct, confidencePct };
+  });
+}
+
 /** @param {string} csvText */
 export function parseUnitTestCsvSummary(csvText) {
   const lines = csvText.split(/\r?\n/).filter((l) => l.length > 0);
   const summary = {};
-  let inSummary = false;
+  const imageDifficulty = {};
+  /** @type {'run' | 'per_dial' | 'image_difficulty' | null} */
+  let summarySection = null;
   let perImageHeader = null;
   const perImageRows = [];
 
@@ -17,21 +55,36 @@ export function parseUnitTestCsvSummary(csvText) {
     const cols = parseCsvLine(line);
     if (cols.length >= 2 && cols[0] === 'section') {
       if (cols[1] === 'UNIT_TEST_RUN_SUMMARY') {
-        inSummary = true;
+        summarySection = 'run';
+        continue;
+      }
+      if (cols[1] === 'PER_DIAL_BREAKDOWN') {
+        summarySection = 'per_dial';
+        continue;
+      }
+      if (cols[1] === 'IMAGE_DIFFICULTY_BREAKDOWN') {
+        summarySection = 'image_difficulty';
         continue;
       }
       if (cols[1] === 'PER_IMAGE_PER_DIAL_ROWS') {
-        inSummary = false;
+        summarySection = null;
         continue;
       }
+      summarySection = null;
+      continue;
     }
 
-    if (inSummary && cols.length >= 2) {
+    if (summarySection === 'image_difficulty' && cols.length >= 2 && cols[0] !== '' && cols[0] !== 'section') {
+      imageDifficulty[cols[0]] = cols[1];
+      continue;
+    }
+
+    if (summarySection && summarySection !== 'image_difficulty' && cols.length >= 2 && cols[0] !== '' && cols[0] !== 'section') {
       summary[cols[0]] = cols[1];
       continue;
     }
 
-    if (!inSummary && !perImageHeader && cols[0] === 's3_key') {
+    if (!summarySection && !perImageHeader && cols[0] === 's3_key') {
       perImageHeader = cols;
       continue;
     }
@@ -55,6 +108,9 @@ export function parseUnitTestCsvSummary(csvText) {
         ? (100 * correct) / withGroundTruth
         : null;
 
+  const imageDifficultyBreakdown =
+    Object.keys(imageDifficulty).length > 0 ? buildImageDifficultyBreakdown(imageDifficulty) : [];
+
   return {
     summary: {
       ...summary,
@@ -63,6 +119,7 @@ export function parseUnitTestCsvSummary(csvText) {
       correct,
       accuracyPercent,
     },
+    imageDifficultyBreakdown,
     perImageRows,
     perImageCount: perImageRows.length,
   };

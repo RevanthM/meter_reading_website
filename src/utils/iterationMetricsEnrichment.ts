@@ -1,35 +1,72 @@
 import type { PipelineIterationManualMetrics, PipelineIterationRecord } from '../services/api';
+import {
+  evalAccuracyPct,
+  readAccuracyPct,
+  readConfidencePct,
+  simAccuracyPct,
+  simConfidencePct,
+  simReadGapPct,
+} from '../constants/pipelineChartTheme';
+import { normalizeManualMetricPct } from './metricNumbers';
 
 function mean(nums: number[]): number | null {
   if (!nums.length) return null;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
+function meanNormalized(values: unknown[]): number | null {
+  const nums = values.map(normalizeManualMetricPct).filter((v): v is number => v != null);
+  return mean(nums);
+}
+
 export function avgSimDialConfidencePct(m: PipelineIterationManualMetrics | null | undefined): number | null {
   if (!m) return null;
-  return mean(
-    [m.simDial1ConfidencePct, m.simDial2ConfidencePct, m.simDial3ConfidencePct, m.simDial4ConfidencePct].filter(
-      (v): v is number => v != null && Number.isFinite(v),
-    ),
-  );
+  return meanNormalized([
+    m.simDial1ConfidencePct,
+    m.simDial2ConfidencePct,
+    m.simDial3ConfidencePct,
+    m.simDial4ConfidencePct,
+  ]);
+}
+
+export function avgAppDialConfidencePct(m: PipelineIterationManualMetrics | null | undefined): number | null {
+  if (!m) return null;
+  return meanNormalized([
+    m.appDial1ConfidencePct,
+    m.appDial2ConfidencePct,
+    m.appDial3ConfidencePct,
+    m.appDial4ConfidencePct,
+  ]);
+}
+
+export function avgSimDialAccuracyPct(m: PipelineIterationManualMetrics | null | undefined): number | null {
+  if (!m) return null;
+  return meanNormalized([
+    m.simDial1AccuracyPct,
+    m.simDial2AccuracyPct,
+    m.simDial3AccuracyPct,
+    m.simDial4AccuracyPct,
+  ]);
+}
+
+export function avgAppDialAccuracyPct(m: PipelineIterationManualMetrics | null | undefined): number | null {
+  if (!m) return null;
+  return meanNormalized([
+    m.appDial1AccuracyPct,
+    m.appDial2AccuracyPct,
+    m.appDial3AccuracyPct,
+    m.appDial4AccuracyPct,
+  ]);
 }
 
 export function avgUtDialAccuracyPct(m: PipelineIterationManualMetrics | null | undefined): number | null {
   if (!m) return null;
-  return mean(
-    [m.dial1UtPct, m.dial2UtPct, m.dial3UtPct, m.dial4UtPct].filter(
-      (v): v is number => v != null && Number.isFinite(v),
-    ),
-  );
+  return meanNormalized([m.dial1UtPct, m.dial2UtPct, m.dial3UtPct, m.dial4UtPct]);
 }
 
 export function avgFtDialAccuracyPct(m: PipelineIterationManualMetrics | null | undefined): number | null {
   if (!m) return null;
-  return mean(
-    [m.dial1FtPct, m.dial2FtPct, m.dial3FtPct, m.dial4FtPct].filter(
-      (v): v is number => v != null && Number.isFinite(v),
-    ),
-  );
+  return meanNormalized([m.dial1FtPct, m.dial2FtPct, m.dial3FtPct, m.dial4FtPct]);
 }
 
 function pipelineFamily(pipeline: string): string {
@@ -159,10 +196,15 @@ export function sortIterationsChronologically(rows: PipelineIterationRecord[]): 
   });
 }
 
-/** Latest completed iteration with eval metrics (for dashboard KPI strip). */
+/** Latest completed iteration with sim vs read metrics (for dashboard KPI strip). */
 export function latestIterationKpis(rows: PipelineIterationRecord[]): {
-  confidencePct: number | null;
-  accuracyPct: number | null;
+  simConfidencePct: number | null;
+  readConfidencePct: number | null;
+  simAccuracyPct: number | null;
+  readAccuracyPct: number | null;
+  confGapPct: number | null;
+  accGapPct: number | null;
+  exactReadingPct: number | null;
   label: string | null;
 } {
   const enriched = enrichIterationRegistryRows(rows);
@@ -170,19 +212,32 @@ export function latestIterationKpis(rows: PipelineIterationRecord[]): {
     (r) => String(r.currentStatus).toLowerCase() === 'completed',
   );
   const latest = completed[completed.length - 1];
-  if (!latest) return { confidencePct: null, accuracyPct: null, label: null };
+  if (!latest) {
+    return {
+      simConfidencePct: null,
+      readConfidencePct: null,
+      simAccuracyPct: null,
+      readAccuracyPct: null,
+      confGapPct: null,
+      accGapPct: null,
+      exactReadingPct: null,
+      label: null,
+    };
+  }
 
-  const m = latest.manualMetrics;
-  const confidencePct = avgSimDialConfidencePct(m);
-  const accuracyPct =
-    m?.exactReadingAccuracyPct ??
-    m?.readAccuracyFtRow ??
-    m?.readAccuracyUt ??
-    avgUtDialAccuracyPct(m ?? undefined);
+  const simConf = simConfidencePct(latest);
+  const readConf = readConfidencePct(latest);
+  const simAcc = simAccuracyPct(latest);
+  const readAcc = readAccuracyPct(latest);
 
   return {
-    confidencePct: confidencePct != null ? Math.round(confidencePct * 100) / 100 : null,
-    accuracyPct: accuracyPct != null && Number.isFinite(accuracyPct) ? Math.round(accuracyPct * 100) / 100 : null,
+    simConfidencePct: simConf,
+    readConfidencePct: readConf,
+    simAccuracyPct: simAcc,
+    readAccuracyPct: readAcc,
+    confGapPct: simReadGapPct(readConf, simConf),
+    accGapPct: simReadGapPct(readAcc, simAcc),
+    exactReadingPct: evalAccuracyPct(latest),
     label: `${latest.pipeline.trim()} · #${latest.iterationNumber}`,
   };
 }

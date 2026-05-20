@@ -32,10 +32,11 @@ import {
 } from '../utils/readingDisplayDates';
 import {
   enrichIterationRegistryRows,
-  latestIterationKpis,
 } from '../utils/iterationMetricsEnrichment';
-import DashboardIterationTrendChart from './DashboardIterationTrendChart';
-import PipelineIterationsCharts from './PipelineIterationsCharts';
+import DashboardPipelineEssentials from './DashboardPipelineEssentials';
+import DashboardUnitTestInsights from './DashboardUnitTestInsights';
+import PipelineChartLineFilter from './PipelineChartLineFilter';
+import { filterRowsByProductLine, type ChartPipelineFilter } from '../constants/pipelineChartTheme';
 
 const REGISTRY_CHART_DEFER_MS = 80;
 
@@ -305,6 +306,7 @@ const Dashboard: FC = () => {
   const [chartRange] = useState<ChartRangeId>('all');
   const [registryIterations, setRegistryIterations] = useState<PipelineIterationRecord[]>([]);
   const [registryLoading, setRegistryLoading] = useState(false);
+  const [pipelineLineFilter, setPipelineLineFilter] = useState<ChartPipelineFilter>('all');
 
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
@@ -314,12 +316,15 @@ const Dashboard: FC = () => {
   const glanceCounts = counts;
   const kpiDataLoading = countsLoading;
 
-  const enrichedRegistry = useMemo(
+  const enrichedRegistryAll = useMemo(
     () => enrichIterationRegistryRows(registryIterations),
     [registryIterations],
   );
 
-  const iterationKpis = useMemo(() => latestIterationKpis(enrichedRegistry), [enrichedRegistry]);
+  const chartRegistryRows = useMemo(
+    () => filterRowsByProductLine(enrichedRegistryAll, pipelineLineFilter),
+    [enrichedRegistryAll, pipelineLineFilter],
+  );
 
   const loadRegistry = useCallback(async () => {
     setRegistryLoading(true);
@@ -377,10 +382,6 @@ const Dashboard: FC = () => {
 
   const handleCardClick = (status: ReadingStatus | 'all') => {
     navigate(`/readings/${status}${getChartRangeSearchSuffix(chartRange)}`);
-  };
-
-  const handleViewAllSessions = () => {
-    navigate(`/readings/all${getChartRangeSearchSuffix(chartRange)}`);
   };
 
   const handleDrillByDay = (isoDay: string) => {
@@ -538,45 +539,40 @@ const Dashboard: FC = () => {
         <section className="dashboard-section dashboard-section--viz dashboard-section--pipeline-registry">
             <div className="dashboard-section-head dashboard-section-head--range-top">
               <div>
-                <h2 className="section-title">Pipeline & model performance</h2>
+                <h2 className="section-title">Training & improvement</h2>
                 <p className="dashboard-section-sub">
-                  From the{' '}
+                  Images trained and simulator vs app confidence/accuracy by iteration —{' '}
                   <button
                     type="button"
                     className="training-hub-text-btn"
                     onClick={() => navigate('/pipeline-iterations')}
                   >
-                    pipeline iterations registry
+                    edit in registry
                   </button>
                   .
                 </p>
                 {registryLoading ? (
                   <p className="dashboard-section-loading-hint">Loading registry…</p>
-                ) : iterationKpis.label ? (
-                  <p className="dashboard-improvement-registry-hint" role="note">
-                    Latest completed: <strong>{iterationKpis.label}</strong>
-                    {iterationKpis.confidencePct != null
-                      ? ` · sim confidence ${iterationKpis.confidencePct.toFixed(1)}%`
-                      : ''}
-                    {iterationKpis.accuracyPct != null
-                      ? ` · eval accuracy ${iterationKpis.accuracyPct.toFixed(1)}%`
-                      : ''}
-                  </p>
                 ) : null}
               </div>
+              {!registryLoading && enrichedRegistryAll.length > 0 ? (
+                <PipelineChartLineFilter value={pipelineLineFilter} onChange={setPipelineLineFilter} />
+              ) : null}
             </div>
-            {registryLoading && !enrichedRegistry.length ? (
+            {registryLoading && !chartRegistryRows.length ? (
               <div className="chart-empty chart-empty--tight">
                 <Loader2 size={28} className="spin" />
                 <span>Loading pipeline registry…</span>
               </div>
-            ) : enrichedRegistry.length ? (
+            ) : chartRegistryRows.length ? (
               <>
-                <div className="dashboard-charts-hero dashboard-charts-hero--single">
-                  <DashboardIterationTrendChart rows={enrichedRegistry} />
-                </div>
-                <PipelineIterationsCharts rows={enrichedRegistry} sourceRows={registryIterations} embedded />
+                <DashboardPipelineEssentials rows={chartRegistryRows} pipelineFilter={pipelineLineFilter} />
+                <DashboardUnitTestInsights rows={chartRegistryRows} />
               </>
+            ) : enrichedRegistryAll.length ? (
+              <div className="chart-empty">
+                <p>No iterations for this pipeline filter.</p>
+              </div>
             ) : (
               <div className="chart-empty">
                 <p>No pipeline iterations yet.</p>
@@ -592,19 +588,25 @@ const Dashboard: FC = () => {
           </section>
 
         <section className="dashboard-section dashboard-section--glance dashboard-section--action-first">
-          <div className="dashboard-section-head">
+          <div className="dashboard-section-head dashboard-section-head--inline">
             <div>
-              <h2 className="section-title">At a glance</h2>
+              <h2 className="section-title">Operations</h2>
+              <p className="dashboard-section-sub">
+                Live S3 session queues for the selected work type and source.{' '}
+                <button type="button" className="training-hub-text-btn" onClick={() => navigate('/usage')}>
+                  App usage by day →
+                </button>
+              </p>
               {countsLoading ? (
                 <p className="dashboard-section-loading-hint">Loading counts…</p>
               ) : null}
             </div>
           </div>
-          <div className="dashboard-kpi-grid">
+          <div className="dashboard-kpi-grid dashboard-kpi-grid--compact">
             <KpiMiniCard
               label="Awaiting review"
               value={kpiCount(glanceCounts.incorrectNewCount, kpiDataLoading)}
-              hint="Not human-reviewed yet (folder unchanged today)"
+              hint="Not human-reviewed yet"
               onClick={() => handleCardClick('incorrect_new')}
               variant="danger"
               loading={kpiDataLoading}
@@ -612,7 +614,7 @@ const Dashboard: FC = () => {
             <KpiMiniCard
               label="Uploaded today"
               value={kpiCount(glanceCounts.uploadedTodayCount ?? 0, kpiDataLoading)}
-              hint={`${todayHintDisplay} · open readings for per-day drill-down`}
+              hint={`${todayHintDisplay} · drill down by day`}
               onClick={() => handleDrillByDay(todayDrillIso)}
               variant="accent"
               loading={kpiDataLoading}
@@ -622,66 +624,20 @@ const Dashboard: FC = () => {
               value={kpiCount(glanceCounts.correctCount, kpiDataLoading)}
               hint={
                 glanceCounts.totalPictures > 0
-                  ? `${labeledSharePct}% of sessions (folder counts)`
+                  ? `${labeledSharePct}% of sessions`
                   : 'No sessions in this filter'
               }
               onClick={() => handleCardClick('correct')}
               loading={kpiDataLoading}
             />
             <KpiMiniCard
-              label="Marked incorrect"
+              label="Incorrect (all stages)"
               value={kpiCount(incorrectQueuesTotal, kpiDataLoading)}
-              hint="All incorrect pipeline stages"
+              hint="New → analyzed → labeled → training"
               onClick={() =>
                 navigate(`/readings/incorrect-queues${getChartRangeSearchSuffix(chartRange)}`)
               }
               variant="warning"
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="All sessions"
-              value={kpiCount(glanceCounts.totalPictures, kpiDataLoading)}
-              hint={
-                chartRange === 'all'
-                  ? 'Everything in this filter · tap for full list'
-                  : 'In selected window · tap for full list'
-              }
-              onClick={handleViewAllSessions}
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="Analyzed"
-              value={kpiCount(glanceCounts.incorrectAnalyzedCount, kpiDataLoading)}
-              hint="Open list"
-              onClick={() => handleCardClick('incorrect_analyzed')}
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="Labeled"
-              value={kpiCount(glanceCounts.incorrectLabeledCount, kpiDataLoading)}
-              hint="Open list"
-              onClick={() => handleCardClick('incorrect_labeled')}
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="In training set"
-              value={kpiCount(glanceCounts.incorrectTrainingCount, kpiDataLoading)}
-              hint="Open list"
-              onClick={() => handleCardClick('incorrect_training')}
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="No dials"
-              value={kpiCount(glanceCounts.noDialsCount, kpiDataLoading)}
-              hint="Open list"
-              onClick={() => handleCardClick('no_dials')}
-              loading={kpiDataLoading}
-            />
-            <KpiMiniCard
-              label="Not sure"
-              value={kpiCount(glanceCounts.notSureCount, kpiDataLoading)}
-              hint="Open list"
-              onClick={() => handleCardClick('not_sure')}
               loading={kpiDataLoading}
             />
           </div>
@@ -689,8 +645,13 @@ const Dashboard: FC = () => {
 
         {(kpiDataLoading || totalReadingsInRange > 0) && (
           <section className="dashboard-section dashboard-section--status-donut">
-            <div className="dashboard-section-head">
-              <h2 className="section-title">Sessions by status</h2>
+            <div className="dashboard-section-head dashboard-section-head--inline">
+              <div>
+                <h2 className="section-title">Sessions by status</h2>
+                <p className="dashboard-section-sub">
+                  Share of sessions in this filter — same data as the KPI cards above, as a breakdown.
+                </p>
+              </div>
             </div>
             <div className="dashboard-donut-solo">
               {kpiDataLoading ? (

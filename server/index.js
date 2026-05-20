@@ -2613,6 +2613,7 @@ async function fetchUnitTestRunDetailPayload(key, includeRows) {
   return {
     key,
     summary: parsed.summary,
+    imageDifficultyBreakdown: parsed.imageDifficultyBreakdown,
     perImageCount: parsed.perImageCount,
     perImageRows: includeRows ? parsed.perImageRows : undefined,
   };

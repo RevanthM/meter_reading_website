@@ -253,9 +253,22 @@ export interface UnitTestRunListResponse {
   runs: UnitTestRunIndexRow[];
 }
 
+/** One row from CSV IMAGE_DIFFICULTY_BREAKDOWN (d1/d2/d3 = normal / difficult / very difficult). */
+export interface UnitTestImageDifficultyTier {
+  code: 'd1' | 'd2' | 'd3';
+  label: string;
+  imageCount: number;
+  withGroundTruth: number;
+  correct: number;
+  accuracyPct: number | null;
+  confidencePct: number | null;
+}
+
 export interface UnitTestRunDetailResponse {
   key: string;
   summary: UnitTestCsvSummary;
+  /** Parsed IMAGE_DIFFICULTY_BREAKDOWN section when present. */
+  imageDifficultyBreakdown?: UnitTestImageDifficultyTier[];
   perImageCount: number;
   perImageRows?: Record<string, string>[];
 }

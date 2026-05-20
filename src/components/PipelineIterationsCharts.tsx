@@ -18,8 +18,11 @@ import { normalizePipelineIterationPrimaryStatus } from '../constants/pipelineIt
 import {
   buildPipelineIterationChartPoints,
   chartThemeForLine,
+  FACTORY_PRODUCT_LINE_CHART,
   filterEvalChartRows,
   filterRegistryOverviewRows,
+  manualReviewRatePct,
+  type ChartPipelineFilter,
 } from '../constants/pipelineChartTheme';
 import { inferProductLineForRow } from '../constants/factoryStages';
 import { isEstimatedEvalMetrics } from '../utils/iterationMetricsEnrichment';
@@ -51,13 +54,21 @@ type Props = {
   embedded?: boolean;
   /** Un-enriched registry rows (for estimated-metric tooltips). */
   sourceRows?: PipelineIterationRecord[];
+  /** Active pipeline filter label for empty-state copy. */
+  pipelineFilter?: ChartPipelineFilter;
 };
 
 function pctLabel(v: unknown): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '';
 }
 
-const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded = false, sourceRows }) => {
+const PipelineIterationsCharts: FC<Props> = ({
+  rows,
+  onIterationClick,
+  embedded = false,
+  sourceRows,
+  pipelineFilter = 'all',
+}) => {
   const evalRows = useMemo(() => filterEvalChartRows(rows), [rows]);
   const overviewRows = useMemo(() => filterRegistryOverviewRows(rows), [rows]);
   const metricPoints = useMemo(() => buildPipelineIterationChartPoints(rows), [rows]);
@@ -75,12 +86,13 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
   const confidenceData = useMemo(
     () =>
       metricPoints
-        .filter((p) => p.confidencePct != null)
+        .filter((p) => p.simConfidencePct != null || p.readConfidencePct != null)
         .map((p) => ({
           id: p.id,
           label: p.xLabel,
           line: p.line,
-          pct: p.confidencePct as number,
+          sim: p.simConfidencePct,
+          read: p.readConfidencePct,
         })),
     [metricPoints],
   );
@@ -88,12 +100,13 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
   const accuracyData = useMemo(
     () =>
       metricPoints
-        .filter((p) => p.accuracyPct != null)
+        .filter((p) => p.simAccuracyPct != null || p.readAccuracyPct != null)
         .map((p) => ({
           id: p.id,
           label: p.xLabel,
           line: p.line,
-          pct: p.accuracyPct as number,
+          sim: p.simAccuracyPct,
+          read: p.readAccuracyPct,
           estimated: (() => {
             const row = evalRows.find((r) => r.id === p.id);
             return row ? isEstimatedEvalMetrics(row, rawForEstimate) : false;
@@ -105,11 +118,11 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
   const reviewData = useMemo(() => {
     return evalRows
       .map((r) => {
-        const v = r.manualMetrics?.manualReviewRatePct;
-        if (v == null || !Number.isFinite(v)) return null;
+        const v = manualReviewRatePct(r);
+        if (v == null) return null;
         const line = metricPoints.find((p) => p.id === r.id)?.line;
         if (!line) return null;
-        return { id: r.id, label: `${r.pipeline.trim()} · #${r.iterationNumber}`, review: Math.min(100, Math.max(0, v)), line };
+        return { id: r.id, label: `${r.pipeline.trim()} · #${r.iterationNumber}`, review: v, line };
       })
       .filter(Boolean) as { id: string; label: string; review: number; line: typeof metricPoints[0]['line'] }[];
   }, [evalRows, metricPoints]);
@@ -131,7 +144,20 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
       .filter(Boolean) as { id: string; label: string; line: typeof metricPoints[0]['line']; images: number }[];
   }, [overviewRows]);
 
-  if (!overviewRows.length && !evalRows.length) return null;
+  const filterHint =
+    pipelineFilter === 'all'
+      ? ''
+      : ` Showing ${FACTORY_PRODUCT_LINE_CHART[pipelineFilter].label} only.`;
+
+  if (!overviewRows.length && !evalRows.length) {
+    return (
+      <div className={`pipeline-iterations-charts${embedded ? ' pipeline-iterations-charts--embedded' : ''}`}>
+        <p className="pipeline-iterations-charts-empty">
+          No pipeline iterations match this filter.{filterHint || ' Add rows in the registry.'}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <section
@@ -140,9 +166,9 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
     >
       {!embedded ? <h2 id="pipeline-charts-heading">Overview</h2> : null}
       <p className="pipeline-iterations-charts-hint">
-        Up to three iterations per pipeline (including combined p3 #3 in training). Colors match Model factory:{' '}
-        <strong>blue</strong> Sempra, <strong>violet</strong> Anica, <strong>green</strong> combined. Iteration #1 read
-        accuracy may be estimated from later UT/FT in the same pipeline when not yet measured.
+        Data from the pipeline iterations registry (manual metrics, with portal stats when manual fields are empty).
+        Colors match Model factory: <strong>blue</strong> Sempra, <strong>violet</strong> Anica, <strong>green</strong>{' '}
+        combined.{filterHint} Charts compare simulator vs read (app) metrics from manual dial fields, with portal fallbacks.
       </p>
       <div className="pipeline-iterations-charts-grid">
         <div className="pipeline-iterations-charts-top-row">
@@ -223,32 +249,48 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
           </div>
         </div>
 
-        {confidenceData.length > 0 ? (
-          <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
-            <h3>Simulator confidence % (avg dials)</h3>
+        <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
+          <h3>Simulator vs app confidence %</h3>
+          <p className="pipeline-iterations-chart-sub">Lighter bar = simulator dials · solid = on-device app dials.</p>
+          {confidenceData.length > 0 ? (
             <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--tall">
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={confidenceData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={confidenceData} layout="vertical" margin={{ left: 8, right: 56, top: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" />
                   <XAxis type="number" domain={[55, 100]} tickFormatter={(v) => `${v}%`} />
                   <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, 'Confidence']} contentStyle={tooltipStyle} />
-                  <Bar dataKey="pct" name="Confidence %" radius={[0, 4, 4, 0]}>
-                    <LabelList dataKey="pct" position="right" fontSize={11} fontWeight={600} formatter={pctLabel} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="sim" name="Sim confidence" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
                     {confidenceData.map((d) => {
                       const theme = chartThemeForLine(d.line);
-                      return <Cell key={d.id} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
+                      return <Cell key={`${d.id}-sim`} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
+                    })}
+                  </Bar>
+                  <Bar dataKey="read" name="App confidence" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="read" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
+                    {confidenceData.map((d) => {
+                      const theme = chartThemeForLine(d.line);
+                      return <Cell key={`${d.id}-read`} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
                     })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <p className="pipeline-iterations-chart-card-placeholder">
+              Add simulator and app dial confidence, or app bbox/keypoint confidence in the registry.
+            </p>
+          )}
+        </div>
 
-        {accuracyData.length > 0 ? (
-          <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
-            <h3>Read accuracy % (FT → UT → exact)</h3>
+        <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
+          <h3>Simulator vs app accuracy %</h3>
+          <p className="pipeline-iterations-chart-sub">
+            Lighter bar = simulator / UT · solid = on-device app. * = UT/FT estimated from a later iteration.
+          </p>
+          {accuracyData.length > 0 ? (
             <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--tall">
               <ResponsiveContainer width="100%" height={320}>
                 <BarChart data={accuracyData} layout="vertical" margin={{ left: 8, right: 56, top: 8, bottom: 8 }}>
@@ -257,16 +299,24 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
                   <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    formatter={(v: number, _n: string, item: { payload?: { estimated?: boolean } }) => [
-                      `${v.toFixed(1)}%${item?.payload?.estimated ? ' (estimated)' : ''}`,
-                      'Accuracy',
+                    formatter={(v: number, name: string, item: { payload?: { estimated?: boolean } }) => [
+                      `${v.toFixed(1)}%${item?.payload?.estimated && name === 'Read accuracy' ? ' (estimated)' : ''}`,
+                      name,
                     ]}
                   />
-                  <Bar dataKey="pct" name="Accuracy %" radius={[0, 4, 4, 0]}>
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="sim" name="Sim accuracy" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
+                    {accuracyData.map((d) => {
+                      const theme = chartThemeForLine(d.line);
+                      return <Cell key={`${d.id}-sim`} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
+                    })}
+                  </Bar>
+                  <Bar dataKey="read" name="App accuracy" radius={[0, 4, 4, 0]}>
                     <LabelList
-                      dataKey="pct"
+                      dataKey="read"
                       position="right"
-                      fontSize={11}
+                      fontSize={10}
                       fontWeight={600}
                       formatter={(v: number | string, _n: string, item: { payload?: { estimated?: boolean } }) => {
                         const base = typeof v === 'number' ? `${v.toFixed(0)}%` : String(v);
@@ -275,18 +325,22 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
                     />
                     {accuracyData.map((d) => {
                       const theme = chartThemeForLine(d.line);
-                      return <Cell key={d.id} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
+                      return <Cell key={`${d.id}-read`} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
                     })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <p className="pipeline-iterations-chart-card-placeholder">
+              Add simulator and app dial accuracy, or refresh portal UT/FT stats for an app version.
+            </p>
+          )}
+        </div>
 
-        {reviewData.length > 0 ? (
-          <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
-            <h3>Manual review rate %</h3>
+        <div className="pipeline-iterations-chart-card pipeline-iterations-chart-card--wide">
+          <h3>Manual review rate %</h3>
+          {reviewData.length > 0 ? (
             <div className="pipeline-iterations-chart-inner pipeline-iterations-chart-inner--tall">
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={reviewData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
@@ -311,8 +365,12 @@ const PipelineIterationsCharts: FC<Props> = ({ rows, onIterationClick, embedded 
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <p className="pipeline-iterations-chart-card-placeholder">
+              Add manual review rate % or refresh portal stats (estimated from non-correct queue share).
+            </p>
+          )}
+        </div>
       </div>
     </section>
   );
