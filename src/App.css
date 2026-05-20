@@ -11658,6 +11658,17 @@ label.training-hub-filter-card-title--input {
   font-size: 0.82rem;
 }
 
+.unit-test-images-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.unit-test-images-download-all-btn {
+  flex-shrink: 0;
+}
+
 .unit-test-images-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -11671,12 +11682,28 @@ label.training-hub-filter-card-title--input {
   background: var(--bg-elevated);
 }
 
+.unit-test-images-thumb-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  border-radius: var(--radius-sm);
+}
+
+.unit-test-images-thumb-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .unit-test-images-thumb {
   width: 100%;
   aspect-ratio: 4/3;
   object-fit: cover;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
+  display: block;
 }
 
 .unit-test-images-thumb--empty {
@@ -11751,10 +11778,45 @@ label.training-hub-filter-card-title--input {
   margin-top: 0.5rem;
 }
 
-.unit-test-images-card-actions .unit-test-images-edit-btn,
+.unit-test-images-card-actions .unit-test-images-download-btn,
 .unit-test-images-card-actions .unit-test-images-delete-btn {
   flex: 1;
+  min-width: 0;
   margin-top: 0;
+}
+
+.unit-test-images-card-actions .unit-test-images-download-btn {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.unit-test-images-icon-btn {
+  width: 2.25rem;
+  padding: 0.45rem;
+}
+
+.unit-test-images-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.unit-test-images-download-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.unit-test-images-download-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .unit-test-images-delete-btn {
@@ -11781,13 +11843,78 @@ label.training-hub-filter-card-title--input {
   cursor: not-allowed;
 }
 
+.unit-test-image-lightbox-shell {
+  max-width: min(1200px, 96vw);
+  position: relative;
+}
+
+.unit-test-image-lightbox-toolbar {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.unit-test-image-lightbox-toolbar .manual-label-lightbox-close {
+  position: static;
+}
+
+.unit-test-image-lightbox-panel {
+  min-width: 220px;
+}
+
+.unit-test-image-lightbox-filename {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.unit-test-image-lightbox-difficulty {
+  margin: 0.25rem 0 0;
+}
+
+.unit-test-image-lightbox-difficulty .reading-detail-radio {
+  font-size: 0.82rem;
+}
+
+.unit-test-image-lightbox-dials {
+  margin: 0.5rem 0;
+}
+
+.unit-test-image-lightbox-reading-preview {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.unit-test-image-lightbox-reading-preview strong {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.unit-test-image-lightbox-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-top: 0.25rem;
+}
+
+.unit-test-image-lightbox-actions .unit-test-image-lightbox-download-btn,
+.unit-test-image-lightbox-actions .manual-label-save-btn--lightbox {
+  flex: 1;
+  justify-content: center;
+  margin: 0;
+}
+
 .unit-test-edit-hero {
   display: flex;
   justify-content: center;
   align-items: center;
   padding: var(--spacing-md);
   background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   min-height: 280px;
 }

@@ -1280,6 +1280,31 @@ export interface UnitTestImageRow {
   lastModified?: string | null;
 }
 
+export interface UnitTestManifestRow {
+  image_file_name: string;
+  expected_meter_value: string;
+  s3_key: string;
+  image_difficulty: ImageDifficulty;
+}
+
+export async function downloadBlobAsFile(blob: Blob, filename: string): Promise<void> {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadUrlAsFile(url: string, filename: string): Promise<void> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const blob = await res.blob();
+  await downloadBlobAsFile(blob, filename);
+}
+
 export async function fetchUnitTestImages(
   workType: WorkType,
   options?: { presignAll?: boolean },
@@ -1287,6 +1312,7 @@ export async function fetchUnitTestImages(
   prefix: string;
   manifestKey: string;
   images: UnitTestImageRow[];
+  manifestRows?: UnitTestManifestRow[];
 }> {
   const params = new URLSearchParams({ workType });
   if (options?.presignAll) params.set('presign', '1');
@@ -1296,6 +1322,43 @@ export async function fetchUnitTestImages(
     throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
   }
   return parseJsonBody(text, response.status);
+}
+
+/** Download one unit test image via API (avoids S3 CORS on presigned fetch). */
+export async function downloadUnitTestImage(
+  workType: WorkType,
+  s3Key: string,
+  fileName: string,
+): Promise<void> {
+  const params = new URLSearchParams({ workType, s3Key });
+  const res = await fetch(`${API_BASE_URL}/test-data/unit-test-images/download?${params}`);
+  const ct = res.headers.get('Content-Type') || '';
+  if (!res.ok) {
+    if (ct.includes('application/json')) {
+      const err = (await res.json()) as { error?: string };
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition');
+  const match = cd?.match(/filename="([^"]+)"/);
+  await downloadBlobAsFile(blob, match?.[1] || fileName);
+}
+
+/**
+ * ZIP of all flat unit test images plus unittestng_manifest.json.
+ * Uses a native browser download (not fetch+blob) so large archives stream without hanging.
+ */
+export function downloadUnitTestImagesZip(workType: WorkType): void {
+  const params = new URLSearchParams({ workType });
+  const url = `${API_BASE_URL}/test-data/unit-test-images/download-zip?${params.toString()}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 export async function presignUnitTestImages(s3Keys: string[]): Promise<Record<string, string>> {

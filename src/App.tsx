@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { ReadingsProvider } from './context/ReadingsContext';
@@ -20,7 +20,6 @@ import PipelineIterationsPage from './components/PipelineIterationsPage';
 import ModelFactoryPage from './components/ModelFactoryPage';
 import TestDataPendingPage from './components/TestDataPendingPage';
 import UnitTestImagesPage from './components/UnitTestImagesPage';
-import UnitTestImageEditPage from './components/UnitTestImageEditPage';
 import ManualUploadPage from './components/ManualUploadPage';
 import ManualUploadLabelPage from './components/ManualUploadLabelPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
@@ -61,7 +60,7 @@ function AppContent() {
           <Route path="/pipeline-iterations" element={<PipelineIterationsPage />} />
           <Route path="/test-data/pending" element={<TestDataPendingPage />} />
           <Route path="/test-data/images" element={<UnitTestImagesPage />} />
-          <Route path="/test-data/images/edit/:fileName" element={<UnitTestImageEditPage />} />
+          <Route path="/test-data/images/edit/:fileName" element={<Navigate to="/test-data/images" replace />} />
           <Route path="/manual-upload" element={<ManualUploadPage />} />
           <Route path="/manual-upload/label" element={<ManualUploadLabelPage />} />
         </Route>

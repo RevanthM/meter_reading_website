@@ -11,6 +11,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        /** Unit test ZIP exports can take 1–2 min for ~100 images. */
+        timeout: 300_000,
+        proxyTimeout: 300_000,
       },
       '/anica-login-api': {
         target: 'https://chatanicaappep2.azurewebsites.net',
@@ -26,6 +29,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        timeout: 300_000,
+        proxyTimeout: 300_000,
       },
     },
   },

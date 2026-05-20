@@ -1,6 +1,7 @@
 /**
  * Test-data reviewer: approve sessions → unit_test_images + unittestng_manifest.json
  */
+import archiver from 'archiver';
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
@@ -21,6 +22,18 @@ import {
 } from './unitTestManifest.js';
 
 const IMAGE_SUFFIXES = ['.jpg', '.jpeg', '.png', '.webp'];
+
+async function readS3ObjectBuffer(s3Client, bucket, key) {
+  const out = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (typeof out.Body?.transformToByteArray === 'function') {
+    return Buffer.from(await out.Body.transformToByteArray());
+  }
+  const chunks = [];
+  for await (const chunk of out.Body || []) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
 function normalizeReviewerDatasetDestination(raw) {
   const d = String(raw ?? '').trim().toLowerCase();
@@ -445,6 +458,105 @@ export function registerTestDataReviewRoutes(app, deps) {
     } catch (e) {
       console.error('GET /api/test-data/unit-test-images/by-file:', e);
       res.status(500).json({ error: e.message || 'Failed to load unit test image' });
+    }
+  });
+
+  app.get('/api/test-data/unit-test-images/download', async (req, res) => {
+    try {
+      const workType = String(req.query.workType || '1000').trim() || '1000';
+      const s3Key = String(req.query.s3Key || '').trim();
+      if (!s3Key) return res.status(400).json({ error: 's3Key is required.' });
+
+      const prefix = unitTestImagesPrefix(workType);
+      if (!s3Key.startsWith(prefix)) {
+        return res.status(400).json({ error: 's3Key is not under the unit test images prefix.' });
+      }
+      const fileName = s3Key.slice(prefix.length);
+      if (!fileName || fileName.includes('/') || isUnitTestManifestObjectKey(fileName)) {
+        return res.status(400).json({ error: 'Invalid unit test image key.' });
+      }
+
+      const buf = await readS3ObjectBuffer(s3Client, BUCKET_NAME, s3Key);
+      const lower = fileName.toLowerCase();
+      const contentType = lower.endsWith('.png')
+        ? 'image/png'
+        : lower.endsWith('.webp')
+          ? 'image/webp'
+          : 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
+      res.send(buf);
+    } catch (e) {
+      console.error('GET /api/test-data/unit-test-images/download:', e);
+      if (!res.headersSent) {
+        res.status(e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404 ? 404 : 500).json({
+          error: e.message || 'Failed to download unit test image',
+        });
+      }
+    }
+  });
+
+  app.get('/api/test-data/unit-test-images/download-zip', async (req, res) => {
+    try {
+      const workType = String(req.query.workType || '1000').trim() || '1000';
+      const data = await listUnitTestImages(s3Client, BUCKET_NAME, workType);
+      if (!data.images.length) {
+        return res.status(404).json({ error: 'No unit test images to download.' });
+      }
+
+      const manifestFileName = data.manifestKey?.split('/').pop() || 'unittestng_manifest.json';
+      const zipName = `unit-test-images-${workType}-${Date.now()}.zip`;
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+      res.setHeader('X-Unit-Test-Image-Count', String(data.images.length));
+
+      const archive = archiver('zip', { zlib: { level: 6 } });
+      archive.on('warning', (err) => console.warn('unit-test-images zip warning:', err.message));
+      archive.on('error', (err) => {
+        console.error('unit-test-images zip error:', err);
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+      });
+      archive.pipe(res);
+
+      if (data.manifestKey) {
+        try {
+          const manifestBuf = await readS3ObjectBuffer(s3Client, BUCKET_NAME, data.manifestKey);
+          archive.append(manifestBuf, { name: manifestFileName });
+        } catch (e) {
+          console.warn('unit-test-images zip: manifest read failed, building from rows:', e.message);
+          const body = JSON.stringify(
+            {
+              version: 1,
+              updatedAt: new Date().toISOString(),
+              rows: (data.manifestRows || []).map((r) => ({
+                image_file_name: r.image_file_name,
+                expected_meter_value: r.expected_meter_value,
+                s3_key: r.s3_key,
+                image_difficulty: r.image_difficulty || 'normal',
+              })),
+            },
+            null,
+            2,
+          );
+          archive.append(Buffer.from(body, 'utf8'), { name: manifestFileName });
+        }
+      }
+
+      for (const img of data.images) {
+        try {
+          const buf = await readS3ObjectBuffer(s3Client, BUCKET_NAME, img.s3Key);
+          archive.append(buf, { name: img.fileName });
+        } catch (e) {
+          console.warn(`unit-test-images zip: skip ${img.s3Key}:`, e.message);
+        }
+      }
+
+      await archive.finalize();
+    } catch (e) {
+      console.error('GET /api/test-data/unit-test-images/download-zip:', e);
+      if (!res.headersSent) {
+        res.status(500).json({ error: e.message || 'Failed to build unit test images ZIP' });
+      }
     }
   });
 
