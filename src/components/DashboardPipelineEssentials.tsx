@@ -59,6 +59,8 @@ type MetricLineCardProps = {
   valueFormatter: (v: unknown) => string;
   deltaStrip?: ReactNode;
   compact?: boolean;
+  reportCapture?: string;
+  reportSection?: string;
 };
 
 const MetricLineCard: FC<MetricLineCardProps> = ({
@@ -70,11 +72,23 @@ const MetricLineCard: FC<MetricLineCardProps> = ({
   valueFormatter,
   deltaStrip,
   compact = false,
+  reportCapture,
+  reportSection,
 }) => {
   const hasData = rows.length > 0 && series.length > 0;
   const plotHeight = compact ? 168 : 260;
+  const captureProps =
+    reportCapture != null
+      ? {
+          'data-report-capture': reportCapture,
+          ...(reportSection ? { 'data-report-section': reportSection } : {}),
+        }
+      : {};
   return (
-    <article className={`analytics-chart-card${compact ? ' analytics-chart-card--compact' : ''}`}>
+    <article
+      className={`analytics-chart-card${compact ? ' analytics-chart-card--compact' : ''}`}
+      {...captureProps}
+    >
       <header className="analytics-chart-card__head">
         <h4 className="analytics-chart-card__title">{title}</h4>
         {deltaStrip}
@@ -233,7 +247,6 @@ const DashboardPipelineEssentials: FC<Props> = ({
           role="tabpanel"
           aria-labelledby="analytics-tab-current"
           className={panelClass('current')}
-          data-report-capture="Current performance"
         >
           <DashboardProjectSnapshot
             rows={rows}
@@ -257,7 +270,6 @@ const DashboardPipelineEssentials: FC<Props> = ({
           role="tabpanel"
           aria-labelledby="analytics-tab-progress"
           className={panelClass('progress')}
-          data-report-capture="Improvement trends"
         >
             <div className="analytics-progress-grid">
               <MetricLineCard
@@ -269,6 +281,8 @@ const DashboardPipelineEssentials: FC<Props> = ({
               deltaStrip={
                 <DashboardTrendDeltaStrip rows={rows} pipelineFilter={pipelineFilter} metric="images" />
               }
+              reportCapture="Training images"
+              reportSection="Progress"
             />
             <MetricLineCard
               title="App confidence"
@@ -280,6 +294,8 @@ const DashboardPipelineEssentials: FC<Props> = ({
               deltaStrip={
                 <DashboardTrendDeltaStrip rows={rows} pipelineFilter={pipelineFilter} metric="confidence" />
               }
+              reportCapture="App confidence"
+              reportSection="Progress"
             />
             <MetricLineCard
               title="App accuracy"
@@ -291,9 +307,15 @@ const DashboardPipelineEssentials: FC<Props> = ({
               deltaStrip={
                 <DashboardTrendDeltaStrip rows={rows} pipelineFilter={pipelineFilter} metric="accuracy" />
               }
+              reportCapture="App accuracy"
+              reportSection="Progress"
             />
 
-            <div className="analytics-progress-dial-section">
+            <div
+              className="analytics-progress-dial-section"
+              data-report-capture="Per-dial accuracy trends"
+              data-report-section="Progress"
+            >
               <header className="analytics-progress-dial-section__head">
                 <h4>Per-dial accuracy</h4>
                 <p>App read accuracy by dial over iterations.</p>
@@ -314,7 +336,11 @@ const DashboardPipelineEssentials: FC<Props> = ({
               </div>
             </div>
 
-            <div className="analytics-progress-dial-section">
+            <div
+              className="analytics-progress-dial-section"
+              data-report-capture="Per-dial confidence trends"
+              data-report-section="Progress"
+            >
               <header className="analytics-progress-dial-section__head">
                 <h4>Per-dial confidence</h4>
                 <p>App keypoint confidence by dial over iterations.</p>
@@ -344,14 +370,18 @@ const DashboardPipelineEssentials: FC<Props> = ({
           className={panelClass('all')}
         >
           {showPerDial ? (
-            <div className="analytics-details-block" data-report-capture="Per dial — accuracy & confidence">
+            <div className="analytics-details-block">
               <header className="analytics-details-block__head">
                 <h4>Per-dial — latest app metrics</h4>
                 <p>From the newest iteration in the current pipeline filter.</p>
               </header>
               {hasDialData ? (
                 <div className="analytics-donut-sections">
-                  <div className="analytics-donut-section">
+                  <div
+                    className="analytics-donut-section"
+                    data-report-capture="Per-dial accuracy"
+                    data-report-section="All metrics"
+                  >
                     <h5>Accuracy</h5>
                     <div className="analytics-donut-grid">
                       {dialMetrics.map((d) => (
@@ -365,7 +395,11 @@ const DashboardPipelineEssentials: FC<Props> = ({
                       ))}
                     </div>
                   </div>
-                  <div className="analytics-donut-section">
+                  <div
+                    className="analytics-donut-section"
+                    data-report-capture="Per-dial confidence"
+                    data-report-section="All metrics"
+                  >
                     <h5>Confidence</h5>
                     <div className="analytics-donut-grid">
                       {dialMetrics.map((d) => (

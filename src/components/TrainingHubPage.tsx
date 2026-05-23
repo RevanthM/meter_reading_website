@@ -29,14 +29,14 @@ const COPY_SESSION_CHUNK = 10;
 
 type DatePreset = 'all' | 'today' | '7d' | '30d' | 'custom';
 
-const HUB_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data'] as const;
+const HUB_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
 type TrainingHubCohortId = (typeof HUB_COHORT_IDS)[number];
 type TrainingHubCohort = 'all' | TrainingHubCohortId;
 
 const HUB_COHORT_LABELS: Record<TrainingHubCohortId, string> = {
   untrained: 'Untrained',
   correct: 'Reviewed correct',
-  wrong: 'Reviewed wrong',
+  incorrect: 'Reviewed incorrect',
   training: 'Send to training',
   test_data: 'Send to test dataset',
 };
@@ -48,7 +48,7 @@ function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort):
       return r.isManuallyReviewed !== true;
     case 'correct':
       return r.status === 'correct';
-    case 'wrong':
+    case 'incorrect':
       return (
         r.status === 'incorrect_analyzed' ||
         r.status === 'incorrect_labeled' ||

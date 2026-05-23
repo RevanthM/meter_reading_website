@@ -93,7 +93,7 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
     });
     reportRootRef.current.classList.add('dashboard-report-capture-root--exporting');
     try {
-      await waitForReportDomReady();
+      await waitForReportDomReady(reportRootRef.current);
       const labels = evalRows
         .filter((r) => selectedIds.has(r.id))
         .map((r) => `${r.pipeline.trim()} #${r.iterationNumber}`)

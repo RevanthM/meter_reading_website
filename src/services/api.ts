@@ -9,7 +9,7 @@ import type { DataSource } from '../context/ReadingsContext';
 
 const API_BASE_URL = '/api';
 
-/** Turn browser network errors into an actionable message (API server not running / wrong origin). */
+/** Turn browser network errors into an actionable message (API server not running / incorrect origin). */
 function wrapFetchNetworkError(e: unknown, hint: string): Error {
   if (e instanceof TypeError && /failed to fetch/i.test(e.message)) {
     return new Error(

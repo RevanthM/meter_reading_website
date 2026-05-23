@@ -281,6 +281,8 @@ const DashboardProjectSnapshot: FC<Props> = ({
       className={`analytics-current-layout${
         showSingleLayout ? ' analytics-current-layout--single-pipeline' : ''
       }`}
+      data-report-capture="Current snapshot"
+      data-report-section="Current"
     >
       <article className="analytics-summary-card analytics-summary-card--compact">
         <div className="analytics-summary-card__icon" aria-hidden>

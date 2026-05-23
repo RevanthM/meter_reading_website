@@ -6,9 +6,14 @@ type Props = {
   perImageRows: UnitTestRunDetailResponse['perImageRows'];
   /** Include in PDF capture sections. */
   reportCapture?: boolean;
+  reportSection?: string;
 };
 
-const UnitTestConfusionHeatmap: FC<Props> = ({ perImageRows, reportCapture = false }) => {
+const UnitTestConfusionHeatmap: FC<Props> = ({
+  perImageRows,
+  reportCapture = false,
+  reportSection,
+}) => {
   const [confusionDial, setConfusionDial] = useState<number | 'all'>('all');
 
   const confusion = useMemo(() => {
@@ -32,7 +37,12 @@ const UnitTestConfusionHeatmap: FC<Props> = ({ perImageRows, reportCapture = fal
   return (
     <div
       className="dashboard-pipeline-essential-card dashboard-confusion-card"
-      {...(reportCapture ? { 'data-report-capture': 'Confusion heatmap' } : {})}
+      {...(reportCapture
+        ? {
+            'data-report-capture': 'Confusion heatmap',
+            ...(reportSection ? { 'data-report-section': reportSection } : {}),
+          }
+        : {})}
     >
       <div className="dashboard-confusion-head">
         <div>

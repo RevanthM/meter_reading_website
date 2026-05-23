@@ -31,7 +31,7 @@ function formatBytes(n: number | null | undefined): string {
 const ADD_IMAGE_TABS: { label: string; statusPath: string }[] = [
   { label: 'browse', statusPath: 'all' },
   { label: 'awaiting', statusPath: 'incorrect_new' },
-  { label: 'wrong', statusPath: 'incorrect-queues' },
+  { label: 'incorrect', statusPath: 'incorrect-queues' },
   { label: 'correct', statusPath: 'correct' },
   { label: 'analyzed', statusPath: 'incorrect_analyzed' },
   { label: 'labeled', statusPath: 'incorrect_labeled' },

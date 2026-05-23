@@ -8733,13 +8733,13 @@ label.training-hub-filter-card-title--input {
   background: color-mix(in srgb, #10b981 28%, var(--bg-elevated));
 }
 
-.dashboard-queue-btn--wrong {
+.dashboard-queue-btn--incorrect {
   background: color-mix(in srgb, #f87171 14%, var(--bg-elevated));
   border-color: #f87171;
   color: #fecaca;
 }
 
-.dashboard-queue-btn--wrong:hover:not(:disabled) {
+.dashboard-queue-btn--incorrect:hover:not(:disabled) {
   background: color-mix(in srgb, #f87171 24%, var(--bg-elevated));
 }
 
@@ -10929,9 +10929,34 @@ label.training-hub-filter-card-title--input {
   margin-bottom: 1.25rem;
 }
 
+.dashboard-report-capture-root--exporting {
+  width: 1000px;
+  max-width: 1000px;
+}
+
 .dashboard-report-capture-root--exporting .analytics-shell-tabs,
-.dashboard-report-capture-root--exporting .analytics-shell__filter {
-  display: none;
+.dashboard-report-capture-root--exporting .analytics-shell__filter,
+.dashboard-report-capture-root--exporting .analytics-shell__foot,
+.dashboard-report-capture-root--exporting .analytics-snapshot-report-check,
+.dashboard-report-capture-root--exporting .dashboard-confusion-dial-toggle,
+.dashboard-report-capture-root--exporting .dashboard-unit-test-insights-head,
+.dashboard-report-capture-root--exporting .dashboard-unit-test-run-summary,
+.dashboard-report-capture-root--exporting .analytics-current-confusion-run,
+.dashboard-report-capture-root--exporting .dashboard-per-dial-select-wrap {
+  display: none !important;
+}
+
+.dashboard-report-capture-root--exporting .dashboard-unit-test-analytics-grid--2,
+.dashboard-report-capture-root--exporting .analytics-progress-dial-grid {
+  grid-template-columns: 1fr !important;
+}
+
+.dashboard-report-capture-root--exporting .analytics-donut-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.dashboard-report-capture-root--exporting .analytics-snapshot-grid {
+  grid-template-columns: 1fr !important;
 }
 
 .analytics-shell__foot {

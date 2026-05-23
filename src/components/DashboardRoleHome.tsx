@@ -136,7 +136,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
             loading={countsLoading}
           />
           <KpiMiniCard
-            label="Wrong (reviewed)"
+            label="Incorrect (reviewed)"
             value={kpiCount(incorrectQueuesTotal, countsLoading)}
             hint="Incorrect pipeline folders"
             onClick={() => navigate('/readings/incorrect-queues')}

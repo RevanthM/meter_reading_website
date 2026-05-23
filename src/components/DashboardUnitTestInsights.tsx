@@ -166,14 +166,18 @@ const DashboardUnitTestInsights: FC<Props> = ({
         ) : error ? (
           <p className="pipeline-iterations-chart-card-placeholder">{error}</p>
         ) : detail ? (
-          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} reportCapture />
+          <UnitTestConfusionHeatmap
+            perImageRows={detail.perImageRows}
+            reportCapture
+            reportSection="Current"
+          />
         ) : null}
       </div>
     );
   }
 
   return (
-    <div className="dashboard-unit-test-insights" data-report-capture="Unit test analytics">
+    <div className="dashboard-unit-test-insights">
       <div className="dashboard-unit-test-insights-head">
         <div>
           <h3>Unit test analytics (CSV)</h3>
@@ -212,7 +216,7 @@ const DashboardUnitTestInsights: FC<Props> = ({
       ) : error ? (
         <p className="pipeline-iterations-chart-card-placeholder">{error}</p>
       ) : detail ? (
-        <DashboardUnitTestCsvCharts detail={detail} />
+        <DashboardUnitTestCsvCharts detail={detail} reportCapture />
       ) : null}
     </div>
   );

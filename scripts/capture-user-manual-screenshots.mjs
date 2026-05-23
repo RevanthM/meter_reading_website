@@ -175,11 +175,11 @@ try {
   await authed.waitForTimeout(800);
   await shot(authed, '10-correct-list.png');
 
-  console.log('11-wrong-queues');
+  console.log('11-incorrect-queues');
   await goto(authed, '/readings/incorrect-queues');
   await authed.waitForSelector('.readings-list-page', { timeout: 45_000 }).catch(() => {});
   await authed.waitForTimeout(800);
-  await shot(authed, '11-wrong-queues.png');
+  await shot(authed, '11-incorrect-queues.png');
 
   // —— Test data reviewer ——
   await injectAuth(context, { role: 'test_data_reviewer', dismissWelcome: true });

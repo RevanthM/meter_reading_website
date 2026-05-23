@@ -105,9 +105,19 @@ function DifficultyAxisTick({
 
 type Props = {
   detail: UnitTestRunDetailResponse;
+  /** Per-chart PDF capture (confusion is captured on the Current tab). */
+  reportCapture?: boolean;
 };
 
-const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
+const cardCapture = (enabled: boolean | undefined, label: string) =>
+  enabled
+    ? {
+        'data-report-capture': label,
+        'data-report-section': 'Unit test',
+      }
+    : {};
+
+const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }) => {
   const runPerf = useMemo(() => resolveRunPerformance(detail), [detail]);
   const dialStats = useMemo(() => resolveDialStats(detail), [detail]);
   const difficultyTiers = useMemo(() => resolveDifficultyTiers(detail), [detail]);
@@ -213,7 +223,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
       <section className="dashboard-unit-test-analytics-section">
         <h4 className="dashboard-unit-test-analytics-section-title">Overall model performance</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--2">
-          <div className="dashboard-pipeline-essential-card">
+          <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Accuracy gauge')}>
             <h5>Accuracy gauge</h5>
             {pieData.length > 0 && accPct != null ? (
               <div className="dashboard-unit-test-donut-wrap">
@@ -248,7 +258,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
             )}
           </div>
 
-          <div className="dashboard-pipeline-essential-card">
+          <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Correct vs incorrect')}>
             <h5>Correct vs incorrect readings</h5>
             {correctIncorrectBar.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
@@ -275,7 +285,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
       <section className="dashboard-unit-test-analytics-section">
         <h4 className="dashboard-unit-test-analytics-section-title">Per-dial analysis</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--2">
-          <div className="dashboard-pipeline-essential-card">
+          <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Dial accuracy')}>
             <h5>Dial accuracy comparison</h5>
             {dialAccuracyData.length > 0 ? (
               <ResponsiveContainer width="100%" height={240}>
@@ -301,7 +311,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
             )}
           </div>
 
-          <div className="dashboard-pipeline-essential-card">
+          <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Dial confidence vs accuracy')}>
             <h5>Dial confidence vs accuracy</h5>
             {dialDualData.length > 0 ? (
               <ResponsiveContainer width="100%" height={240}>
@@ -356,7 +366,10 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
       {difficultyTiers.length > 0 ? (
         <section className="dashboard-unit-test-analytics-section">
           <h4 className="dashboard-unit-test-analytics-section-title">Difficulty-based performance</h4>
-          <div className="dashboard-pipeline-essential-card dashboard-unit-test-difficulty-performance-card">
+          <div
+            className="dashboard-pipeline-essential-card dashboard-unit-test-difficulty-performance-card"
+            {...cardCapture(reportCapture, 'UT — Difficulty performance')}
+          >
             <h5>Difficulty performance</h5>
             <p className="dashboard-pipeline-essential-sub">
               Grouped bars compare full-reading accuracy vs average confidence per filename difficulty. If accuracy
@@ -438,9 +451,9 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
       <section className="dashboard-unit-test-analytics-section">
         <h4 className="dashboard-unit-test-analytics-section-title">Advanced</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--1">
-          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} reportCapture />
+          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} />
 
-          <div className="dashboard-pipeline-essential-card">
+          <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Confidence distribution')}>
             <h5>Confidence distribution</h5>
             <p className="dashboard-pipeline-essential-sub">
               Histogram of dial-level prediction confidences — useful for threshold tuning.

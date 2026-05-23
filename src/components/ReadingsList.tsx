@@ -65,7 +65,7 @@ const LIST_PRIORITY: Record<string, number> = {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** List toolbar cohort (replaces pipeline-stage dropdown + legacy trainingPick). */
-const READINGS_COHORT_IDS = ['untrained', 'correct', 'wrong', 'training', 'test_data'] as const;
+const READINGS_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
 type ReadingsCohortId = (typeof READINGS_COHORT_IDS)[number];
 
 function isReadingsCohortId(s: string): s is ReadingsCohortId {
@@ -76,13 +76,14 @@ function isReadingsCohortId(s: string): s is ReadingsCohortId {
 function normalizeReadingsCohortId(s: string): ReadingsCohortId | null {
   const lower = s.trim().toLowerCase();
   if (lower === 'recommended') return 'training';
+  if (lower === 'wrong') return 'incorrect';
   return isReadingsCohortId(lower) ? lower : null;
 }
 
 const READINGS_COHORT_LABELS: Record<ReadingsCohortId, string> = {
   untrained: 'Untrained',
   correct: 'Reviewed correct',
-  wrong: 'Reviewed wrong',
+  incorrect: 'Reviewed incorrect',
   training: 'Send to training',
   test_data: 'Send to test dataset',
 };
@@ -98,7 +99,7 @@ function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boo
       return isAwaitingReviewerReview(r);
     case 'correct':
       return r.status === 'correct';
-    case 'wrong':
+    case 'incorrect':
       return (
         r.status === 'incorrect_analyzed' ||
         r.status === 'incorrect_labeled' ||

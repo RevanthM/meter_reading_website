@@ -11,13 +11,31 @@ export type DashboardReportPdfOptions = {
   summaryRows?: ReportSummaryRow[];
 };
 
-/** Wait for React paint + Recharts layout after enabling export panels. */
-export async function waitForReportDomReady(): Promise<void> {
+export type ReportCaptureItem = {
+  element: HTMLElement;
+  label: string;
+  section: string | null;
+};
+
+const CAPTURE_SCALE = 1.5;
+const JPEG_QUALITY = 0.84;
+
+/** Wait for React paint, Recharts SVG, and async CSV blocks before capture. */
+export async function waitForReportDomReady(root?: HTMLElement | null): Promise<void> {
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!root?.querySelector('.spin')) break;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 180);
+    });
+  }
+
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, 450);
+    setTimeout(resolve, 350);
   });
 }
 
@@ -26,17 +44,28 @@ function fmtCell(v: number | null | undefined, pct = false): string {
   return pct ? `${v.toFixed(1)}%` : String(v);
 }
 
-/** Avoid capturing nested [data-report-capture] blocks twice (parent + child). */
-export function getOutermostReportCaptureSections(root: HTMLElement): HTMLElement[] {
+/** Leaf capture nodes only — skip elements nested inside another capture target. */
+export function getReportCaptureItems(root: HTMLElement): ReportCaptureItem[] {
   const all = Array.from(root.querySelectorAll('[data-report-capture]')) as HTMLElement[];
-  return all.filter((el) => {
-    let parent = el.parentElement;
-    while (parent && parent !== root) {
-      if (parent.hasAttribute('data-report-capture')) return false;
-      parent = parent.parentElement;
-    }
-    return true;
-  });
+  return all
+    .filter((el) => {
+      let parent = el.parentElement;
+      while (parent && parent !== root) {
+        if (parent.hasAttribute('data-report-capture')) return false;
+        parent = parent.parentElement;
+      }
+      return true;
+    })
+    .map((element) => ({
+      element,
+      label: element.getAttribute('data-report-capture')?.trim() || 'Chart',
+      section: element.getAttribute('data-report-section')?.trim() || null,
+    }));
+}
+
+/** @deprecated Use getReportCaptureItems */
+export function getOutermostReportCaptureSections(root: HTMLElement): HTMLElement[] {
+  return getReportCaptureItems(root).map((item) => item.element);
 }
 
 function isCanvasMostlyBlank(canvas: HTMLCanvasElement): boolean {
@@ -66,6 +95,10 @@ function isCanvasMostlyBlank(canvas: HTMLCanvasElement): boolean {
   ];
 
   return !points.some(([x, y]) => sampleAt(x, y));
+}
+
+function canvasToJpeg(canvas: HTMLCanvasElement): string {
+  return canvas.toDataURL('image/jpeg', JPEG_QUALITY);
 }
 
 function drawNativeSummaryTable(
@@ -152,52 +185,84 @@ function drawNativeSummaryTable(
   return y + 8;
 }
 
-/** Add a tall canvas across multiple PDF pages without blank overflow pages. */
-function addCanvasSlicesToPdf(
+function drawSectionHeading(
+  pdf: jsPDF,
+  section: string,
+  margin: number,
+  y: number,
+  contentW: number,
+): number {
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(13);
+  pdf.setTextColor(15, 23, 42);
+  pdf.text(section, margin, y);
+  pdf.setDrawColor(226, 232, 240);
+  pdf.line(margin, y + 2, margin + contentW, y + 2);
+  pdf.setTextColor(0, 0, 0);
+  return y + 10;
+}
+
+function drawCaptureLabel(pdf: jsPDF, label: string, margin: number, y: number): number {
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(9.5);
+  pdf.setTextColor(71, 85, 105);
+  pdf.text(label, margin, y);
+  pdf.setTextColor(0, 0, 0);
+  return y + 5;
+}
+
+/** Fit one capture on the current page (scale down if needed; never slice). */
+function addCaptureImageToPdf(
   pdf: jsPDF,
   canvas: HTMLCanvasElement,
   margin: number,
   contentW: number,
   startY: number,
+  pageH: number,
 ): number {
-  const pageH = pdf.internal.pageSize.getHeight();
+  const maxH = pageH - margin * 2;
+  let drawW = contentW;
+  let drawH = (canvas.height * drawW) / canvas.width;
+
+  if (drawH > maxH) {
+    drawH = maxH;
+    drawW = (canvas.width * drawH) / canvas.height;
+  }
+
   let y = startY;
-  const fullImgH = (canvas.height * contentW) / canvas.width;
-  const maxSliceMm = pageH - margin * 2;
-
-  if (fullImgH <= maxSliceMm && y + fullImgH <= pageH - margin) {
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, y, contentW, fullImgH);
-    return y + fullImgH + 6;
+  if (y + drawH > pageH - margin) {
+    pdf.addPage();
+    y = margin;
   }
 
-  const sliceHeightPx = Math.max(1, Math.floor((maxSliceMm / fullImgH) * canvas.height));
-  let srcY = 0;
+  const x = margin + Math.max(0, (contentW - drawW) / 2);
+  pdf.addImage(canvasToJpeg(canvas), 'JPEG', x, y, drawW, drawH);
+  return y + drawH + 8;
+}
 
-  while (srcY < canvas.height) {
-    const hPx = Math.min(sliceHeightPx, canvas.height - srcY);
-    const sliceCanvas = document.createElement('canvas');
-    sliceCanvas.width = canvas.width;
-    sliceCanvas.height = hPx;
-    const ctx = sliceCanvas.getContext('2d');
-    if (!ctx) break;
-    ctx.drawImage(canvas, 0, srcY, canvas.width, hPx, 0, 0, canvas.width, hPx);
+async function captureElement(el: HTMLElement): Promise<HTMLCanvasElement | null> {
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return null;
 
-    const sliceMm = (hPx * contentW) / canvas.width;
-    if (y + sliceMm > pageH - margin) {
-      pdf.addPage();
-      y = margin;
-    }
-    pdf.addImage(sliceCanvas.toDataURL('image/png'), 'PNG', margin, y, contentW, sliceMm);
-    y += sliceMm + 4;
-    srcY += hPx;
-  }
+  const canvas = await html2canvas(el, {
+    scale: CAPTURE_SCALE,
+    useCORS: true,
+    logging: false,
+    backgroundColor: '#ffffff',
+    windowWidth: Math.max(el.scrollWidth, Math.ceil(rect.width)),
+    windowHeight: Math.max(el.scrollHeight, Math.ceil(rect.height)),
+    onclone: (clonedDoc, clonedEl) => {
+      prepareHtml2CanvasClone(clonedDoc, el, clonedEl);
+    },
+  });
 
-  return y + 2;
+  if (isCanvasMostlyBlank(canvas)) return null;
+  return canvas;
 }
 
 export async function generateDashboardReportPdf(options: DashboardReportPdfOptions): Promise<void> {
-  const sections = getOutermostReportCaptureSections(options.captureRoot);
-  if (!sections.length && !options.summaryRows?.length) {
+  const items = getReportCaptureItems(options.captureRoot);
+  if (!items.length && !options.summaryRows?.length) {
     throw new Error('No report sections found. Select iterations with metrics first.');
   }
 
@@ -229,48 +294,36 @@ export async function generateDashboardReportPdf(options: DashboardReportPdfOpti
   pdf.text(`Generated ${new Date().toLocaleString()}`, margin, headerY);
   pdf.setTextColor(0, 0, 0);
 
-  let y = drawNativeSummaryTable(pdf, options.summaryRows ?? [], headerY + 8, margin, contentW);
+  drawNativeSummaryTable(pdf, options.summaryRows ?? [], headerY + 8, margin, contentW);
 
-  if (y > pageH - margin - 30) {
-    pdf.addPage();
-    y = margin;
-  }
-
-  pdf.setDrawColor(226, 232, 240);
-  pdf.line(margin, y, margin + contentW, y);
-  y += 8;
-
+  pdf.addPage();
+  let y = margin;
+  let lastSection: string | null = null;
   let captured = 0;
 
-  for (let i = 0; i < sections.length; i += 1) {
-    const el = sections[i]!;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) continue;
-
-    const canvas = await html2canvas(el, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff',
-      windowWidth: Math.max(el.scrollWidth, Math.ceil(rect.width)),
-      windowHeight: Math.max(el.scrollHeight, Math.ceil(rect.height)),
-      onclone: (clonedDoc, clonedEl) => {
-        prepareHtml2CanvasClone(clonedDoc, el, clonedEl);
-      },
-    });
-
-    if (isCanvasMostlyBlank(canvas)) continue;
-
-    y = addCanvasSlicesToPdf(pdf, canvas, margin, contentW, y);
-    captured += 1;
-
-    if (i < sections.length - 1 && y > pageH - margin - 40) {
+  for (const item of items) {
+    if (item.section && item.section !== lastSection) {
+      if (y > margin + 12) {
+        pdf.addPage();
+        y = margin;
+      }
+      y = drawSectionHeading(pdf, item.section, margin, y, contentW);
+      lastSection = item.section;
+    } else if (y > pageH - margin - 50) {
       pdf.addPage();
       y = margin;
     }
+
+    y = drawCaptureLabel(pdf, item.label, margin, y);
+
+    const canvas = await captureElement(item.element);
+    if (!canvas) continue;
+
+    y = addCaptureImageToPdf(pdf, canvas, margin, contentW, y, pageH);
+    captured += 1;
   }
 
-  if (captured === 0 && sections.length > 0) {
+  if (captured === 0 && items.length > 0) {
     throw new Error(
       'Report visuals could not be captured. Try again after charts finish loading, or refresh the page.',
     );

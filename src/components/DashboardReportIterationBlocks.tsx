@@ -64,6 +64,7 @@ const DashboardReportIterationBlocks: FC<Props> = ({
                 included ? '' : ' dashboard-report-iteration-block--excluded'
               }`}
               data-report-capture={included ? `${d.pipeline} #${d.iterationNumber}` : undefined}
+              data-report-section={included ? 'Iterations' : undefined}
               style={{ '--block-accent': theme.stroke } as CSSProperties}
             >
               <header className="dashboard-report-iteration-block-head">
