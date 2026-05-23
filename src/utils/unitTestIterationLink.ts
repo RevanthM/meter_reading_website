@@ -2,7 +2,9 @@ import type {
   PipelineIterationManualMetrics,
   PipelineIterationUnitTestLink,
   UnitTestCsvSummary,
+  UnitTestRunDetailResponse,
 } from '../services/api';
+import { normalizeConfidencePct, resolveDialStats } from './unitTestCsvAnalytics';
 
 /** Parse iOS export stem: `results_<UTC>_<pipelineId>_<appVer>_export.csv` */
 export function parseUnitTestFileName(fileName: string): {
@@ -57,30 +59,6 @@ export function modelIdMatchesUnitTest(
   return fn.includes(mid);
 }
 
-function parseBoolish(raw: string | undefined): boolean | null {
-  const t = (raw ?? '').trim().toLowerCase();
-  if (!t) return null;
-  if (t === 'true' || t === '1' || t === 'yes') return true;
-  if (t === 'false' || t === '0' || t === 'no') return false;
-  return null;
-}
-
-/** Per-dial digit match rate from iOS `dialN_digit_match` columns (%). */
-function dialDigitMatchPct(rows: Record<string, string>[] | undefined, dial: number): number | null {
-  if (!rows?.length) return null;
-  const key = `dial${dial}_digit_match`;
-  let n = 0;
-  let hit = 0;
-  for (const row of rows) {
-    const b = parseBoolish(row[key]);
-    if (b == null) continue;
-    n += 1;
-    if (b) hit += 1;
-  }
-  if (n === 0) return null;
-  return Math.round((1000 * hit) / n) / 10;
-}
-
 export type ApplyUnitTestMetricsResult = {
   metrics: PipelineIterationManualMetrics;
   appliedLabels: string[];
@@ -107,17 +85,49 @@ export function applyUnitTestDetailToManualMetrics(
     appliedLabels.push('UT images (laptop)');
   }
 
-  const dialKeys: (keyof PipelineIterationManualMetrics)[] = [
+  const runConf = normalizeConfidencePct(summary.average_confidence);
+  if (runConf != null) {
+    next.appAvgKeypointConfidence = runConf;
+    appliedLabels.push('App avg keypoint confidence');
+  }
+
+  const detail: UnitTestRunDetailResponse = {
+    key: '',
+    summary,
+    perImageCount: perImageRows?.length ?? 0,
+    perImageRows: perImageRows ?? undefined,
+  };
+  const dialStats = resolveDialStats(detail);
+  const appAccKeys: (keyof PipelineIterationManualMetrics)[] = [
+    'appDial1AccuracyPct',
+    'appDial2AccuracyPct',
+    'appDial3AccuracyPct',
+    'appDial4AccuracyPct',
+  ];
+  const appConfKeys: (keyof PipelineIterationManualMetrics)[] = [
+    'appDial1ConfidencePct',
+    'appDial2ConfidencePct',
+    'appDial3ConfidencePct',
+    'appDial4ConfidencePct',
+  ];
+  const utKeys: (keyof PipelineIterationManualMetrics)[] = [
     'dial1UtPct',
     'dial2UtPct',
     'dial3UtPct',
     'dial4UtPct',
   ];
-  for (let d = 1; d <= 4; d += 1) {
-    const pct = dialDigitMatchPct(perImageRows ?? undefined, d);
-    if (pct != null) {
-      next[dialKeys[d - 1]!] = pct;
-      appliedLabels.push(`Dial ${d} UT`);
+
+  for (const stat of dialStats) {
+    const idx = stat.dial - 1;
+    if (idx < 0 || idx > 3) continue;
+    if (stat.accuracyPct != null) {
+      next[appAccKeys[idx]!] = stat.accuracyPct;
+      next[utKeys[idx]!] = stat.accuracyPct;
+      appliedLabels.push(`Dial ${stat.dial} app accuracy`);
+    }
+    if (stat.confidencePct != null) {
+      next[appConfKeys[idx]!] = stat.confidencePct;
+      appliedLabels.push(`Dial ${stat.dial} app confidence`);
     }
   }
 

@@ -32,6 +32,28 @@ export function chartThemeForLine(line: Exclude<FactoryProductLine, 'unknown'>) 
   return FACTORY_PRODUCT_LINE_CHART[line];
 }
 
+/** rgba() from #rrggbb — avoids color-mix() for html2canvas / PDF export. */
+export function hexWithAlpha(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** Blend two #rrggbb colors (ratioA = share of color a). */
+export function blendHexColors(a: string, b: string, ratioA = 0.55): string {
+  const parse = (hex: string): [number, number, number] => {
+    const h = hex.replace('#', '');
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  };
+  const [r1, g1, b1] = parse(a);
+  const [r2, g2, b2] = parse(b);
+  const ratioB = 1 - ratioA;
+  const toHex = (n: number) => Math.round(n).toString(16).padStart(2, '0');
+  return `#${toHex(r1 * ratioA + r2 * ratioB)}${toHex(g1 * ratioA + g2 * ratioB)}${toHex(b1 * ratioA + b2 * ratioB)}`;
+}
+
 /** Filter registry rows for charts by product line (color-coded p1 / p2 / p3). */
 export function filterRowsByProductLine(
   rows: PipelineIterationRecord[],
@@ -432,4 +454,125 @@ export function pipelineImprovementSummary(row: PipelineGroupedChartRow): string
   const delta = last - first;
   const sign = delta >= 0 ? '+' : '';
   return `#${row.slots[0].iterationNumber} → #${row.slots[row.slots.length - 1].iterationNumber}: ${sign}${delta.toFixed(1)} pts read accuracy`;
+}
+
+export type AppLineChartSeries = {
+  dataKey: string;
+  line: Exclude<FactoryProductLine, 'unknown'>;
+  label: string;
+  stroke: string;
+};
+
+export type AppLineChartRow = {
+  iteration: number;
+  iterationLabel: string;
+  [key: string]: number | string | null;
+};
+
+function appLineDataKey(line: Exclude<FactoryProductLine, 'unknown'>): string {
+  return line;
+}
+
+function appImagesForRow(row: PipelineIterationRecord): number | null {
+  const n = row.imageCount ?? row.portalStats?.totalImages ?? null;
+  return n != null && Number.isFinite(n) ? n : null;
+}
+
+function appMetricForRow(
+  row: PipelineIterationRecord,
+  metric: 'accuracy' | 'confidence',
+  dial?: number,
+): number | null {
+  if (dial != null && dial >= 1 && dial <= 4) {
+    const d = perDialMetricsFromRow(row)[dial - 1];
+    if (!d) return null;
+    return metric === 'accuracy' ? d.appAcc : d.appConf;
+  }
+  return metric === 'accuracy' ? readAccuracyPct(row) : readConfidencePct(row);
+}
+
+/**
+ * Line-chart rows keyed by iteration #, one series per product line (app metrics only).
+ */
+export function buildAppMetricLineChart(
+  rows: PipelineIterationRecord[],
+  pipelineFilter: ChartPipelineFilter,
+  metric: 'images' | 'accuracy' | 'confidence',
+  dial?: number,
+): { chartRows: AppLineChartRow[]; series: AppLineChartSeries[] } {
+  const scoped = filterRowsByProductLine(filterEvalChartRows(rows), pipelineFilter);
+  const lines =
+    pipelineFilter === 'all'
+      ? PIPELINE_CHART_LINES
+      : [pipelineFilter as Exclude<FactoryProductLine, 'unknown'>];
+
+  const series: AppLineChartSeries[] = lines.map((line) => ({
+    dataKey: appLineDataKey(line),
+    line,
+    label: FACTORY_PRODUCT_LINE_CHART[line].label,
+    stroke: FACTORY_PRODUCT_LINE_CHART[line].stroke,
+  }));
+
+  const iterationSet = new Set<number>();
+  for (const r of scoped) iterationSet.add(r.iterationNumber);
+  const iterations = [...iterationSet].sort((a, b) => a - b);
+
+  const chartRows: AppLineChartRow[] = iterations.map((iteration) => {
+    const row: AppLineChartRow = {
+      iteration,
+      iterationLabel: `#${iteration}`,
+    };
+    for (const line of lines) {
+      const match = scoped.find(
+        (r) => inferProductLineForRow(r) === line && r.iterationNumber === iteration,
+      );
+      const key = appLineDataKey(line);
+      if (!match) {
+        row[key] = null;
+        continue;
+      }
+      if (metric === 'images') {
+        row[key] = appImagesForRow(match);
+      } else {
+        row[key] = appMetricForRow(match, metric, dial);
+      }
+    }
+    return row;
+  });
+
+  return { chartRows, series: series.filter((s) => chartRows.some((r) => r[s.dataKey] != null)) };
+}
+
+export type LatestDialAppMetric = {
+  dial: number;
+  accuracy: number | null;
+  confidence: number | null;
+};
+
+/** Latest iteration in scope — per-dial app accuracy & confidence (averaged if multiple lines at same iter). */
+export function latestPerDialAppMetrics(
+  rows: PipelineIterationRecord[],
+  pipelineFilter: ChartPipelineFilter,
+): LatestDialAppMetric[] {
+  const scoped = filterRowsByProductLine(filterEvalChartRows(rows), pipelineFilter);
+  if (!scoped.length) {
+    return [1, 2, 3, 4].map((dial) => ({ dial, accuracy: null, confidence: null }));
+  }
+
+  const latestIter = Math.max(...scoped.map((r) => r.iterationNumber));
+  const latestRows = scoped.filter((r) => r.iterationNumber === latestIter);
+
+  return [1, 2, 3, 4].map((dial) => {
+    const accVals: number[] = [];
+    const confVals: number[] = [];
+    for (const row of latestRows) {
+      const d = perDialMetricsFromRow(row)[dial - 1];
+      if (!d) continue;
+      if (d.appAcc != null && Number.isFinite(d.appAcc)) accVals.push(d.appAcc);
+      if (d.appConf != null && Number.isFinite(d.appConf)) confVals.push(d.appConf);
+    }
+    const avg = (vals: number[]): number | null =>
+      vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null;
+    return { dial, accuracy: avg(accVals), confidence: avg(confVals) };
+  });
 }

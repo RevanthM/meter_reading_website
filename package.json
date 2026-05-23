@@ -19,7 +19,8 @@
     "preview": "vite preview",
     "manual:screenshots": "node scripts/capture-user-manual-screenshots.mjs",
     "manual:pdf": "node scripts/build-user-manual-pdf.mjs",
-    "migrate:unit-test-manifest": "node scripts/migrate-unit-test-manifest-to-json.mjs"
+    "migrate:unit-test-manifest": "node scripts/migrate-unit-test-manifest-to-json.mjs",
+    "backfill:iteration-csv-metrics": "node scripts/backfill-iteration-metrics-from-unit-test-csv.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.966.0",
@@ -31,6 +32,8 @@
     "fflate": "^0.8.3",
     "firebase": "^12.11.0",
     "firebase-admin": "^13.7.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.562.0",
     "multer": "^2.1.1",
     "react": "^19.2.0",

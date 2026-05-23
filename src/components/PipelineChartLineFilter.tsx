@@ -2,6 +2,7 @@ import type { FC } from 'react';
 import {
   FACTORY_PRODUCT_LINE_CHART,
   PIPELINE_CHART_LINES,
+  hexWithAlpha,
   type ChartPipelineFilter,
 } from '../constants/pipelineChartTheme';
 
@@ -39,10 +40,10 @@ const PipelineChartLineFilter: FC<Props> = ({ value, onChange, className = '' })
               active
                 ? {
                     borderColor: theme.stroke,
-                    background: `color-mix(in srgb, ${theme.fill} 18%, transparent)`,
+                    background: hexWithAlpha(theme.fill, 0.18),
                     color: theme.stroke,
                   }
-                : { borderColor: `color-mix(in srgb, ${theme.stroke} 35%, var(--border-color))` }
+                : { borderColor: hexWithAlpha(theme.stroke, 0.35) }
             }
             onClick={() => onChange(line)}
             aria-pressed={active}

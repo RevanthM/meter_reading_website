@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
   sendSignInLinkToEmail,
@@ -15,7 +15,18 @@ import {
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import type { AnicaLoginSessionUser } from '../services/anicaLoginAuth';
-import { clearAnicaLoginSession, loadAnicaLoginSession, persistAnicaLoginSession } from '../services/anicaLoginAuth';
+import {
+  canSwitchPortalRolesFromProfile,
+  clearAnicaLoginSession,
+  loadAnicaLoginSession,
+  persistAnicaLoginSession,
+} from '../services/anicaLoginAuth';
+import {
+  getStoredPortalWorkMode,
+  portalWorkModeFromAnicaRole,
+  setStoredPortalWorkMode,
+  type PortalWorkMode,
+} from '../utils/portalWorkMode';
 
 interface AuthContextType {
   user: User | null;
@@ -37,6 +48,10 @@ interface AuthContextType {
   logout: () => Promise<void>;
   clearError: () => void;
   isAuthorized: boolean;
+  /** Portal navigation role from login profile (falls back to stored mode). */
+  portalWorkMode: PortalWorkMode;
+  /** Dev bypass users may switch between all portal roles in the sidebar. */
+  canSwitchPortalRoles: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -64,6 +79,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [mfaEmail, setMfaEmail] = useState<string | null>(null);
   const anicaLoginUserRef = useRef<AnicaLoginSessionUser | null>(anicaLoginUser);
   anicaLoginUserRef.current = anicaLoginUser;
+
+  const portalWorkMode = useMemo((): PortalWorkMode => {
+    if (anicaLoginUser && canSwitchPortalRolesFromProfile(anicaLoginUser)) {
+      return getStoredPortalWorkMode();
+    }
+    if (anicaLoginUser) {
+      const fromProfile = portalWorkModeFromAnicaRole(anicaLoginUser);
+      if (fromProfile) return fromProfile;
+    }
+    return getStoredPortalWorkMode();
+  }, [anicaLoginUser]);
+
+  const canSwitchPortalRoles = useMemo(
+    () => !!anicaLoginUser && canSwitchPortalRolesFromProfile(anicaLoginUser),
+    [anicaLoginUser],
+  );
+
+  useEffect(() => {
+    if (!anicaLoginUser || canSwitchPortalRolesFromProfile(anicaLoginUser)) return;
+    const fromProfile = portalWorkModeFromAnicaRole(anicaLoginUser);
+    if (fromProfile) setStoredPortalWorkMode(fromProfile);
+  }, [anicaLoginUser]);
 
   const checkAuthorization = useCallback(async (_currentUser: User) => {
     setIsAuthorized(true);
@@ -249,6 +286,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const completeAnicaLoginSession = useCallback((profile: AnicaLoginSessionUser) => {
+    const mode = portalWorkModeFromAnicaRole(profile);
+    if (mode) setStoredPortalWorkMode(mode);
     persistAnicaLoginSession(profile);
     setAnicaLoginUser(profile);
     setIsAuthorized(true);
@@ -297,6 +336,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       logout,
       clearError,
       isAuthorized,
+      portalWorkMode,
+      canSwitchPortalRoles,
     }}>
       {children}
     </AuthContext.Provider>

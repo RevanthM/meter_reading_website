@@ -1,6 +1,6 @@
 import type { FC, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardCheck, GraduationCap, ImageIcon } from 'lucide-react';
+import { ClipboardCheck, ImageIcon } from 'lucide-react';
 import type { DashboardCounts } from '../types';
 import type { PortalWorkMode } from '../utils/portalWorkMode';
 import { formatPortalWeekdayMedium, calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
@@ -197,57 +197,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
   }
 
   if (role === 'labeler') {
-    const pipelineTotal =
-      counts.incorrectAnalyzedCount + counts.incorrectLabeledCount + counts.incorrectTrainingCount;
-    return (
-      <RoleHomeShell
-        title="Training & labeling"
-        subtitle="Copy sessions into training datasets, move pipeline stages, and export ZIPs."
-        icon={<GraduationCap size={28} strokeWidth={2} />}
-      >
-        <HeroCta
-          label="Model Training Center"
-          description="Pipelines · copy sessions · weights"
-          onClick={() => navigate('/training')}
-          variant="primary"
-        />
-        <div className="dashboard-kpi-grid dashboard-kpi-grid--compact">
-          <KpiMiniCard
-            label="Training picks"
-            value="Open"
-            hint="Reviewer marked send to training"
-            onClick={() => navigate('/readings/all?cohort=training')}
-            variant="accent"
-          />
-          <KpiMiniCard
-            label="Analyzed"
-            value={kpiCount(counts.incorrectAnalyzedCount, countsLoading)}
-            onClick={() => navigate('/readings/incorrect_analyzed')}
-            loading={countsLoading}
-          />
-          <KpiMiniCard
-            label="Labeled"
-            value={kpiCount(counts.incorrectLabeledCount, countsLoading)}
-            onClick={() => navigate('/readings/incorrect_labeled')}
-            loading={countsLoading}
-          />
-          <KpiMiniCard
-            label="In training set"
-            value={kpiCount(counts.incorrectTrainingCount, countsLoading)}
-            onClick={() => navigate('/readings/incorrect_training')}
-            loading={countsLoading}
-          />
-          <KpiMiniCard
-            label="Pipeline total"
-            value={kpiCount(pipelineTotal, countsLoading)}
-            hint="Analyzed + labeled + training"
-            onClick={() => navigate('/readings/incorrect-queues')}
-            variant="warning"
-            loading={countsLoading}
-          />
-        </div>
-      </RoleHomeShell>
-    );
+    return null;
   }
 
   return null;

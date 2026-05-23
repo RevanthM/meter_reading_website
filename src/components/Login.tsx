@@ -20,6 +20,8 @@ import {
   anicaRegister,
   anicaSendOtp,
   anicaValidateOtp,
+  assertAnicaUserCanSignIn,
+  enrichAnicaLoginProfile,
   envelopeErrorMessage,
   getAnicaLoginAppl,
   getAnicaLoginAppForOtp,
@@ -34,6 +36,7 @@ import {
   assertSuccess,
   type AnicaLoginSessionUser,
 } from '../services/anicaLoginAuth';
+import { ANICA_REGISTER_ROLE_OPTIONS } from '../utils/portalWorkMode';
 
 type LoginSplitShellProps = {
   children: React.ReactNode;
@@ -185,6 +188,12 @@ const Login: React.FC = () => {
 
   const dismissError = () => setFormError(null);
 
+  const finishAnicaLogin = (profile: AnicaLoginSessionUser, loginUserId: string) => {
+    const enriched = enrichAnicaLoginProfile(profile, loginUserId);
+    assertAnicaUserCanSignIn(enriched, loginUserId);
+    completeAnicaLoginSession(enriched);
+  };
+
   const handleSsoClick = () => {
     setFormError(null);
     setSsoComingSoon(true);
@@ -212,7 +221,7 @@ const Login: React.FC = () => {
         if (!profile || Object.keys(profile).length === 0) {
           throw new Error('Login succeeded but user profile was missing. Try signing in again after clearing saved device data.');
         }
-        completeAnicaLoginSession(profile);
+        finishAnicaLogin(profile, userId.trim());
         navigate('/', { replace: true });
         return;
       }
@@ -275,7 +284,7 @@ const Login: React.FC = () => {
       if (!profile || Object.keys(profile).length === 0) {
         throw new Error('Login succeeded but user profile was missing.');
       }
-      completeAnicaLoginSession(profile);
+      finishAnicaLogin(profile, cred.userId);
       clearPostRegisterOtp();
       navigate('/', { replace: true });
     } catch (err) {
@@ -332,7 +341,7 @@ const Login: React.FC = () => {
       if (!profile || Object.keys(profile).length === 0) {
         throw new Error('Login succeeded but user profile was missing.');
       }
-      completeAnicaLoginSession(profile);
+      finishAnicaLogin(profile, userId.trim());
       navigate('/', { replace: true });
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Verification failed.');
@@ -387,6 +396,7 @@ const Login: React.FC = () => {
         EMailID: regEmail.trim(),
         PhoneNum: regPhone.trim(),
         password: regPassword,
+        appl: getAnicaLoginAppl(),
         Role: regRole.trim() || getAnicaLoginDefaultRegisterRole(),
       });
       if (!isAnicaLoginSuccess(env)) {
@@ -724,14 +734,19 @@ const Login: React.FC = () => {
               <label htmlFor="reg-role">Role</label>
               <div className="input-wrapper">
                 <Briefcase size={18} className="input-icon" />
-                <input
+                <select
                   id="reg-role"
-                  type="text"
+                  className="login-role-select"
                   value={regRole}
                   onChange={(ev) => setRegRole(ev.target.value)}
-                  placeholder="AMR"
                   required
-                />
+                >
+                  {ANICA_REGISTER_ROLE_OPTIONS.map((opt) => (
+                    <option key={opt.apiRole} value={opt.apiRole}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="form-group login-reg-span-2">

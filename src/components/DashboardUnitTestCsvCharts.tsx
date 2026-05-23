@@ -452,7 +452,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
         <h4 className="dashboard-unit-test-analytics-section-title">Advanced</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--1">
           {confusion && confusion.total > 0 ? (
-            <div className="dashboard-pipeline-essential-card dashboard-confusion-card">
+            <div className="dashboard-pipeline-essential-card dashboard-confusion-card" data-report-capture="Confusion heatmap">
               <div className="dashboard-confusion-head">
                 <div>
                   <h5>Confusion heatmap (expected → predicted)</h5>

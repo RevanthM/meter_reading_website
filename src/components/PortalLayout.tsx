@@ -5,15 +5,11 @@ import {
   LayoutDashboard,
   ListTree,
   CheckCircle2,
-  Cpu,
-  History,
   HelpCircle,
   LogOut,
   Menu,
   X,
   Gauge,
-  Users,
-  ChevronDown,
   Inbox,
   GraduationCap,
   PanelLeft,
@@ -24,11 +20,11 @@ import {
   Upload,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
-import type { PortalWorkMode, PortalOutletWorkContext } from '../utils/portalWorkMode';
+import type { PortalOutletWorkContext, PortalWorkMode } from '../utils/portalWorkMode';
 import {
-  getStoredPortalWorkMode,
-  setStoredPortalWorkMode,
   PORTAL_ROLE_LABELS,
+  isPortalWorkMode,
+  setStoredPortalWorkMode,
 } from '../utils/portalWorkMode';
 import { statusLabels } from '../types';
 
@@ -58,19 +54,34 @@ function navLeafActive(pathname: string, search: string, item: NavLeaf): boolean
   return true;
 }
 
-function anyNavLeafActive(pathname: string, search: string, leaves: NavLeaf[]): boolean {
-  return leaves.some((l) => navLeafActive(pathname, search, l));
-}
-
-const STORAGE_ACCOUNT = 'portal_nav_account_open';
 const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
 const PortalLayout: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const pathname = location.pathname;
-  const { userEmail, logout } = useAuth();
+  const { userEmail, logout, portalWorkMode: authWorkMode, canSwitchPortalRoles } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [workMode, setWorkMode] = useState<PortalWorkMode>(authWorkMode);
+
+  useEffect(() => {
+    setWorkMode(authWorkMode);
+  }, [authWorkMode]);
+
+  const onWorkModeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      if (!canSwitchPortalRoles) return;
+      const next = e.target.value;
+      if (!isPortalWorkMode(next) || next === workMode) return;
+      setWorkMode(next);
+      setStoredPortalWorkMode(next);
+      setMobileNavOpen(false);
+      if (pathname !== '/') {
+        navigate('/', { replace: true });
+      }
+    },
+    [canSwitchPortalRoles, navigate, pathname, workMode],
+  );
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -82,47 +93,11 @@ const PortalLayout: FC = () => {
     return false;
   });
 
-  const [workMode, setWorkMode] = useState<PortalWorkMode>(() => getStoredPortalWorkMode());
-
-  const pipelineIterationsNav = useMemo(
-    (): NavLeaf => ({
-      path: '/pipeline-iterations',
-      label: 'Pipeline iterations',
-      description: 'Model runs · compare',
-      icon: <Layers size={17} />,
-    }),
-    [],
-  );
-
-  const [accountOpen, setAccountOpen] = useState(() => {
-    try {
-      const v = localStorage.getItem(STORAGE_ACCOUNT);
-      if (v === '0' || v === '1') return v === '1';
-    } catch {
-      /* ignore */
-    }
-    return false;
-  });
-
-  const onWorkModeChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const next = e.target.value as PortalWorkMode;
-      if (next === workMode) return;
-      setWorkMode(next);
-      setStoredPortalWorkMode(next);
-      setMobileNavOpen(false);
-      // Each role has its own home dashboard; leave role-specific routes (e.g. awaiting review list).
-      if (pathname !== '/') {
-        navigate('/', { replace: true });
-      }
-    },
-    [navigate, pathname, workMode],
-  );
-
-  const { mainLinks, moreLinks, roleHint } = useMemo((): {
+  const { mainLinks, roleHint, navSectionTitle, navSectionSub } = useMemo((): {
     mainLinks: NavLeaf[];
-    moreLinks: NavLeaf[];
     roleHint: string;
+    navSectionTitle: string;
+    navSectionSub: string;
   } => {
     const dash: NavLeaf = { path: '/', label: 'Home', icon: <LayoutDashboard size={17} /> };
 
@@ -146,6 +121,8 @@ const PortalLayout: FC = () => {
     if (workMode === 'test_data_reviewer') {
       return {
         roleHint: 'Approve sessions reviewers marked for unit test; browse existing unit test images.',
+        navSectionTitle: 'Test data',
+        navSectionSub: 'Pending approvals and unit test images',
         mainLinks: [
           {
             ...dash,
@@ -169,20 +146,14 @@ const PortalLayout: FC = () => {
             icon: <ListTree size={17} />,
           },
         ],
-        moreLinks: [
-          {
-            path: '/usage',
-            label: 'Usage',
-            description: 'Sessions by day',
-            icon: <Users size={17} />,
-          },
-        ],
       };
     }
 
     if (workMode === 'reviewer') {
       return {
         roleHint: 'Awaiting review = not human-reviewed yet. Other lists = reviewed outcomes.',
+        navSectionTitle: 'Review',
+        navSectionSub: 'See new captures, then reviewed outcomes',
         mainLinks: [
           {
             ...dash,
@@ -200,9 +171,9 @@ const PortalLayout: FC = () => {
           ...manualUploadNav,
           {
             path: '/readings/incorrect-queues',
-            label: 'Wrong (reviewed)',
+            label: 'Incorrect',
             description: 'Incorrect pipeline',
-            hint: 'Analyzed → labeled → training and related wrong queues',
+            hint: 'Analyzed → labeled → training and related incorrect queues',
             icon: <ListTree size={17} />,
           },
           {
@@ -213,27 +184,14 @@ const PortalLayout: FC = () => {
             icon: <CheckCircle2 size={17} />,
           },
         ],
-        moreLinks: [
-          {
-            path: '/usage',
-            label: 'Usage',
-            description: 'Sessions by day',
-            icon: <Users size={17} />,
-          },
-          {
-            path: '/models',
-            label: 'Models',
-            description: 'App / version mix',
-            icon: <Cpu size={17} />,
-          },
-          pipelineIterationsNav,
-        ],
       };
     }
 
     if (workMode === 'admin') {
       return {
         roleHint: 'Iteration registry, Model Training Center, manual uploads, and full lists.',
+        navSectionTitle: 'Admin',
+        navSectionSub: 'Dashboard · registry · lists',
         mainLinks: [
           {
             ...dash,
@@ -264,38 +222,19 @@ const PortalLayout: FC = () => {
             icon: <ListTree size={17} />,
           },
         ],
-        moreLinks: [
-          {
-            path: '/training',
-            label: 'Model Training',
-            description: 'Pipelines · copy · ZIP',
-            hint: 'Same as labeler Model Training',
-            icon: <GraduationCap size={17} strokeWidth={2} />,
-          },
-          {
-            path: '/models',
-            label: 'Models',
-            description: 'App / version mix',
-            icon: <Cpu size={17} />,
-          },
-          {
-            path: '/usage',
-            label: 'Usage',
-            description: 'Sessions by day',
-            icon: <Users size={17} />,
-          },
-        ],
       };
     }
 
     return {
       roleHint: 'Model Training Center = all pipelines. Training picks = send to training dataset.',
+      navSectionTitle: 'Model Training',
+      navSectionSub: 'Overview & reviewer picks',
       mainLinks: [
         {
           ...dash,
-          label: 'Overview',
-          description: 'Dashboard · KPIs',
-          hint: 'Charts and counts',
+          label: 'Metrics',
+          description: 'Pipeline charts',
+          hint: 'Images, accuracy & confidence by iteration',
         },
         {
           path: '/readings/all',
@@ -306,44 +245,18 @@ const PortalLayout: FC = () => {
           icon: <Sparkles size={17} strokeWidth={2} />,
           activeWhenSearch: { cohort: 'training' },
         },
-      ],
-      moreLinks: [
         {
-          path: '/models',
-          label: 'Model data',
-          description: 'App versions & mix',
-          icon: <Cpu size={17} />,
+          path: '/factory',
+          label: 'Model factory',
+          description: 'Assembly line · ship',
+          hint: 'Planning → data → label → train → test → deployed',
+          icon: <Factory size={17} strokeWidth={2} />,
         },
-        {
-          path: '/usage',
-          label: 'Usage',
-          description: 'Sessions by day',
-          icon: <Users size={17} />,
-        },
-        pipelineIterationsNav,
       ],
     };
-  }, [workMode, pipelineIterationsNav]);
+  }, [workMode]);
 
-  const accountLinks = useMemo(
-    () => [{ path: '/activity', label: 'Activity log', icon: <History size={17} /> }],
-    [],
-  );
-
-  const accountHasActive = anyNavLeafActive(pathname, location.search, accountLinks);
   const trainingNavActive = pathname.startsWith('/training');
-
-  useEffect(() => {
-    if (accountHasActive) setAccountOpen(true);
-  }, [accountHasActive, pathname]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_ACCOUNT, accountOpen ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [accountOpen]);
 
   useEffect(() => {
     try {
@@ -431,19 +344,27 @@ const PortalLayout: FC = () => {
         <nav id="portal-sidebar-nav" className="portal-sidebar-nav">
           <div className="portal-role-bar">
             <label htmlFor="portal-work-mode">Role</label>
-            <select
-              id="portal-work-mode"
-              className="portal-role-select"
-              value={workMode}
-              onChange={onWorkModeChange}
-            >
-              {(Object.keys(PORTAL_ROLE_LABELS) as PortalWorkMode[]).map((id) => (
-                <option key={id} value={id}>
-                  {PORTAL_ROLE_LABELS[id]}
-                </option>
-              ))}
-            </select>
-            <p className="portal-role-hint">{roleHint}</p>
+            {canSwitchPortalRoles ? (
+              <select
+                id="portal-work-mode"
+                className="portal-role-select"
+                value={workMode}
+                onChange={onWorkModeChange}
+              >
+                {(Object.keys(PORTAL_ROLE_LABELS) as PortalWorkMode[]).map((id) => (
+                  <option key={id} value={id}>
+                    {PORTAL_ROLE_LABELS[id]}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="portal-role-value">{PORTAL_ROLE_LABELS[workMode]}</span>
+            )}
+            <p className="portal-role-hint">
+              {canSwitchPortalRoles
+                ? `${roleHint} Switch role to view reviewer, test data, trainer, or admin dashboards.`
+                : roleHint}
+            </p>
           </div>
 
           {workMode === 'labeler' || workMode === 'admin' ? (
@@ -469,77 +390,33 @@ const PortalLayout: FC = () => {
 
               <div className="portal-nav-section">
                 <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">{workMode === 'admin' ? 'Admin' : 'Model Training'}</span>
-                  <span className="portal-nav-section-sub">
-                    {workMode === 'admin' ? 'Dashboard · registry · lists' : 'Overview &amp; reviewer picks'}
-                  </span>
+                  <span className="portal-nav-section-title">{navSectionTitle}</span>
+                  <span className="portal-nav-section-sub">{navSectionSub}</span>
                 </div>
                 <ul className="portal-nav-nested portal-nav-nested--sections">
                   {mainLinks.map((item) => renderLeaf(item))}
                 </ul>
               </div>
-
-              <div className="portal-nav-section">
-                <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">Data</span>
-                  <span className="portal-nav-section-sub">Models &amp; usage</span>
-                </div>
-                <ul className="portal-nav-nested portal-nav-nested--sections">
-                  {moreLinks.map((item) => renderLeaf(item))}
-                </ul>
-              </div>
             </>
           ) : (
-            <>
-              <div className="portal-nav-section">
-                <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">Review</span>
-                  <span className="portal-nav-section-sub">See new captures, then reviewed outcomes</span>
-                </div>
-                <ul className="portal-nav-nested portal-nav-nested--sections">{mainLinks.map((item) => renderLeaf(item))}</ul>
+            <div className="portal-nav-section">
+              <div className="portal-nav-section-head">
+                <span className="portal-nav-section-title">{navSectionTitle}</span>
+                <span className="portal-nav-section-sub">{navSectionSub}</span>
               </div>
-
-              <div className="portal-nav-section">
-                <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">Tools</span>
-                  <span className="portal-nav-section-sub">Usage &amp; models</span>
-                </div>
-                <ul className="portal-nav-nested portal-nav-nested--sections">{moreLinks.map((item) => renderLeaf(item))}</ul>
-              </div>
-            </>
+              <ul className="portal-nav-nested portal-nav-nested--sections">{mainLinks.map((item) => renderLeaf(item))}</ul>
+            </div>
           )}
 
           <div className="portal-nav-spacer" aria-hidden />
-
-          <div className={`portal-nav-disclosure portal-nav-disclosure--footer${accountHasActive ? ' portal-nav-disclosure--child-active' : ''}`}>
-            <button
-              type="button"
-              id="portal-disclosure-account"
-              className="portal-nav-disclosure-trigger"
-              aria-expanded={accountOpen}
-              aria-controls="portal-disclosure-account-panel"
-              onClick={() => setAccountOpen((o) => !o)}
-            >
-              <span className="portal-nav-disclosure-title">
-                <span className="portal-nav-disclosure-heading">Account</span>
-                <span className="portal-nav-disclosure-hint">Session activity</span>
-              </span>
-              <ChevronDown
-                size={16}
-                className={`portal-nav-disclosure-chevron${accountOpen ? ' portal-nav-disclosure-chevron--open' : ''}`}
-                aria-hidden
-              />
-            </button>
-            {accountOpen ? (
-              <div id="portal-disclosure-account-panel" className="portal-nav-disclosure-panel" role="region" aria-labelledby="portal-disclosure-account">
-                <ul className="portal-nav-nested">{accountLinks.map((item) => renderLeaf(item))}</ul>
-              </div>
-            ) : null}
-          </div>
         </nav>
 
         <div className="portal-sidebar-footer">
-          <span className="portal-sidebar-footnote">Mode is saved on this device only.</span>
+          <span className="portal-sidebar-footnote">
+            {canSwitchPortalRoles
+              ? 'Role switch saved on this device.'
+              : 'Role is assigned by your administrator.'}
+          </span>
         </div>
       </aside>
 

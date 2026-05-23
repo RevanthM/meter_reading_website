@@ -19,9 +19,38 @@ const LEGACY_STORAGE_KEY = 'meter_portal_work_mode';
 export const PORTAL_ROLE_LABELS: Record<PortalWorkMode, string> = {
   reviewer: 'reviewer',
   test_data_reviewer: 'test data reviewer',
-  labeler: 'labeler',
+  labeler: 'model trainer',
   admin: 'admin',
 };
+
+/** Anica auth API role codes (Register + login profile `Role`). */
+export const ANICA_API_ROLE_TO_PORTAL: Record<string, PortalWorkMode> = {
+  rvwr: 'reviewer',
+  trvr: 'test_data_reviewer',
+  mtnr: 'labeler',
+  admn: 'admin',
+};
+
+export const PORTAL_TO_ANICA_API_ROLE: Record<PortalWorkMode, string> = {
+  reviewer: 'rvwr',
+  test_data_reviewer: 'trvr',
+  labeler: 'mtnr',
+  admin: 'admn',
+};
+
+export const ANICA_REGISTER_ROLE_OPTIONS: { portal: PortalWorkMode; label: string; apiRole: string }[] = (
+  Object.keys(PORTAL_ROLE_LABELS) as PortalWorkMode[]
+).map((portal) => ({
+  portal,
+  label: PORTAL_ROLE_LABELS[portal],
+  apiRole: PORTAL_TO_ANICA_API_ROLE[portal],
+}));
+
+export function portalWorkModeFromAnicaRole(profile: Record<string, unknown>): PortalWorkMode | null {
+  const raw = profile.Role ?? profile.role;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  return ANICA_API_ROLE_TO_PORTAL[raw.trim().toLowerCase()] ?? null;
+}
 
 export function isPortalWorkMode(v: string): v is PortalWorkMode {
   return (

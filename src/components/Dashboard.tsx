@@ -24,6 +24,7 @@ import {
   type PipelineIterationRecord,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
+import { getStoredPortalWorkMode } from '../utils/portalWorkMode';
 import { DashboardRoleHome } from './DashboardRoleHome';
 import {
   calendarDayKeyInPortalTz,
@@ -33,22 +34,8 @@ import {
 import {
   enrichIterationRegistryRows,
 } from '../utils/iterationMetricsEnrichment';
-import DashboardPipelineEssentials from './DashboardPipelineEssentials';
-import DashboardUnitTestInsights from './DashboardUnitTestInsights';
-import PipelineChartLineFilter from './PipelineChartLineFilter';
-import { filterRowsByProductLine, type ChartPipelineFilter } from '../constants/pipelineChartTheme';
-
-const REGISTRY_CHART_DEFER_MS = 80;
-
-/** Run low-priority admin chart work after counts paint (avoids blocking other API calls). */
-function scheduleDeferredDashboardTask(fn: () => void): () => void {
-  if (typeof window.requestIdleCallback === 'function') {
-    const id = window.requestIdleCallback(() => fn(), { timeout: 2000 });
-    return () => window.cancelIdleCallback(id);
-  }
-  const t = window.setTimeout(fn, REGISTRY_CHART_DEFER_MS);
-  return () => window.clearTimeout(t);
-}
+import DashboardTrainingAnalyticsSection from './DashboardTrainingAnalyticsSection';
+import type { ChartPipelineFilter } from '../constants/pipelineChartTheme';
 
 const STATUS_DONUT_ORDER: ReadingStatus[] = [
   'correct',
@@ -310,8 +297,10 @@ const Dashboard: FC = () => {
 
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
-  const portalRole = outletCtx?.workMode ?? 'reviewer';
+  const portalRole = outletCtx?.workMode ?? getStoredPortalWorkMode();
   const isAdminDashboard = portalRole === 'admin';
+  const isModelTrainer = portalRole === 'labeler';
+  const showTrainingAnalytics = isAdminDashboard || isModelTrainer;
 
   const glanceCounts = counts;
   const kpiDataLoading = countsLoading;
@@ -319,11 +308,6 @@ const Dashboard: FC = () => {
   const enrichedRegistryAll = useMemo(
     () => enrichIterationRegistryRows(registryIterations),
     [registryIterations],
-  );
-
-  const chartRegistryRows = useMemo(
-    () => filterRowsByProductLine(enrichedRegistryAll, pipelineLineFilter),
-    [enrichedRegistryAll, pipelineLineFilter],
   );
 
   const loadRegistry = useCallback(async () => {
@@ -339,34 +323,30 @@ const Dashboard: FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isAdminDashboard) {
+    if (!showTrainingAnalytics) {
       setRegistryIterations([]);
       setRegistryLoading(false);
       return;
     }
-    if (countsLoading) return;
 
     let cancelled = false;
-    const cancelDefer = scheduleDeferredDashboardTask(() => {
-      void loadRegistry().then(() => {
-        if (cancelled) return;
-      });
+    void loadRegistry().then(() => {
+      if (cancelled) return;
     });
 
     return () => {
       cancelled = true;
-      cancelDefer();
     };
-  }, [countsLoading, isAdminDashboard, loadRegistry]);
+  }, [showTrainingAnalytics, loadRegistry]);
 
   useEffect(() => {
-    if (!isAdminDashboard) return;
+    if (!showTrainingAnalytics) return;
     const onRegistryUpdated = () => {
       void loadRegistry();
     };
     window.addEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
     return () => window.removeEventListener(PIPELINE_REGISTRY_UPDATED_EVENT, onRegistryUpdated);
-  }, [isAdminDashboard, loadRegistry]);
+  }, [showTrainingAnalytics, loadRegistry]);
 
   const todayDrillIso = calendarDayKeyInPortalTz(new Date().toISOString());
   const todayHintDisplay = formatPortalWeekdayMedium(new Date().toISOString());
@@ -395,9 +375,9 @@ const Dashboard: FC = () => {
 
   const refreshDashboardLight = useCallback(async () => {
     await refreshCounts();
-    if (!isAdminDashboard) return;
+    if (!showTrainingAnalytics) return;
     await loadRegistry();
-  }, [isAdminDashboard, loadRegistry, refreshCounts]);
+  }, [showTrainingAnalytics, loadRegistry, refreshCounts]);
 
   const dashboardSubtitle = isAdminDashboard
     ? 'Analytics, registry & full queue overview'
@@ -405,7 +385,7 @@ const Dashboard: FC = () => {
       ? 'Review queue & outcomes'
       : portalRole === 'test_data_reviewer'
         ? 'Test data approval'
-        : 'Model Training Center & pipeline folders';
+        : 'Pipeline metrics by iteration';
 
   const handleDownloadIncorrectZip = async () => {
     if (!isUsingRealData) {
@@ -483,15 +463,15 @@ const Dashboard: FC = () => {
                 className="refresh-button"
                 onClick={() => void refreshDashboardLight()}
                 title={
-                  isAdminDashboard
+                  showTrainingAnalytics
                     ? 'Refresh counts and cached charts (does not reload all sessions)'
                     : 'Refresh folder counts'
                 }
-                aria-busy={countsLoading || (isAdminDashboard && registryLoading)}
+                aria-busy={countsLoading || (showTrainingAnalytics && registryLoading)}
               >
                 <RefreshCw
                   size={17}
-                  className={countsLoading || (isAdminDashboard && registryLoading) ? 'spin' : ''}
+                  className={countsLoading || (showTrainingAnalytics && registryLoading) ? 'spin' : ''}
                 />
               </button>
             </div>
@@ -527,65 +507,39 @@ const Dashboard: FC = () => {
         </div>
       )}
 
-      {!isAdminDashboard ? (
+      {!isAdminDashboard && !isModelTrainer ? (
         <DashboardRoleHome
           role={portalRole}
           counts={glanceCounts}
           countsLoading={kpiDataLoading}
           incorrectQueuesTotal={incorrectQueuesTotal}
         />
-      ) : (
+      ) : null}
+
+      {isModelTrainer ? (
+        <main className="dashboard-content dashboard-content--visual dashboard-content--trainer-graphs">
+          <DashboardTrainingAnalyticsSection
+            rows={enrichedRegistryAll}
+            loading={registryLoading}
+            pipelineFilter={pipelineLineFilter}
+            onPipelineFilterChange={setPipelineLineFilter}
+            isAdmin={false}
+            showPerDial
+            graphsOnly
+          />
+        </main>
+      ) : null}
+
+      {isAdminDashboard ? (
       <main className="dashboard-content dashboard-content--visual">
-        <section className="dashboard-section dashboard-section--viz dashboard-section--pipeline-registry">
-            <div className="dashboard-section-head dashboard-section-head--range-top">
-              <div>
-                <h2 className="section-title">Training & improvement</h2>
-                <p className="dashboard-section-sub">
-                  Images trained and simulator vs app confidence/accuracy by iteration —{' '}
-                  <button
-                    type="button"
-                    className="training-hub-text-btn"
-                    onClick={() => navigate('/pipeline-iterations')}
-                  >
-                    edit in registry
-                  </button>
-                  .
-                </p>
-                {registryLoading ? (
-                  <p className="dashboard-section-loading-hint">Loading registry…</p>
-                ) : null}
-              </div>
-              {!registryLoading && enrichedRegistryAll.length > 0 ? (
-                <PipelineChartLineFilter value={pipelineLineFilter} onChange={setPipelineLineFilter} />
-              ) : null}
-            </div>
-            {registryLoading && !chartRegistryRows.length ? (
-              <div className="chart-empty chart-empty--tight">
-                <Loader2 size={28} className="spin" />
-                <span>Loading pipeline registry…</span>
-              </div>
-            ) : chartRegistryRows.length ? (
-              <>
-                <DashboardPipelineEssentials rows={chartRegistryRows} pipelineFilter={pipelineLineFilter} />
-                <DashboardUnitTestInsights rows={chartRegistryRows} />
-              </>
-            ) : enrichedRegistryAll.length ? (
-              <div className="chart-empty">
-                <p>No iterations for this pipeline filter.</p>
-              </div>
-            ) : (
-              <div className="chart-empty">
-                <p>No pipeline iterations yet.</p>
-                <button
-                  type="button"
-                  className="view-button"
-                  onClick={() => navigate('/pipeline-iterations')}
-                >
-                  Open registry & import May 2026 metrics
-                </button>
-              </div>
-            )}
-          </section>
+        <DashboardTrainingAnalyticsSection
+          rows={enrichedRegistryAll}
+          loading={registryLoading}
+          pipelineFilter={pipelineLineFilter}
+          onPipelineFilterChange={setPipelineLineFilter}
+          isAdmin
+          onOpenRegistry={() => navigate('/pipeline-iterations')}
+        />
 
         <section className="dashboard-section dashboard-section--glance dashboard-section--action-first">
           <div className="dashboard-section-head dashboard-section-head--inline">
@@ -667,7 +621,7 @@ const Dashboard: FC = () => {
         )}
 
       </main>
-      )}
+      ) : null}
     </div>
   );
 };

@@ -17,6 +17,7 @@ import type { PipelineIterationRecord } from '../services/api';
 import { normalizePipelineIterationPrimaryStatus } from '../constants/pipelineIterationRegistry';
 import {
   buildPipelineIterationChartPoints,
+  blendHexColors,
   chartThemeForLine,
   FACTORY_PRODUCT_LINE_CHART,
   filterEvalChartRows,
@@ -355,7 +356,7 @@ const PipelineIterationsCharts: FC<Props> = ({
                       return (
                         <Cell
                           key={d.id}
-                          fill={`color-mix(in srgb, ${theme.fill} 55%, ${theme.fillMuted})`}
+                          fill={blendHexColors(theme.fill, theme.fillMuted, 0.55)}
                           stroke={theme.stroke}
                           strokeWidth={1}
                         />
