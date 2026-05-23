@@ -11018,6 +11018,14 @@ label.training-hub-filter-card-title--input {
   margin-top: 0;
 }
 
+.analytics-details-block--current-confusion {
+  margin-top: 1.25rem;
+}
+
+.analytics-current-confusion-run {
+  margin: 0 0 0.85rem;
+}
+
 .dashboard-unit-test-insights-placeholder {
   margin: 1rem 0 0;
   padding: 1rem;

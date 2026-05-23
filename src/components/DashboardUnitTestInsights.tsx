@@ -5,6 +5,7 @@ import { fetchUnitTestRunDetail } from '../services/api';
 import { filterEvalChartRows } from '../constants/pipelineChartTheme';
 import { pickNewestLink } from '../utils/unitTestIterationLink';
 import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
+import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
 
 type LinkOption = {
   iterationId: string;
@@ -16,9 +17,15 @@ type LinkOption = {
 type Props = {
   rows: PipelineIterationRecord[];
   selectedIterationIds: Set<string>;
+  /** Current tab: show only the confusion heatmap for the displayed iteration(s). */
+  confusionOnly?: boolean;
 };
 
-const DashboardUnitTestInsights: FC<Props> = ({ rows, selectedIterationIds }) => {
+const DashboardUnitTestInsights: FC<Props> = ({
+  rows,
+  selectedIterationIds,
+  confusionOnly = false,
+}) => {
   const evalRows = useMemo(() => filterEvalChartRows(rows), [rows]);
 
   const linkOptions = useMemo((): LinkOption[] => {
@@ -100,23 +107,67 @@ const DashboardUnitTestInsights: FC<Props> = ({ rows, selectedIterationIds }) =>
   const loading = selectedKey ? loadingKeys.has(selectedKey) : false;
 
   if (!selectedIterationIds.size) {
+    if (confusionOnly) return null;
     return (
       <div className="dashboard-unit-test-insights dashboard-unit-test-insights--empty">
         <h3>Unit test analytics (CSV)</h3>
         <p className="pipeline-iterations-chart-card-placeholder">
-          Check one or more iterations under Current to load unit-test CSV analytics.
+          Check one or more iterations under All details to load unit-test CSV analytics.
         </p>
       </div>
     );
   }
 
   if (!linkOptions.length) {
+    if (confusionOnly) return null;
     return (
       <div className="dashboard-unit-test-insights dashboard-unit-test-insights--empty">
         <h3>Unit test analytics (CSV)</h3>
         <p className="pipeline-iterations-chart-card-placeholder">
           Selected iterations have no linked unit-test CSV yet. Link a CSV in the registry to see charts here.
         </p>
+      </div>
+    );
+  }
+
+  if (confusionOnly) {
+    return (
+      <div className="analytics-details-block analytics-details-block--current-confusion">
+        <header className="analytics-details-block__head">
+          <h4>Confusion matrix — current iteration</h4>
+          <p>Expected vs predicted digits from the linked unit-test CSV.</p>
+        </header>
+        {linkOptions.length > 1 ? (
+          <label className="dashboard-per-dial-select-wrap analytics-current-confusion-run">
+            <span className="dashboard-per-dial-select-label">CSV run</span>
+            <select
+              className="dashboard-per-dial-select"
+              value={selectedKey}
+              onChange={(e) => setSelectedKey(e.target.value)}
+              aria-label="Unit test CSV run"
+            >
+              {linkOptions.map((o) => (
+                <option key={o.s3Key} value={o.s3Key}>
+                  {o.iterationLabel} — {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p className="dashboard-unit-test-insights-single-run analytics-current-confusion-run">
+            {linkOptions[0]?.iterationLabel} — {linkOptions[0]?.label}
+          </p>
+        )}
+        {loading ? (
+          <div className="chart-empty chart-empty--tight">
+            <Loader2 size={24} className="spin" />
+            <span>Loading confusion matrix…</span>
+          </div>
+        ) : error ? (
+          <p className="pipeline-iterations-chart-card-placeholder">{error}</p>
+        ) : detail ? (
+          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} reportCapture />
+        ) : null}
       </div>
     );
   }

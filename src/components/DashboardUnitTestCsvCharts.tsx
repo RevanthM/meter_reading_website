@@ -1,4 +1,4 @@
-import { useMemo, useState, type FC } from 'react';
+import { useMemo, type FC } from 'react';
 import {
   ResponsiveContainer,
   PieChart,
@@ -18,13 +18,12 @@ import {
 import type { TooltipProps } from 'recharts';
 import type { UnitTestRunDetailResponse } from '../services/api';
 import {
-  buildDigitConfusionMatrix,
   confidenceHistogramFromPerImageRows,
-  confusionCellTone,
   resolveDialStats,
   resolveDifficultyTiers,
   resolveRunPerformance,
 } from '../utils/unitTestCsvAnalytics';
+import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
 
 const tooltipStyle = {
   backgroundColor: 'var(--bg-elevated, #fff)',
@@ -109,8 +108,6 @@ type Props = {
 };
 
 const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
-  const [confusionDial, setConfusionDial] = useState<number | 'all'>('all');
-
   const runPerf = useMemo(() => resolveRunPerformance(detail), [detail]);
   const dialStats = useMemo(() => resolveDialStats(detail), [detail]);
   const difficultyTiers = useMemo(() => resolveDifficultyTiers(detail), [detail]);
@@ -201,16 +198,6 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
     () => (detail.perImageRows?.length ? confidenceHistogramFromPerImageRows(detail.perImageRows) : []),
     [detail.perImageRows],
   );
-
-  const confusion = useMemo(() => {
-    if (!detail.perImageRows?.length) return null;
-    return buildDigitConfusionMatrix(detail.perImageRows, confusionDial);
-  }, [detail.perImageRows, confusionDial]);
-
-  const confusionMax = useMemo(() => {
-    if (!confusion) return 0;
-    return Math.max(0, ...confusion.matrix.flat());
-  }, [confusion]);
 
   const summary = detail.summary;
   const accPct = runPerf.accuracyPct;
@@ -451,72 +438,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail }) => {
       <section className="dashboard-unit-test-analytics-section">
         <h4 className="dashboard-unit-test-analytics-section-title">Advanced</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--1">
-          {confusion && confusion.total > 0 ? (
-            <div className="dashboard-pipeline-essential-card dashboard-confusion-card" data-report-capture="Confusion heatmap">
-              <div className="dashboard-confusion-head">
-                <div>
-                  <h5>Confusion heatmap (expected → predicted)</h5>
-                  <p className="dashboard-pipeline-essential-sub">
-                    Rows = correct digit from filename · columns = model prediction. Off-diagonal cells show common
-                    misreads ({confusion.total} dial readings).
-                  </p>
-                </div>
-                <div className="dashboard-confusion-dial-toggle" role="group" aria-label="Dial for confusion matrix">
-                  {(['all', 1, 2, 3, 4] as const).map((d) => (
-                    <button
-                      key={String(d)}
-                      type="button"
-                      className={`dashboard-improvement-metric-btn${
-                        confusionDial === d ? ' dashboard-improvement-metric-btn--active' : ''
-                      }`}
-                      onClick={() => setConfusionDial(d)}
-                      aria-pressed={confusionDial === d}
-                    >
-                      {d === 'all' ? 'All dials' : `Dial ${d}`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="dashboard-confusion-table-wrap">
-                <table className="dashboard-confusion-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Expected \ Pred</th>
-                      {confusion.digits.map((d) => (
-                        <th key={d} scope="col">
-                          {d}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {confusion.digits.map((expDigit, ei) => (
-                      <tr key={expDigit}>
-                        <th scope="row">{expDigit}</th>
-                        {confusion.digits.map((predDigit, pi) => {
-                          const count = confusion.matrix[ei][pi];
-                          const tone = confusionCellTone(count, confusionMax, ei, pi);
-                          return (
-                            <td
-                              key={predDigit}
-                              className={`dashboard-confusion-cell dashboard-confusion-cell--${tone}`}
-                              title={`Expected ${expDigit}, predicted ${predDigit}: ${count}`}
-                            >
-                              {count > 0 ? count : ''}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <p className="pipeline-iterations-chart-card-placeholder">
-              Confusion heatmap needs per-image rows with expected and predicted digits.
-            </p>
-          )}
+          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} reportCapture />
 
           <div className="dashboard-pipeline-essential-card">
             <h5>Confidence distribution</h5>

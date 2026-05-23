@@ -19,7 +19,7 @@ import {
   type ChartPipelineFilter,
 } from '../constants/pipelineChartTheme';
 import { inferProductLineForRow } from '../constants/factoryStages';
-import { latestEvalRowsForPipelineFilter } from '../utils/pipelineAnalyticsStory';
+import { buildCurrentSnapshots, latestEvalRowsForPipelineFilter } from '../utils/pipelineAnalyticsStory';
 import DashboardProjectSnapshot from './DashboardProjectSnapshot';
 import DashboardTrendDeltaStrip from './DashboardTrendDeltaStrip';
 import DashboardReportSummaryTable from './DashboardReportSummaryTable';
@@ -152,6 +152,12 @@ const DashboardPipelineEssentials: FC<Props> = ({
 
   const chartsReady = renderAllPanels || activeTab === 'progress';
   const allTabReady = renderAllPanels || activeTab === 'all';
+  const currentTabReady = renderAllPanels || activeTab === 'current';
+
+  const currentIterationIds = useMemo(
+    () => new Set(buildCurrentSnapshots(rows, pipelineFilter).map((c) => c.id)),
+    [rows, pipelineFilter],
+  );
 
   const imagesChart = useMemo(
     () => (chartsReady ? buildAppMetricLineChart(rows, pipelineFilter, 'images') : null),
@@ -237,6 +243,13 @@ const DashboardPipelineEssentials: FC<Props> = ({
             onToggleReport={onToggleReport}
             latestScopeOnly={latestScopeOnly}
           />
+          {currentTabReady ? (
+            <DashboardUnitTestInsights
+              rows={rows}
+              selectedIterationIds={currentIterationIds}
+              confusionOnly
+            />
+          ) : null}
         </section>
 
         <section
