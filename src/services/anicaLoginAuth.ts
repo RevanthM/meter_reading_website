@@ -1,7 +1,10 @@
 /** Backend auth API (sign-in, device OTP, registration). */
 
 import {
+  getAnicaApiRoleCode,
   getStoredPortalWorkMode,
+  hasAssignedAnicaPortalRole,
+  isPendingAnicaApiRole,
   portalWorkModeFromAnicaRole,
   setStoredPortalWorkMode,
   type PortalWorkMode,
@@ -14,6 +17,9 @@ const PORTAL_ROLE_BYPASS_USER_ID_PREFIX = 'saireetika';
 
 export const ANICA_ACCOUNT_INACTIVE_MESSAGE =
   'Your account is not active yet. Please contact your administrator to activate your account before signing in.';
+
+export const ANICA_ACCOUNT_NO_ROLE_MESSAGE =
+  'Your account does not have a portal role assigned yet. Please contact your administrator to assign your role before signing in.';
 
 export const ANICA_ACCOUNT_UNKNOWN_ROLE_MESSAGE =
   'Your account role is not recognized for this portal. Please contact your administrator.';
@@ -128,13 +134,24 @@ export async function anicaRegister(body: {
   PhoneNum: string;
   password: string;
   appl: string;
-  Role: string;
+  Role?: string;
 }): Promise<AnicaLoginApiEnvelope> {
   const url = `${getAnicaLoginAuthBaseUrl()}/Register`;
+  const payload: Record<string, string> = {
+    UserID: body.UserID,
+    FirstName: body.FirstName,
+    LastName: body.LastName,
+    EMailID: body.EMailID,
+    PhoneNum: body.PhoneNum,
+    password: body.password,
+    appl: body.appl,
+  };
+  const role = body.Role?.trim() || getAnicaLoginDefaultRegisterRole();
+  payload.Role = role;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
   return (await res.json()) as AnicaLoginApiEnvelope;
 }
@@ -280,21 +297,38 @@ export function getAnicaLoginAppForOtp(): string {
   return (import.meta.env.VITE_ANICA_LOGIN_APP_OTP as string) || 'AM';
 }
 
-/** Default `Role` in POST /Register JSON body. */
+/** Default `Role` in POST /Register JSON body (pending until admin assigns a portal role). */
 export function getAnicaLoginDefaultRegisterRole(): string {
-  return (import.meta.env.VITE_ANICA_LOGIN_REGISTER_ROLE as string) || 'rvwr';
+  return (import.meta.env.VITE_ANICA_LOGIN_REGISTER_ROLE as string) || 'nusr';
 }
 
+const ANICA_IS_ACTIVE_TRUTHY = new Set(['1', 'true', 'active']);
+
+/** Activated only when IsActive is `1`, `Active`, or `true` (any common API encoding). */
 export function isAnicaUserAccountActive(profile: AnicaLoginSessionUser): boolean {
-  const isActive = profile.IsActive ?? profile.isActive;
-  if (isActive === null || isActive === undefined) return false;
-  if (typeof isActive === 'boolean') return isActive;
-  if (typeof isActive === 'string') {
-    const t = isActive.trim().toLowerCase();
-    if (t === 'true' || t === '1' || t === 'yes') return true;
-    if (t === 'false' || t === '0' || t === 'no' || t === '') return false;
+  const raw = profile.IsActive ?? profile.isActive;
+  if (raw === null || raw === undefined) return false;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw === 1;
+  if (typeof raw === 'string') {
+    const t = raw.trim().toLowerCase();
+    if (!t || t === '0' || t === 'false' || t === 'no' || t === 'null') return false;
+    return ANICA_IS_ACTIVE_TRUTHY.has(t);
   }
-  return Boolean(isActive);
+  return false;
+}
+
+/** Restore session from storage only when still allowed to sign in (re-checks IsActive). */
+export function loadValidatedAnicaLoginSession(): AnicaLoginSessionUser | null {
+  const loaded = loadAnicaLoginSession();
+  if (!loaded) return null;
+  try {
+    assertAnicaUserCanSignIn(loaded, getAnicaUserId(loaded));
+    return loaded;
+  } catch {
+    clearAnicaLoginSession();
+    return null;
+  }
 }
 
 /** Validates profile before creating a portal session; throws with a user-facing message. */
@@ -305,9 +339,20 @@ export function assertAnicaUserCanSignIn(
   const enriched = enrichAnicaLoginProfile(profile, loginUserId);
   const bypass = isAnicaPortalRoleBypassUser(enriched, loginUserId);
   const canSwitchRoles = canSwitchPortalRolesFromProfile(enriched);
-  if (!bypass && !isAnicaUserAccountActive(enriched)) {
-    throw new Error(ANICA_ACCOUNT_INACTIVE_MESSAGE);
+
+  if (!bypass) {
+    if (!isAnicaUserAccountActive(enriched)) {
+      throw new Error(ANICA_ACCOUNT_INACTIVE_MESSAGE);
+    }
+    const roleCode = getAnicaApiRoleCode(enriched);
+    if (!roleCode || isPendingAnicaApiRole(enriched)) {
+      throw new Error(ANICA_ACCOUNT_NO_ROLE_MESSAGE);
+    }
+    if (!hasAssignedAnicaPortalRole(enriched)) {
+      throw new Error(ANICA_ACCOUNT_UNKNOWN_ROLE_MESSAGE);
+    }
   }
+
   const mode = portalWorkModeFromAnicaRole(enriched);
   if (mode) {
     setStoredPortalWorkMode(mode);

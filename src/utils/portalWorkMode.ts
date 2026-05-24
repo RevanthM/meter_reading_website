@@ -31,6 +31,11 @@ export const ANICA_API_ROLE_TO_PORTAL: Record<string, PortalWorkMode> = {
   admn: 'admin',
 };
 
+export const ANICA_API_ROLE_CODES = Object.keys(ANICA_API_ROLE_TO_PORTAL);
+
+/** Placeholder role for self-registration until an admin assigns a portal role. */
+export const ANICA_PENDING_REGISTER_ROLE = 'nusr';
+
 export const PORTAL_TO_ANICA_API_ROLE: Record<PortalWorkMode, string> = {
   reviewer: 'rvwr',
   test_data_reviewer: 'trvr',
@@ -46,10 +51,32 @@ export const ANICA_REGISTER_ROLE_OPTIONS: { portal: PortalWorkMode; label: strin
   apiRole: PORTAL_TO_ANICA_API_ROLE[portal],
 }));
 
-export function portalWorkModeFromAnicaRole(profile: Record<string, unknown>): PortalWorkMode | null {
+export function getAnicaApiRoleCode(profile: Record<string, unknown>): string | null {
   const raw = profile.Role ?? profile.role;
   if (typeof raw !== 'string' || !raw.trim()) return null;
-  return ANICA_API_ROLE_TO_PORTAL[raw.trim().toLowerCase()] ?? null;
+  return raw.trim().toLowerCase();
+}
+
+export function isRecognizedAnicaApiRole(profile: Record<string, unknown>): boolean {
+  const code = getAnicaApiRoleCode(profile);
+  if (!code) return false;
+  return code in ANICA_API_ROLE_TO_PORTAL;
+}
+
+export function isPendingAnicaApiRole(profile: Record<string, unknown>): boolean {
+  const code = getAnicaApiRoleCode(profile);
+  if (!code) return false;
+  return code === ANICA_PENDING_REGISTER_ROLE;
+}
+
+export function hasAssignedAnicaPortalRole(profile: Record<string, unknown>): boolean {
+  return isRecognizedAnicaApiRole(profile) && !isPendingAnicaApiRole(profile);
+}
+
+export function portalWorkModeFromAnicaRole(profile: Record<string, unknown>): PortalWorkMode | null {
+  const code = getAnicaApiRoleCode(profile);
+  if (!code) return null;
+  return ANICA_API_ROLE_TO_PORTAL[code] ?? null;
 }
 
 export function isPortalWorkMode(v: string): v is PortalWorkMode {

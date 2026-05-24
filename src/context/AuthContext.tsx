@@ -18,8 +18,10 @@ import type { AnicaLoginSessionUser } from '../services/anicaLoginAuth';
 import {
   canSwitchPortalRolesFromProfile,
   clearAnicaLoginSession,
-  loadAnicaLoginSession,
+  getAnicaUserId,
+  loadValidatedAnicaLoginSession,
   persistAnicaLoginSession,
+  assertAnicaUserCanSignIn,
 } from '../services/anicaLoginAuth';
 import {
   getStoredPortalWorkMode,
@@ -66,7 +68,7 @@ function anicaLoginDisplayEmail(profile: AnicaLoginSessionUser | null): string |
 }
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const initialAnicaLogin = loadAnicaLoginSession();
+  const initialAnicaLogin = loadValidatedAnicaLoginSession();
   const [user, setUser] = useState<User | null>(null);
   const [anicaLoginUser, setAnicaLoginUser] = useState<AnicaLoginSessionUser | null>(initialAnicaLogin);
   const [loading, setLoading] = useState(!initialAnicaLogin);
@@ -286,6 +288,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const completeAnicaLoginSession = useCallback((profile: AnicaLoginSessionUser) => {
+    assertAnicaUserCanSignIn(profile, getAnicaUserId(profile));
     const mode = portalWorkModeFromAnicaRole(profile);
     if (mode) setStoredPortalWorkMode(mode);
     persistAnicaLoginSession(profile);

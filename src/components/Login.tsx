@@ -11,7 +11,6 @@ import {
   Mail,
   Phone,
   CheckCircle,
-  Briefcase,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import LoginSplitArt from './LoginSplitArt';
@@ -36,7 +35,6 @@ import {
   assertSuccess,
   type AnicaLoginSessionUser,
 } from '../services/anicaLoginAuth';
-import { ANICA_REGISTER_ROLE_OPTIONS } from '../utils/portalWorkMode';
 
 type LoginSplitShellProps = {
   children: React.ReactNode;
@@ -147,7 +145,6 @@ const Login: React.FC = () => {
   const [regEmail, setRegEmail] = useState('');
   const [regPhone, setRegPhone] = useState('');
   const [regPassword, setRegPassword] = useState('');
-  const [regRole, setRegRole] = useState(() => getAnicaLoginDefaultRegisterRole());
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
 
@@ -276,17 +273,11 @@ const Login: React.FC = () => {
       }
       setStoredDeviceId(deviceId);
 
-      const again = await anicaLogin(cred.userId, cred.password, deviceId);
-      if (!isAnicaLoginSuccess(again)) {
-        throw new Error(envelopeErrorMessage(again));
-      }
-      const profile = parseEntityJson(again.entityJson) as AnicaLoginSessionUser | null;
-      if (!profile || Object.keys(profile).length === 0) {
-        throw new Error('Login succeeded but user profile was missing.');
-      }
-      finishAnicaLogin(profile, cred.userId);
       clearPostRegisterOtp();
-      navigate('/', { replace: true });
+      setUserId(cred.userId);
+      setRegisterSuccess(
+        'Your account has been verified. An administrator must assign your portal role before you can sign in.',
+      );
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Verification failed.');
     } finally {
@@ -397,7 +388,7 @@ const Login: React.FC = () => {
         PhoneNum: regPhone.trim(),
         password: regPassword,
         appl: getAnicaLoginAppl(),
-        Role: regRole.trim() || getAnicaLoginDefaultRegisterRole(),
+        Role: getAnicaLoginDefaultRegisterRole(),
       });
       if (!isAnicaLoginSuccess(env)) {
         throw new Error(envelopeErrorMessage(env));
@@ -522,7 +513,7 @@ const Login: React.FC = () => {
               {authMode === 'signin'
                 ? 'Sign In'
                 : registerSuccess && !registerOtpOpen
-                  ? 'Request submitted'
+                  ? 'Account verified'
                   : 'Create an Account'}
             </h1>
             <p className="login-page-heading__sub">
@@ -555,7 +546,7 @@ const Login: React.FC = () => {
           )}
           {authMode === 'register' && registerSuccess && !registerOtpOpen && (
             <p className="login-header-context">
-              Registration received. Continue to sign in when your account is active.
+              Account verified. Sign in once an administrator has assigned your portal role.
             </p>
           )}
         </div>
@@ -715,7 +706,7 @@ const Login: React.FC = () => {
                 />
               </div>
             </div>
-            <div className="form-group">
+            <div className="form-group login-reg-span-2">
               <label htmlFor="reg-phone">Phone</label>
               <div className="input-wrapper">
                 <Phone size={18} className="input-icon" />
@@ -728,25 +719,6 @@ const Login: React.FC = () => {
                   required
                   autoComplete="tel"
                 />
-              </div>
-            </div>
-            <div className="form-group">
-              <label htmlFor="reg-role">Role</label>
-              <div className="input-wrapper">
-                <Briefcase size={18} className="input-icon" />
-                <select
-                  id="reg-role"
-                  className="login-role-select"
-                  value={regRole}
-                  onChange={(ev) => setRegRole(ev.target.value)}
-                  required
-                >
-                  {ANICA_REGISTER_ROLE_OPTIONS.map((opt) => (
-                    <option key={opt.apiRole} value={opt.apiRole}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
               </div>
             </div>
             <div className="form-group login-reg-span-2">
@@ -806,7 +778,6 @@ const Login: React.FC = () => {
                 || !regEmail.trim()
                 || !regPhone.trim()
                 || !regPassword
-                || !regRole.trim()
               }
             >
               {submitting ? (
