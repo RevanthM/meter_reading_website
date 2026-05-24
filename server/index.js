@@ -28,6 +28,7 @@ import {
   parseUnitTestCsvSummary,
 } from './unitTestCsv.js';
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
+import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
@@ -35,6 +36,15 @@ import { registerManualUploadRoutes } from './manualUpload.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
+import {
+  createSessionIndexStore,
+  attachPrimaryListImages,
+  readingFromDynamoItem,
+} from './sessionIndex/index.js';
+import {
+  syncSessionIndexFromMetadata,
+  syncSessionIndexAfterMove,
+} from './sessionIndex/syncHelper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +52,13 @@ const repoRoot = path.join(__dirname, '..');
 // Root `.env` first, then `src/.env` (later wins) — supports AWS creds in `src/.env` for local dev.
 dotenv.config({ path: path.join(repoRoot, '.env') });
 dotenv.config({ path: path.join(repoRoot, 'src', '.env') });
+
+/** Prefer AWS_PROFILE when set (src/.env may contain a different IAM user without Dynamo). */
+if (process.env.AWS_PROFILE) {
+  delete process.env.AWS_ACCESS_KEY_ID;
+  delete process.env.AWS_SECRET_ACCESS_KEY;
+  delete process.env.AWS_SESSION_TOKEN;
+}
 
 // --- Firebase Admin SDK ---
 const FIREBASE_API_KEY = process.env.VITE_FIREBASE_API_KEY;
@@ -99,6 +116,9 @@ const ANALYTICS_USE_DEDICATED_BUCKET = ANALYTICS_BUCKET_NAME !== BUCKET_NAME;
 const ANALYTICS_FALLBACK_BUCKET =
   ANALYTICS_BUCKET_NAME !== BUCKET_NAME ? BUCKET_NAME : undefined;
 const REGION = (process.env.AWS_REGION || 'us-east-1').trim();
+const DYNAMO_SESSIONS_TABLE = (process.env.AWS_DYNAMODB_SESSIONS_TABLE || '').trim();
+const DYNAMO_SESSIONS_FALLBACK_S3 = process.env.DYNAMO_SESSIONS_FALLBACK_S3 !== 'false';
+const DYNAMO_ATTACH_LIST_IMAGES = process.env.DYNAMO_ATTACH_LIST_IMAGES !== 'false';
 /** If objects live under a parent folder (e.g. prod/ or mobile-uploads/), set AWS_S3_BASE_PREFIX=prod */
 const S3_BASE_PREFIX = (process.env.AWS_S3_BASE_PREFIX || '').trim();
 
@@ -624,55 +644,81 @@ function getAllFolderPrefixes(source, workType) {
   });
 }
 
-if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-  console.warn('⚠️  AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are not set — S3 routes will fail until .env is configured.');
+if (!process.env.AWS_PROFILE && (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY)) {
+  console.warn('⚠️  AWS credentials not set — configure AWS_PROFILE or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.');
 }
 
 const s3Client = new S3Client({
   region: REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
+  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+    ? {
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        },
+      }
+    : {}),
 });
 
-// --- In-memory cache ---
-const cache = new Map();
-const CACHE_TTL_MS = 60_000; // 1 minute
+const sessionIndex = createSessionIndexStore({
+  tableName: DYNAMO_SESSIONS_TABLE,
+  region: REGION,
+  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+    ? {
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        },
+      }
+    : {}),
+});
+
+if (sessionIndex.enabled) {
+  console.log(`📇 DynamoDB session index enabled (${sessionIndex.tableName})`);
+} else {
+  console.log('📇 DynamoDB session index disabled — set AWS_DYNAMODB_SESSIONS_TABLE to enable');
+}
+
+// --- Stale-while-revalidate caches (fast UX, background refresh, invalidate on writes) ---
+const SESSION_CACHE_FRESH_MS = parseCacheMs(process.env.API_CACHE_FRESH_MS, 8000);
+const SESSION_CACHE_STALE_MAX_MS = parseCacheMs(process.env.API_CACHE_STALE_MAX_MS, 45000);
+const UNIT_TEST_CACHE_FRESH_MS = parseCacheMs(process.env.UNIT_TEST_RUNS_CACHE_TTL_MS, 30000);
+const UNIT_TEST_CACHE_STALE_MAX_MS = parseCacheMs(process.env.UNIT_TEST_RUNS_STALE_MAX_MS, 120000);
+const UNIT_TEST_SUMMARY_DEFAULT_LIMIT = Math.max(
+  1,
+  parseInt(process.env.UNIT_TEST_SUMMARY_DEFAULT_LIMIT || '50', 10) || 50,
+);
+
+const sessionCache = createResponseCache({
+  name: 'sessions',
+  freshMs: SESSION_CACHE_FRESH_MS,
+  staleMaxMs: SESSION_CACHE_STALE_MAX_MS,
+});
+const unitTestRunsCache = createResponseCache({
+  name: 'unit-test-runs',
+  freshMs: UNIT_TEST_CACHE_FRESH_MS,
+  staleMaxMs: UNIT_TEST_CACHE_STALE_MAX_MS,
+});
 
 function getCacheKey(source, workType) {
   return `${source}:${workType}`;
 }
 
-function getCached(key) {
-  const entry = cache.get(key);
-  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
-    return entry.data;
-  }
-  cache.delete(key);
-  return null;
-}
-
-function setCache(key, data) {
-  cache.set(key, { data, timestamp: Date.now() });
-}
-
 function invalidateCache() {
-  cache.clear();
+  sessionCache.invalidate();
+  unitTestRunsCache.invalidate();
 }
 
-/** Drop cached readings/counts/light/uploaded-today for one portal work type (keeps other work types warm). */
+/** Drop cached readings/counts/light/uploaded-today for one portal work type. */
 function invalidateReadingsCache(source = 'all', workType = '1000') {
   const sources = source === 'all' ? ['all', 'field', 'simulator'] : [source, 'all'];
   const workTypes = workType && WORK_TYPES.includes(workType) ? [workType] : WORK_TYPES;
   for (const s of sources) {
     for (const wt of workTypes) {
-      cache.delete(getCacheKey(s, wt));
-      cache.delete(`counts:${s}:${wt}`);
-      cache.delete(`light:${s}:${wt}`);
-      for (const key of cache.keys()) {
-        if (key.startsWith(`uploadedToday:${s}:${wt}:`)) cache.delete(key);
-      }
+      sessionCache.invalidate(getCacheKey(s, wt));
+      sessionCache.invalidate(`counts:${s}:${wt}`);
+      sessionCache.invalidate(`light:${s}:${wt}`);
+      sessionCache.invalidateMatching(`uploadedToday:${s}:${wt}:`);
     }
   }
 }
@@ -1073,6 +1119,18 @@ async function getReadingsFromFolderLight(folderPrefix, status, sourceType, work
 }
 
 async function getAllLightReadings(source = 'all', workType = '1000') {
+  if (sessionIndex.enabled) {
+    try {
+      console.log(`\n📇 Light readings from Dynamo (source: ${source}, workType: ${workType})`);
+      const unique = await getAllLightReadingsFromDynamo(source, workType);
+      console.log(`📈 Light readings (Dynamo): ${unique.length} sessions\n`);
+      return unique;
+    } catch (err) {
+      console.error('📇 Dynamo getAllLightReadings failed:', err.message);
+      if (!DYNAMO_SESSIONS_FALLBACK_S3) throw err;
+    }
+  }
+
   console.log(`\n📈 Light readings scan for analytics (source: ${source}, workType: ${workType})`);
   const allPrefixes = getAllFolderPrefixes(source, workType);
   const readings = [];
@@ -1091,38 +1149,42 @@ async function getAllLightReadings(source = 'all', workType = '1000') {
   return unique;
 }
 
-async function getAllLightReadingsCached(source = 'all', workType = '1000') {
+async function getAllLightReadingsCached(source = 'all', workType = '1000', { force = false } = {}) {
   const cacheKey = `light:${source}:${workType}`;
-  const cached = getCached(cacheKey);
-  if (cached) {
-    console.log(`⚡ Cache hit for light readings ${source}:${workType} (${cached.length})`);
-    return cached;
+  const { data } = await sessionCache.get(cacheKey, () => getAllLightReadings(source, workType), { force });
+  return data;
+}
+
+async function countUploadedOnPortalDayUncached(source = 'all', workType = '1000', dayYmd) {
+  const target = dayYmd || calendarDayKeyInPortalTz(new Date().toISOString());
+
+  if (sessionIndex.enabled && typeof sessionIndex.countUploadedOnPortalDay === 'function') {
+    const n = await sessionIndex.countUploadedOnPortalDay(
+      source,
+      workType,
+      target,
+      calendarDayKeyInPortalTz,
+    );
+    console.log(`📊 Uploaded on ${target} (Dynamo): ${n} session(s)`);
+    return n;
   }
-  const unique = await getAllLightReadings(source, workType);
-  setCache(cacheKey, unique);
-  return unique;
+
+  const readings = await getAllLightReadings(source, workType);
+  const n = readings.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === target).length;
+  console.log(`📊 Uploaded on ${target} (portal): ${n} session(s)`);
+  return n;
 }
 
 /** Same rule as readings list `?date=YYYY-MM-DD` filter (all sessions, not analytics index). */
-async function countUploadedOnPortalDay(source = 'all', workType = '1000', dayYmd) {
+async function countUploadedOnPortalDay(source = 'all', workType = '1000', dayYmd, { force = false } = {}) {
   const target = dayYmd || calendarDayKeyInPortalTz(new Date().toISOString());
   const cacheKey = `uploadedToday:${source}:${workType}:${target}`;
-  const cached = getCached(cacheKey);
-  if (typeof cached === 'number') {
-    console.log(`⚡ Cache hit for uploaded today ${source}:${workType} ${target} → ${cached}`);
-    return cached;
-  }
-
-  const fullKey = getCacheKey(source, workType);
-  let readings = getCached(fullKey);
-  if (!readings?.length) {
-    readings = await getAllLightReadingsCached(source, workType);
-  }
-
-  const n = readings.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === target).length;
-  console.log(`📊 Uploaded on ${target} (portal): ${n} session(s)`);
-  setCache(cacheKey, n);
-  return n;
+  const { data } = await sessionCache.get(
+    cacheKey,
+    () => countUploadedOnPortalDayUncached(source, workType, target),
+    { force },
+  );
+  return data;
 }
 
 async function getReadingsFromFolder(folderPrefix, status, sourceType, workType = '1000') {
@@ -1151,26 +1213,49 @@ async function getReadingsFromFolder(folderPrefix, status, sourceType, workType 
 
 const ALL_STATUSES = ['correct', 'incorrect_new', 'incorrect_analyzed', 'incorrect_labeled', 'incorrect_training', 'no_dials', 'not_sure'];
 
-async function getAllReadings(source = 'all', workType = '1000') {
-  const cacheKey = getCacheKey(source, workType);
-  const cached = getCached(cacheKey);
-  if (cached) {
-    console.log(`⚡ Cache hit for ${cacheKey} (${cached.length} readings)`);
-    return cached;
+async function hydrateReadingsFromDynamo(readings) {
+  if (!DYNAMO_ATTACH_LIST_IMAGES || !readings.length) return readings;
+  return attachPrimaryListImages(readings, getSignedImageUrl, {
+    s3Client,
+    bucketName: BUCKET_NAME,
+    concurrency: Math.max(20, parseInt(process.env.DYNAMO_LIST_PRESIGN_CONCURRENCY || '40', 10) || 40),
+  });
+}
+
+async function getAllReadingsFromDynamo(source = 'all', workType = '1000') {
+  const rows = await sessionIndex.queryReadings(source, workType);
+  return hydrateReadingsFromDynamo(rows);
+}
+
+async function getAllLightReadingsFromDynamo(source = 'all', workType = '1000') {
+  return sessionIndex.queryLightReadings(source, workType);
+}
+
+async function fetchAllReadingsUncached(source = 'all', workType = '1000') {
+  if (sessionIndex.enabled) {
+    try {
+      console.log(`\n📇 Fetching readings from Dynamo (source: ${source}, workType: ${workType})`);
+      const unique = await getAllReadingsFromDynamo(source, workType);
+      console.log(`✅ Total readings (Dynamo): ${unique.length}\n`);
+      return unique;
+    } catch (err) {
+      console.error('📇 Dynamo getAllReadings failed:', err.message);
+      if (!DYNAMO_SESSIONS_FALLBACK_S3) throw err;
+      console.warn('📇 Falling back to S3 listing');
+    }
   }
 
   console.log(`\n🔍 Fetching readings (source: ${source}, workType: ${workType})`);
-  
+
   const allPrefixes = getAllFolderPrefixes(source, workType);
-  
+
   const folderJobs = allPrefixes.map(({ folder, status, sourceType }) =>
-    getReadingsFromFolder(folder, status, sourceType, workType)
+    getReadingsFromFolder(folder, status, sourceType, workType),
   );
 
   const results = await Promise.all(folderJobs);
   const readings = results.flat();
-  
-  // Deduplicate by session ID (same session may appear in multiple status folders / prefixes).
+
   const byId = new Map();
   for (const r of readings) {
     const existing = byId.get(r.id);
@@ -1181,14 +1266,28 @@ async function getAllReadings(source = 'all', workType = '1000') {
     byId.set(r.id, pickPreferredReadingDuplicate(existing, r));
   }
   const unique = [...byId.values()];
-  
+
   unique.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
-  
+
   console.log(`✅ Total readings: ${unique.length}\n`);
-  
-  setCache(cacheKey, unique);
+
   return unique;
 }
+
+async function getAllReadings(source = 'all', workType = '1000', { force = false } = {}) {
+  const cacheKey = getCacheKey(source, workType);
+  const { data, cacheStatus } = await sessionCache.get(
+    cacheKey,
+    () => fetchAllReadingsUncached(source, workType),
+    { force },
+  );
+  if (cacheStatus !== 'MISS') {
+    console.log(`⚡ Readings ${cacheStatus} for ${cacheKey} (${data.length})`);
+  }
+  getAllReadings.lastCacheStatus = cacheStatus;
+  return data;
+}
+getAllReadings.lastCacheStatus = 'MISS';
 
 /**
  * Count session folders under a status prefix. Paginates delimiter listings (single page
@@ -1241,13 +1340,18 @@ async function countSessionSubfoldersUnderPrefix(folderPrefix) {
   return sessions.size;
 }
 
-// Lightweight counts: just count session folders without parsing metadata
-async function getCountsFromFolders(source = 'all', workType = '1000') {
-  const cacheKey = `counts:${source}:${workType}`;
-  const cached = getCached(cacheKey);
-  if (cached) {
-    console.log(`⚡ Cache hit for counts ${source}:${workType}`);
-    return cached;
+// Lightweight counts: Dynamo query or S3 folder listing
+async function fetchCountsUncached(source = 'all', workType = '1000') {
+  if (sessionIndex.enabled) {
+    try {
+      console.log(`\n📊 Counting sessions from Dynamo (source: ${source}, workType: ${workType})`);
+      const counts = await sessionIndex.queryCounts(source, workType);
+      console.log('📊 Counts (Dynamo):', counts);
+      return counts;
+    } catch (err) {
+      console.error('📇 Dynamo getCounts failed:', err.message);
+      if (!DYNAMO_SESSIONS_FALLBACK_S3) throw err;
+    }
   }
 
   console.log(`\n📊 Counting sessions (source: ${source}, workType: ${workType})`);
@@ -1258,7 +1362,7 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
     countSessionSubfoldersUnderPrefix(folder).catch((err) => {
       console.error(`📊 S3 count failed for prefix "${folder}":`, err.name || err.message);
       return 0;
-    })
+    }),
   );
 
   const results = await Promise.all(countJobs);
@@ -1295,9 +1399,23 @@ async function getCountsFromFolders(source = 'all', workType = '1000') {
   });
 
   console.log('📊 Counts:', counts);
-  setCache(cacheKey, counts);
   return counts;
 }
+
+async function getCountsFromFolders(source = 'all', workType = '1000', { force = false } = {}) {
+  const cacheKey = `counts:${source}:${workType}`;
+  const { data, cacheStatus } = await sessionCache.get(
+    cacheKey,
+    () => fetchCountsUncached(source, workType),
+    { force },
+  );
+  if (cacheStatus !== 'MISS') {
+    console.log(`⚡ Counts ${cacheStatus} for ${source}:${workType}`);
+  }
+  getCountsFromFolders.lastCacheStatus = cacheStatus;
+  return data;
+}
+getCountsFromFolders.lastCacheStatus = 'MISS';
 
 /** Same bucket as Models analytics (`unknown` when metadata omits app_version). */
 function normalizeReadingAppVersion(r) {
@@ -1503,10 +1621,10 @@ app.get('/api/readings', async (req, res) => {
   try {
     const source = req.query.source || 'all';
     const workType = req.query.workType || '1000';
-    if (req.query.refresh === '1' || req.query.refresh === 'true') {
-      invalidateCache();
-    }
-    const readings = await getAllReadings(source, workType);
+    const force = req.query.refresh === '1' || req.query.refresh === 'true';
+    if (force) invalidateReadingsCache(source, workType);
+    const readings = await getAllReadings(source, workType, { force });
+    setApiCacheHeaders(res, getAllReadings.lastCacheStatus, SESSION_CACHE_FRESH_MS);
     res.json(readings);
   } catch (error) {
     console.error('Error fetching readings:', error);
@@ -1518,8 +1636,11 @@ app.get('/api/counts', async (req, res) => {
   try {
     const source = req.query.source || 'all';
     const workType = req.query.workType || '1000';
-    const counts = await getCountsFromFolders(source, workType);
-    counts.uploadedTodayCount = await countUploadedOnPortalDay(source, workType);
+    const force = req.query.refresh === '1' || req.query.refresh === 'true';
+    if (force) invalidateReadingsCache(source, workType);
+    const counts = await getCountsFromFolders(source, workType, { force });
+    counts.uploadedTodayCount = await countUploadedOnPortalDay(source, workType, undefined, { force });
+    setApiCacheHeaders(res, getCountsFromFolders.lastCacheStatus, SESSION_CACHE_FRESH_MS);
     res.json(counts);
   } catch (error) {
     console.error('Error calculating counts:', error);
@@ -1904,6 +2025,15 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         ContentType: 'application/json; charset=utf-8',
       }),
     );
+
+    await syncSessionIndexFromMetadata(sessionIndex, meta, {
+      s3Bucket: BUCKET_NAME,
+      s3SessionPrefix: serverPrefix,
+      folderStatus: reading.status,
+      sourceType: reading.type,
+      portalWorkType: reading.workType || workTypeHint || '1000',
+      ingestSource: 'portal_dual_write',
+    });
 
     invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
 
@@ -2296,6 +2426,32 @@ async function moveSessionByS3Prefix(s3SessionPrefix, sourceType, targetStatus) 
   for (const key of keys) {
     await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
   }
+
+  try {
+    const metaKey = `${targetPrefix}metadata.json`;
+    const getOut = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: metaKey }));
+    const meta = JSON.parse(await streamToString(getOut.Body));
+    await syncSessionIndexFromMetadata(sessionIndex, meta, {
+      s3Bucket: BUCKET_NAME,
+      s3SessionPrefix: targetPrefix,
+      folderStatus: targetStatus,
+      sourceType,
+      ingestSource: 'portal_move',
+    });
+  } catch (err) {
+    const sessionFolder = targetPrefix.split('/').filter(Boolean).pop();
+    if (sessionFolder) {
+      await syncSessionIndexAfterMove(sessionIndex, {
+        sessionId: sessionFolder,
+        s3SessionPrefix: targetPrefix,
+        folderStatus: targetStatus,
+        sourceType,
+      });
+    } else {
+      console.warn('📇 Dynamo move sync skipped:', err.message);
+    }
+  }
+
   return true;
 }
 
@@ -2570,27 +2726,44 @@ app.get('/api/unit-test/runs', async (req, res) => {
       typeof req.query.workType === 'string' && req.query.workType.trim()
         ? req.query.workType.trim()
         : '1000';
-    const folderRoots = getS3FolderRootsForPortalWorkType(workType);
-    const seen = new Set();
-    const runs = [];
-    const prefixes = [];
-    for (const root of folderRoots) {
-      const prefix = withS3Base(`${root}/unit_test_results/`);
-      prefixes.push(prefix);
-      const batch = await listUnitTestResultCsvKeys(s3Client, BUCKET_NAME, prefix);
-      for (const run of batch) {
-        if (seen.has(run.key)) continue;
-        seen.add(run.key);
-        runs.push(run);
-      }
-    }
-    runs.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
     const includeSummary = req.query.includeSummary === 'true' || req.query.includeSummary === '1';
-    if (includeSummary && runs.length > 0) {
-      const enriched = await enrichUnitTestRunsWithSummary(s3Client, BUCKET_NAME, runs, streamToString);
-      return res.json({ workType, prefix: prefixes[0] ?? null, prefixes, runs: enriched });
-    }
-    res.json({ workType, prefix: prefixes[0] ?? null, prefixes, runs });
+    const summaryLimitRaw = parseInt(String(req.query.summaryLimit ?? ''), 10);
+    const summaryLimit = Number.isFinite(summaryLimitRaw) && summaryLimitRaw > 0
+      ? summaryLimitRaw
+      : UNIT_TEST_SUMMARY_DEFAULT_LIMIT;
+    const force = req.query.refresh === '1' || req.query.refresh === 'true';
+    const cacheKey = `${workType}:${includeSummary ? 'summary' : 'keys'}:${summaryLimit}`;
+
+    const { data: payload, cacheStatus } = await unitTestRunsCache.get(
+      cacheKey,
+      async () => {
+        const folderRoots = getS3FolderRootsForPortalWorkType(workType);
+        const seen = new Set();
+        const runs = [];
+        const prefixes = [];
+        for (const root of folderRoots) {
+          const prefix = withS3Base(`${root}/unit_test_results/`);
+          prefixes.push(prefix);
+          const batch = await listUnitTestResultCsvKeys(s3Client, BUCKET_NAME, prefix);
+          for (const run of batch) {
+            if (seen.has(run.key)) continue;
+            seen.add(run.key);
+            runs.push(run);
+          }
+        }
+        runs.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
+        if (includeSummary && runs.length > 0) {
+          const enriched = await enrichUnitTestRunsWithSummary(s3Client, BUCKET_NAME, runs, streamToString, {
+            limit: summaryLimit,
+          });
+          return { workType, prefix: prefixes[0] ?? null, prefixes, runs: enriched, summaryLimit };
+        }
+        return { workType, prefix: prefixes[0] ?? null, prefixes, runs };
+      },
+      { force },
+    );
+    setApiCacheHeaders(res, cacheStatus, UNIT_TEST_CACHE_FRESH_MS);
+    res.json(payload);
   } catch (error) {
     console.error('GET /api/unit-test/runs:', error);
     res.status(500).json({ error: 'Failed to list unit test runs' });
@@ -2914,6 +3087,12 @@ app.get('/api/health', (req, res) => {
     trainingDatasetsRootPrefix: getTrainingDatasetsRootPrefix(),
     trainingWeightsMaxMb: Math.round(TRAINING_WEIGHTS_MAX_BYTES / (1024 * 1024)),
     roboflow: Boolean(process.env.ROBOFLOW_API_KEY),
+    dynamoSessionsTable: sessionIndex.enabled ? sessionIndex.tableName : null,
+    dynamoSessionsFallbackS3: DYNAMO_SESSIONS_FALLBACK_S3,
+    apiCache: {
+      sessions: sessionCache.snapshot(),
+      unitTestRuns: unitTestRunsCache.snapshot(),
+    },
   });
 });
 
@@ -2937,13 +3116,32 @@ const EXPORT_INCORRECT_MAX_SESSIONS = Math.max(
   Math.min(10_000, parseInt(process.env.EXPORT_INCORRECT_MAX_SESSIONS || '3000', 10) || 3000),
 );
 
-/** Resolve a reading by session id; uses s3SessionPrefix when provided (avoids full-bucket scans). */
+/** Resolve a reading by session id; uses Dynamo when enabled, then S3 prefix parse. */
 async function resolveReadingById(id, { workTypeHint = '', s3SessionPrefix = '' } = {}) {
   const normPrefix = normalizeS3SessionPrefix(s3SessionPrefix);
   if (normPrefix) {
     const direct = await parseSessionAtPrefix(normPrefix, workTypeHint || '1000');
     if (direct && String(direct.id) === String(id)) {
       return direct;
+    }
+  }
+
+  if (sessionIndex.enabled) {
+    try {
+      const item = await sessionIndex.getBySessionId(id);
+      if (item?.s3_session_prefix) {
+        const prefix = normPrefix || item.s3_session_prefix;
+        const full = await parseSessionAtPrefix(prefix, workTypeHint || item.portal_work_type || '1000');
+        if (full && String(full.id) === String(id)) return full;
+        const light = readingFromDynamoItem(item);
+        if (light && String(light.id) === String(id)) {
+          const [withImg] = await hydrateReadingsFromDynamo([light]);
+          return withImg || light;
+        }
+      }
+    } catch (err) {
+      console.error('📇 resolveReadingById Dynamo:', err.message);
+      if (!DYNAMO_SESSIONS_FALLBACK_S3) throw err;
     }
   }
 
@@ -2975,6 +3173,12 @@ registerTestDataReviewRoutes(app, {
   streamToString,
   getPresignedUrl: getSignedImageUrl,
   invalidateReadingsCache,
+  syncSessionIndexFromMetadata: (metadata, ctx) =>
+    syncSessionIndexFromMetadata(sessionIndex, metadata, {
+      s3Bucket: BUCKET_NAME,
+      ingestSource: 'portal_dual_write',
+      ...ctx,
+    }),
 });
 
 const MANUAL_UPLOAD_MAX_BYTES = Math.max(
@@ -3030,6 +3234,12 @@ registerManualUploadRoutes(app, {
   parseSession,
   uploadMiddleware: manualUploadMiddleware,
   bulkUploadMiddleware: manualBulkUploadMiddleware,
+  syncSessionIndexFromMetadata: (metadata, ctx) =>
+    syncSessionIndexFromMetadata(sessionIndex, metadata, {
+      s3Bucket: BUCKET_NAME,
+      ingestSource: 'portal_dual_write',
+      ...ctx,
+    }),
 });
 
 // registerPortalInferenceRoutes(app, {

@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AMR portal — DynamoDB session index + Lambda sync from S3 metadata.json
+
+Parameters:
+  SessionsTableName:
+    Type: String
+    Default: amr-sessions
+  S3BucketName:
+    Type: String
+    Default: meter-reader-training-feedback
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 60
+    MemorySize: 256
+    Architectures:
+      - arm64
+
+Resources:
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref SessionsTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: gsi1
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: app
+          Value: amr-portal
+
+  SessionSyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub amr-session-sync-${AWS::StackName}
+      CodeUri: ../../lambda/session-sync
+      Handler: index.handler
+      Description: Upsert DynamoDB session row when metadata.json is written to S3
+      Environment:
+        Variables:
+          SESSIONS_TABLE_NAME: !Ref SessionsTable
+          AWS_DYNAMODB_SESSIONS_TABLE: !Ref SessionsTable
+          AWS_S3_BUCKET: !Ref S3BucketName
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+        - S3ReadPolicy:
+            BucketName: !Ref S3BucketName
+
+  SessionSyncInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SessionSyncFunction.Arn
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${S3BucketName}
+      SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  SessionsTableName:
+    Description: Set AWS_DYNAMODB_SESSIONS_TABLE on the portal server
+    Value: !Ref SessionsTable
+  SessionSyncFunctionArn:
+    Description: Wire S3 bucket notifications to this Lambda (see infra/session-sync/README.md)
+    Value: !GetAtt SessionSyncFunction.Arn
+  S3BucketName:
+    Value: !Ref S3BucketName

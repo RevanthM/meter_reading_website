@@ -8360,6 +8360,48 @@ label.training-hub-filter-card-title--input {
   color: var(--text-muted);
 }
 
+.dashboard-counts-loading {
+  margin-bottom: var(--spacing-md);
+}
+
+.dashboard-counts-loading-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-color);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.dashboard-counts-loading-fill {
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-amber), var(--accent-amber-light));
+  animation: dashboard-counts-loading-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes dashboard-counts-loading-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+.dashboard-counts-loading-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.dashboard-kpi-value-spinner {
+  vertical-align: middle;
+}
+
 .dashboard-glance-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));

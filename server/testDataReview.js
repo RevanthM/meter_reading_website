@@ -23,6 +23,11 @@ import {
 
 const IMAGE_SUFFIXES = ['.jpg', '.jpeg', '.png', '.webp'];
 
+function canEditTestData(portalMode) {
+  const m = String(portalMode || '').trim().toLowerCase();
+  return m === 'test_data_reviewer' || m === 'admin';
+}
+
 async function readS3ObjectBuffer(s3Client, bucket, key) {
   const out = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   if (typeof out.Body?.transformToByteArray === 'function') {
@@ -417,6 +422,7 @@ export function registerTestDataReviewRoutes(app, deps) {
     streamToString,
     getPresignedUrl,
     invalidateReadingsCache,
+    syncSessionIndexFromMetadata,
   } = deps;
 
   app.get('/api/test-data/unit-test-images', async (req, res) => {
@@ -586,8 +592,8 @@ export function registerTestDataReviewRoutes(app, deps) {
   app.patch('/api/test-data/unit-test-images', async (req, res) => {
     try {
       const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-      if (portalMode !== 'test_data_reviewer') {
-        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      if (!canEditTestData(portalMode)) {
+        return res.status(403).json({ error: 'Requires test_data_reviewer or admin role.' });
       }
 
       const workType = String(req.body?.workType || req.query?.workType || '1000').trim() || '1000';
@@ -617,8 +623,8 @@ export function registerTestDataReviewRoutes(app, deps) {
   app.delete('/api/test-data/unit-test-images', async (req, res) => {
     try {
       const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-      if (portalMode !== 'test_data_reviewer') {
-        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      if (!canEditTestData(portalMode)) {
+        return res.status(403).json({ error: 'Requires test_data_reviewer or admin role.' });
       }
 
       const workType = String(req.body?.workType || req.query?.workType || '1000').trim() || '1000';
@@ -641,8 +647,8 @@ export function registerTestDataReviewRoutes(app, deps) {
   app.post('/api/test-data/remove-from-dataset', async (req, res) => {
     try {
       const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-      if (portalMode !== 'test_data_reviewer') {
-        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      if (!canEditTestData(portalMode)) {
+        return res.status(403).json({ error: 'Requires test_data_reviewer or admin role.' });
       }
 
       const sessionId = String(req.body?.sessionId || req.body?.id || '').trim();
@@ -692,6 +698,15 @@ export function registerTestDataReviewRoutes(app, deps) {
         }),
       );
 
+      if (typeof syncSessionIndexFromMetadata === 'function') {
+        await syncSessionIndexFromMetadata(meta, {
+          s3SessionPrefix: serverPrefix,
+          folderStatus: reading.status,
+          sourceType: reading.type,
+          portalWorkType: reading.workType || workTypeHint || '1000',
+        });
+      }
+
       if (typeof invalidateReadingsCache === 'function') {
         invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
       }
@@ -710,8 +725,8 @@ export function registerTestDataReviewRoutes(app, deps) {
   app.post('/api/test-data/approve', async (req, res) => {
     try {
       const portalMode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-      if (portalMode !== 'test_data_reviewer') {
-        return res.status(403).json({ error: 'Requires test_data_reviewer role.' });
+      if (!canEditTestData(portalMode)) {
+        return res.status(403).json({ error: 'Requires test_data_reviewer or admin role.' });
       }
 
       const sessionId = String(req.body?.sessionId || req.body?.id || '').trim();
@@ -762,6 +777,15 @@ export function registerTestDataReviewRoutes(app, deps) {
           ContentType: 'application/json',
         }),
       );
+
+      if (typeof syncSessionIndexFromMetadata === 'function') {
+        await syncSessionIndexFromMetadata(meta, {
+          s3SessionPrefix: serverPrefix,
+          folderStatus: reading.status,
+          sourceType: reading.type,
+          portalWorkType: reading.workType || workTypeHint || '1000',
+        });
+      }
 
       if (typeof invalidateReadingsCache === 'function') {
         invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');

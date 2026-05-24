@@ -52,3 +52,7 @@ eggs/
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
 weights.pt
+
+# Local tooling / SAM build output (do not commit)
+.pdf-analysis/
+**/.aws-sam/

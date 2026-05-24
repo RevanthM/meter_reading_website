@@ -17,6 +17,7 @@ import {
   type UnitTestImageRow,
 } from '../services/api';
 import type { WorkType } from '../types';
+import type { PortalWorkMode } from '../utils/portalWorkMode';
 import {
   dialDigitsFromExpected,
   expectedFromDialDigits,
@@ -42,6 +43,8 @@ type UnitTestImageLightboxProps = {
   onClose: () => void;
   onIndexChange: (index: number) => void;
   onImageUpdated: (previousS3Key: string, updated: UnitTestImageRow) => void;
+  readOnly?: boolean;
+  portalWorkMode?: PortalWorkMode;
 };
 
 const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
@@ -51,6 +54,8 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
   onClose,
   onIndexChange,
   onImageUpdated,
+  readOnly = false,
+  portalWorkMode = 'test_data_reviewer',
 }) => {
   const img = images[index];
   const imageUrl = img?.url || '';
@@ -198,6 +203,7 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
         img.s3Key,
         next,
         normalizeUnitTestDifficulty(imageDifficulty),
+        portalWorkMode,
       );
       const updated: UnitTestImageRow = {
         ...img,
@@ -345,7 +351,7 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
                   type="radio"
                   name="unit-test-lightbox-difficulty"
                   checked={imageDifficulty === opt.value}
-                  disabled={saving}
+                  disabled={saving || readOnly}
                   onChange={() => setImageDifficulty(opt.value)}
                 />
                 {opt.label}
@@ -365,7 +371,7 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
                     className="image-dial-strip-digit-select"
                     aria-label={`Digit for dial ${i + 1}`}
                     value={normalizeDialDigit(dialDigits[i] ?? 0)}
-                    disabled={saving}
+                    disabled={saving || readOnly}
                     onChange={(e) => handleDialChange(i, parseInt(e.target.value, 10))}
                   >
                     {Array.from({ length: 10 }, (_, d) => (
@@ -396,11 +402,11 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
             <button
               type="button"
               className={`save-button manual-label-save-btn--lightbox ${!isDirty ? 'saved' : ''}`}
-              disabled={!isDirty || saving}
+              disabled={!isDirty || saving || readOnly}
               onClick={() => void handleSave()}
             >
               {saving ? <Loader2 size={18} className="spin" aria-hidden /> : <Save size={18} aria-hidden />}
-              {saving ? 'Saving…' : isDirty ? 'Save' : 'Saved'}
+              {readOnly ? 'View only' : saving ? 'Saving…' : isDirty ? 'Save' : 'Saved'}
             </button>
           </div>
         </aside>

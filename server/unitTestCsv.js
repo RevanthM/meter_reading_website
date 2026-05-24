@@ -277,13 +277,18 @@ export function buildUnitTestRunListItem(run, summary) {
  * @param {Array<{ key: string, fileName: string, size: number, lastModified: string | null }>} runs
  * @param {(body: unknown) => Promise<string>} streamToString
  */
-export async function enrichUnitTestRunsWithSummary(s3Client, bucket, runs, streamToString) {
-  const concurrency = 6;
+export async function enrichUnitTestRunsWithSummary(s3Client, bucket, runs, streamToString, { limit } = {}) {
+  const maxSummary = Math.max(0, limit ?? runs.length);
+  const concurrency = Math.max(4, parseInt(process.env.UNIT_TEST_SUMMARY_CONCURRENCY || '12', 10) || 12);
   const out = [];
   for (let i = 0; i < runs.length; i += concurrency) {
     const chunk = runs.slice(i, i + concurrency);
     const batch = await Promise.all(
-      chunk.map(async (run) => {
+      chunk.map(async (run, offset) => {
+        const index = i + offset;
+        if (index >= maxSummary) {
+          return buildUnitTestRunListItem(run, {});
+        }
         try {
           const summary = await fetchUnitTestCsvSummaryHead(s3Client, bucket, run.key, streamToString);
           return buildUnitTestRunListItem(run, summary);

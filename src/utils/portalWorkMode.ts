@@ -121,3 +121,13 @@ export function portalWorkModeForMetadataHeader(mode: PortalWorkMode): string {
   if (mode === 'admin') return 'reviewer';
   return mode;
 }
+
+/** Browse pending test data and unit test image library. */
+export function canViewTestData(mode: PortalWorkMode): boolean {
+  return mode === 'test_data_reviewer' || mode === 'labeler' || mode === 'admin';
+}
+
+/** Approve pending sessions and edit the unit test image library. */
+export function canEditTestData(mode: PortalWorkMode): boolean {
+  return mode === 'test_data_reviewer' || mode === 'admin';
+}

@@ -10,8 +10,8 @@ const MANIFEST_JSON_FILE = 'unittestng_manifest.json';
 const MANIFEST_LEGACY_XLSX_FILE = 'unittestng_manifest.xlsx';
 
 const MANIFEST_CACHE_TTL_MS = Math.max(
-  5_000,
-  parseInt(process.env.UNIT_TEST_MANIFEST_CACHE_TTL_MS || '45000', 10) || 45_000,
+  0,
+  parseInt(process.env.UNIT_TEST_MANIFEST_CACHE_TTL_MS || '10000', 10) || 0,
 );
 /** @type {Map<string, { timestamp: number, key: string, rows: ReturnType<typeof normalizeRow>[] }>} */
 const manifestCache = new Map();
@@ -229,7 +229,7 @@ export async function readUnitTestManifestRows(s3Client, bucket, workType) {
 export async function readUnitTestManifestRowsCached(s3Client, bucket, workType) {
   const wt = String(workType || '1000').trim() || '1000';
   const hit = manifestCache.get(wt);
-  if (hit && Date.now() - hit.timestamp < MANIFEST_CACHE_TTL_MS) {
+  if (MANIFEST_CACHE_TTL_MS > 0 && hit && Date.now() - hit.timestamp < MANIFEST_CACHE_TTL_MS) {
     return { key: hit.key, rows: hit.rows };
   }
   const fresh = await readUnitTestManifestRows(s3Client, bucket, wt);

@@ -1,0 +1,9 @@
+dist/
+.derived_data/
+docs/
+scripts/
+src/
+node_modules/.cache/
+*.md
+.env
+.git/

@@ -20,11 +20,16 @@
     "manual:screenshots": "node scripts/capture-user-manual-screenshots.mjs",
     "manual:pdf": "node scripts/build-user-manual-pdf.mjs",
     "migrate:unit-test-manifest": "node scripts/migrate-unit-test-manifest-to-json.mjs",
-    "backfill:iteration-csv-metrics": "node scripts/backfill-iteration-metrics-from-unit-test-csv.mjs"
+    "backfill:iteration-csv-metrics": "node scripts/backfill-iteration-metrics-from-unit-test-csv.mjs",
+    "backfill:dynamo-sessions": "node scripts/backfill-dynamo-sessions.mjs",
+    "sync:lambda-session-index": "sh scripts/sync-lambda-session-index.sh",
+    "deploy:session-index": "npm run sync:lambda-session-index && cd infra/session-sync && sam build && sam deploy --stack-name amr-session-index --resolve-s3 --capabilities CAPABILITY_IAM --region us-east-1 --parameter-overrides SessionsTableName=amr-sessions S3BucketName=meter-reader-training-feedback --no-confirm-changeset --no-fail-on-empty-changeset"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.966.0",
     "@aws-sdk/client-s3": "^3.966.0",
     "@aws-sdk/s3-request-presigner": "^3.966.0",
+    "@aws-sdk/util-dynamodb": "^3.966.0",
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -49,6 +54,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.1.2",
+    "esbuild": "^0.28.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

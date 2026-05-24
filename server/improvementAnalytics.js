@@ -477,8 +477,12 @@ export function createImprovementAnalyticsStore({
   const scopeLocks = new Map();
   const indexMemCache = new Map();
   const statsMemCache = new Map();
-  const INDEX_MEM_TTL_MS = 120_000;
-  const STATS_MEM_TTL_MS = 120_000;
+  const IMPROVEMENT_CACHE_FRESH_MS = Math.max(
+    0,
+    parseInt(process.env.IMPROVEMENT_STATS_CACHE_FRESH_MS || process.env.API_CACHE_FRESH_MS || '8000', 10) || 0,
+  );
+  const INDEX_MEM_TTL_MS = IMPROVEMENT_CACHE_FRESH_MS;
+  const STATS_MEM_TTL_MS = IMPROVEMENT_CACHE_FRESH_MS;
   let backfillInFlight = null;
 
   function scopeKey(source, workType) {
@@ -541,9 +545,11 @@ export function createImprovementAnalyticsStore({
 
   async function readIndex(source, workType) {
     const scope = scopeKey(source, workType);
-    const hit = indexMemCache.get(scope);
-    if (hit && Date.now() - hit.at < INDEX_MEM_TTL_MS) {
-      return hit.data;
+    if (INDEX_MEM_TTL_MS > 0) {
+      const hit = indexMemCache.get(scope);
+      if (hit && Date.now() - hit.at < INDEX_MEM_TTL_MS) {
+        return hit.data;
+      }
     }
 
     const candidates = indexReadCandidates(source, workType);
@@ -682,7 +688,7 @@ export function createImprovementAnalyticsStore({
     const maxVersions = opts.maxVersions ?? 16;
     const statsCacheKey = `${scopeKey(source, workType)}:${range}:${maxVersions}`;
 
-    if (!opts.refresh) {
+    if (!opts.refresh && STATS_MEM_TTL_MS > 0) {
       const hit = statsMemCache.get(statsCacheKey);
       if (hit && Date.now() - hit.at < STATS_MEM_TTL_MS) {
         return hit.data;

@@ -13,6 +13,7 @@ import {
   type UnitTestImageRow,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
+import { canEditTestData, canViewTestData } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 
@@ -67,10 +68,13 @@ const UnitTestImagesPage: FC = () => {
   }, [loadImages]);
 
   useEffect(() => {
-    if (outletCtx?.workMode !== 'test_data_reviewer') {
+    const mode = outletCtx?.workMode;
+    if (!mode || !canViewTestData(mode)) {
       navigate('/', { replace: true });
     }
   }, [navigate, outletCtx?.workMode]);
+
+  const canEdit = outletCtx?.workMode ? canEditTestData(outletCtx.workMode) : false;
 
   useEffect(() => {
     void loadImages();
@@ -95,7 +99,7 @@ const UnitTestImagesPage: FC = () => {
     }
     setDeletingKey(img.s3Key);
     try {
-      await deleteUnitTestImage(workType, img.s3Key);
+      await deleteUnitTestImage(workType, img.s3Key, outletCtx?.workMode ?? 'test_data_reviewer');
       setImages((prev) => {
         const idx = prev.findIndex((row) => row.s3Key === img.s3Key);
         const next = prev.filter((row) => row.s3Key !== img.s3Key);
@@ -258,15 +262,17 @@ const UnitTestImagesPage: FC = () => {
                       <ArrowDown size={16} aria-hidden />
                     )}
                   </button>
-                  <button
-                    type="button"
-                    className="unit-test-images-delete-btn"
-                    disabled={busy}
-                    onClick={() => void handleDelete(img)}
-                  >
-                    {busy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} aria-hidden />}
-                    Delete
-                  </button>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      className="unit-test-images-delete-btn"
+                      disabled={busy}
+                      onClick={() => void handleDelete(img)}
+                    >
+                      {busy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} aria-hidden />}
+                      Delete
+                    </button>
+                  ) : null}
                 </div>
               </article>
             );
@@ -282,6 +288,8 @@ const UnitTestImagesPage: FC = () => {
           onClose={() => setLightboxIndex(null)}
           onIndexChange={setLightboxIndex}
           onImageUpdated={handleImageUpdated}
+          readOnly={!canEdit}
+          portalWorkMode={outletCtx?.workMode ?? 'test_data_reviewer'}
         />
       ) : null}
     </div>

@@ -485,7 +485,7 @@ const ReadingsList: FC = () => {
 
   const showImagesColumn = Boolean(appVersionParam);
   const totalImagesInList = useMemo(
-    () => readings.reduce((n, r) => n + (Array.isArray(r.images) ? r.images.length : 0), 0),
+    () => readings.reduce((n, r) => n + (r.imageCount ?? (Array.isArray(r.images) ? r.images.length : 0)), 0),
     [readings],
   );
 
@@ -1245,7 +1245,7 @@ const ReadingsList: FC = () => {
                   </td>
                   {showImagesColumn ? (
                     <td className="readings-col-images">
-                      <span className="meter-value">{Array.isArray(reading.images) ? reading.images.length : 0}</span>
+                      <span className="meter-value">{reading.imageCount ?? (Array.isArray(reading.images) ? reading.images.length : 0)}</span>
                     </td>
                   ) : null}
                   <td>

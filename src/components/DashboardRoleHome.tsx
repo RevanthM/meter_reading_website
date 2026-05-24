@@ -1,6 +1,6 @@
 import type { FC, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardCheck, ImageIcon } from 'lucide-react';
+import { ClipboardCheck, ImageIcon, Loader2 } from 'lucide-react';
 import type { DashboardCounts } from '../types';
 import type { PortalWorkMode } from '../utils/portalWorkMode';
 import { formatPortalWeekdayMedium, calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
@@ -35,13 +35,36 @@ const KpiMiniCard: FC<KpiMiniProps> = ({
     disabled={loading}
   >
     <span className="dashboard-kpi-label">{label}</span>
-    <span className="dashboard-kpi-value">{loading ? '—' : value}</span>
+    <span className="dashboard-kpi-value">
+      {loading ? (
+        <Loader2 size={18} className="spin dashboard-kpi-value-spinner" aria-hidden />
+      ) : (
+        value
+      )}
+    </span>
     {hint ? <span className="dashboard-kpi-hint">{hint}</span> : null}
   </button>
 );
 
+const CountsLoadingBar: FC = () => (
+  <div
+    className="dashboard-counts-loading"
+    role="progressbar"
+    aria-label="Loading session counts"
+    aria-busy="true"
+  >
+    <div className="dashboard-counts-loading-track">
+      <div className="dashboard-counts-loading-fill" />
+    </div>
+    <span className="dashboard-counts-loading-label">
+      <Loader2 size={14} className="spin" aria-hidden />
+      Loading counts…
+    </span>
+  </div>
+);
+
 function kpiCount(n: number, loading: boolean): string {
-  return loading ? '—' : n.toLocaleString();
+  return loading ? '' : n.toLocaleString();
 }
 
 type RoleHomeShellProps = {
@@ -89,7 +112,11 @@ function HeroCta({
       disabled={loading}
     >
       <span className="dashboard-role-hero-cta-label">{label}</span>
-      {count != null ? <span className="dashboard-role-hero-cta-count">{loading ? '—' : count}</span> : null}
+      {count != null ? (
+        <span className="dashboard-role-hero-cta-count">
+          {loading ? <Loader2 size={22} className="spin" aria-hidden /> : count}
+        </span>
+      ) : null}
       <span className="dashboard-role-hero-cta-desc">{description}</span>
     </button>
   );
@@ -119,6 +146,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
         subtitle="Set outcomes, correct readings, and route sessions to training or test dataset."
         icon={<ClipboardCheck size={28} strokeWidth={2} />}
       >
+        {countsLoading ? <CountsLoadingBar /> : null}
         <HeroCta
           label="Awaiting review"
           description="New captures not manually reviewed yet"
@@ -170,6 +198,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
         subtitle="Approve reviewer picks into unit test images and update the manifest."
         icon={<ImageIcon size={28} strokeWidth={2} />}
       >
+        {countsLoading ? <CountsLoadingBar /> : null}
         <HeroCta
           label="Pending test data"
           description="Sessions marked send to test dataset"

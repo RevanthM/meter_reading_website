@@ -74,6 +74,7 @@ async function createOneManualUpload({
   BUCKET_NAME,
   withS3Base,
   parseSession,
+  syncSessionIndexFromMetadata,
   file,
   workType,
   sourceType,
@@ -110,6 +111,7 @@ async function createOneManualUpload({
     dial_details: [],
     upload_source: 'portal_manual',
     manual_label_pending: !labeled,
+    primary_image_file: imageFileName,
     portal_metadata_updated_by: userEmail ? userEmail.slice(0, 320) : undefined,
     status: 'manually_uploaded',
   };
@@ -123,6 +125,17 @@ async function createOneManualUpload({
     file.mimetype || guessImageContentType(imageFileName),
     metadata,
   );
+
+  if (typeof syncSessionIndexFromMetadata === 'function') {
+    await syncSessionIndexFromMetadata(metadata, {
+      s3SessionPrefix: prefix,
+      folderStatus: 'manually_uploaded',
+      sourceType,
+      portalWorkType: workType,
+      imageCount: 1,
+      primaryImageKey: `${prefix}${imageFileName}`,
+    });
+  }
 
   const reading = await parseSession(prefix, 'manually_uploaded', sourceType, workType);
   return {
@@ -157,6 +170,7 @@ export function registerManualUploadRoutes(app, deps) {
     withS3Base,
     invalidateReadingsCache,
     parseSession,
+    syncSessionIndexFromMetadata,
     uploadMiddleware,
     bulkUploadMiddleware,
   } = deps;
@@ -200,6 +214,7 @@ export function registerManualUploadRoutes(app, deps) {
           BUCKET_NAME,
           withS3Base,
           parseSession,
+          syncSessionIndexFromMetadata,
           file,
           workType,
           sourceType,

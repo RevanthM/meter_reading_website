@@ -10,6 +10,7 @@ import { approveSessionForUnitTest, removeSessionFromTestDataset, type ImageDiff
 import type { WorkType } from '../types';
 import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
+import { canEditTestData, canViewTestData } from '../utils/portalWorkMode';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
 import { formatSessionIdForDisplay } from '../utils/sessionDisplay';
 import { primaryMeterImageUrl } from '../utils/meterImagePartition';
@@ -72,12 +73,15 @@ const TestDataPendingPage: FC = () => {
   }, [refreshData]);
 
   useEffect(() => {
-    if (outletCtx?.workMode !== 'test_data_reviewer') {
+    const mode = outletCtx?.workMode;
+    if (!mode || !canViewTestData(mode)) {
       navigate('/', { replace: true });
       return;
     }
     void ensureReadingsLoaded();
   }, [ensureReadingsLoaded, navigate, outletCtx?.workMode]);
+
+  const canEdit = outletCtx?.workMode ? canEditTestData(outletCtx.workMode) : false;
 
   const pending = useMemo(
     () => filteredReadings.filter(isPendingTestData).filter((r) => !removedIds.has(r.id)),
@@ -147,6 +151,7 @@ const TestDataPendingPage: FC = () => {
           (r.workType || workType) as WorkType,
           userEmail || undefined,
           r.s3SessionPrefix,
+          outletCtx?.workMode ?? 'test_data_reviewer',
         );
         markRemoved(r.id);
         window.alert(`Approved — ${res.fileName} added to unit test images.`);
@@ -156,7 +161,7 @@ const TestDataPendingPage: FC = () => {
         setApprovingId(null);
       }
     },
-    [markRemoved, userEmail, workType],
+    [markRemoved, outletCtx?.workMode, userEmail, workType],
   );
 
   const handleQuickReject = useCallback(
@@ -173,6 +178,7 @@ const TestDataPendingPage: FC = () => {
           (r.workType || workType) as WorkType,
           userEmail || undefined,
           r.s3SessionPrefix,
+          outletCtx?.workMode ?? 'test_data_reviewer',
         );
         markRemoved(r.id);
       } catch (e) {
@@ -181,7 +187,7 @@ const TestDataPendingPage: FC = () => {
         setRemovingId(null);
       }
     },
-    [markRemoved, userEmail, workType],
+    [markRemoved, outletCtx?.workMode, userEmail, workType],
   );
 
   const handleReadingUpdated = useCallback(
@@ -322,9 +328,11 @@ const TestDataPendingPage: FC = () => {
                     onClick={() => openLightbox(index)}
                   >
                     <Edit3 size={16} aria-hidden />
-                    Edit
+                    {canEdit ? 'Edit' : 'View'}
                   </button>
-                  <button
+                  {canEdit ? (
+                    <>
+                      <button
                     type="button"
                     className="reading-detail-tdr-approve-btn test-data-pending-approve-btn"
                     disabled={busy || r.reviewerDatasetDestination !== 'test'}
@@ -349,7 +357,9 @@ const TestDataPendingPage: FC = () => {
                       <XCircle size={16} aria-hidden />
                     )}
                     Reject
-                  </button>
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </article>
             );
@@ -369,6 +379,8 @@ const TestDataPendingPage: FC = () => {
           onReadingUpdated={handleReadingUpdated}
           onReadingRemoved={markRemoved}
           onReadingApproved={markRemoved}
+          readOnly={!canEdit}
+          portalWorkMode={outletCtx?.workMode ?? 'test_data_reviewer'}
         />
       ) : null}
     </div>

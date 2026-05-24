@@ -20,6 +20,7 @@ import {
   type S3MeterReading,
 } from '../services/api';
 import type { WorkType } from '../types';
+import type { PortalWorkMode } from '../utils/portalWorkMode';
 import { concatDialDigitsFromRows, reconcileDialRowsForReading } from '../utils/dialDetails';
 import { formatSessionIdForDisplay } from '../utils/sessionDisplay';
 import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
@@ -52,6 +53,8 @@ type Props = {
   onReadingUpdated: (reading: S3MeterReading) => void;
   onReadingRemoved: (sessionId: string) => void;
   onReadingApproved: (sessionId: string) => void;
+  readOnly?: boolean;
+  portalWorkMode?: PortalWorkMode;
 };
 
 const TestDataPendingLightbox: FC<Props> = ({
@@ -65,6 +68,8 @@ const TestDataPendingLightbox: FC<Props> = ({
   onReadingUpdated,
   onReadingRemoved,
   onReadingApproved,
+  readOnly = false,
+  portalWorkMode = 'test_data_reviewer',
 }) => {
   const listItem = items[index];
   const total = items.length;
@@ -286,6 +291,7 @@ const TestDataPendingLightbox: FC<Props> = ({
         wt,
         userEmail,
         reading.s3SessionPrefix,
+        portalWorkMode,
       );
       onReadingApproved(reading.id);
       window.alert(`Approved — unit test image ${res.fileName} uploaded.`);
@@ -306,7 +312,7 @@ const TestDataPendingLightbox: FC<Props> = ({
         if (!saved) return;
       }
       const wt = (reading.workType || workType) as WorkType;
-      await removeSessionFromTestDataset(reading.id, wt, userEmail, reading.s3SessionPrefix);
+      await removeSessionFromTestDataset(reading.id, wt, userEmail, reading.s3SessionPrefix, portalWorkMode);
       onReadingRemoved(reading.id);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Reject failed');
@@ -445,7 +451,7 @@ const TestDataPendingLightbox: FC<Props> = ({
                   type="radio"
                   name="pending-lightbox-difficulty"
                   checked={imageDifficulty === opt.value}
-                  disabled={busy}
+                  disabled={busy || readOnly}
                   onChange={() => setImageDifficulty(opt.value)}
                 />
                 {opt.label}
@@ -465,7 +471,7 @@ const TestDataPendingLightbox: FC<Props> = ({
                     className="image-dial-strip-digit-select"
                     aria-label={`Digit for dial ${i + 1}`}
                     value={normalizeDialDigit(dialDigits[i] ?? 0)}
-                    disabled={busy}
+                    disabled={busy || readOnly}
                     onChange={(e) => handleDialChange(i, parseInt(e.target.value, 10))}
                   >
                     {Array.from({ length: 10 }, (_, d) => (
@@ -488,40 +494,44 @@ const TestDataPendingLightbox: FC<Props> = ({
             <textarea
               rows={2}
               value={comments}
-              disabled={busy}
+              disabled={busy || readOnly}
               onChange={(e) => setComments(e.target.value)}
               placeholder="Optional review notes"
             />
           </label>
 
           <div className="test-data-pending-lightbox-actions">
-            <button
-              type="button"
-              className={`save-button manual-label-save-btn--lightbox ${!isDirty ? 'saved' : ''}`}
-              disabled={!isDirty || busy}
-              onClick={() => void handleSave()}
-            >
-              {saving ? <Loader2 size={18} className="spin" aria-hidden /> : <Save size={18} aria-hidden />}
-              {saving ? 'Saving…' : isDirty ? 'Save edits' : 'Saved'}
-            </button>
-            <button
-              type="button"
-              className="reading-detail-tdr-approve-btn"
-              disabled={busy || reading?.reviewerDatasetDestination !== 'test'}
-              onClick={() => void handleApprove()}
-            >
-              {approving ? <Loader2 size={18} className="spin" /> : <CheckCircle2 size={18} />}
-              Approve
-            </button>
-            <button
-              type="button"
-              className="test-data-remove-btn test-data-pending-lightbox-reject-btn"
-              disabled={busy}
-              onClick={() => void handleReject()}
-            >
-              {rejecting ? <Loader2 size={18} className="spin" /> : <XCircle size={18} />}
-              Reject
-            </button>
+            {!readOnly ? (
+              <>
+                <button
+                  type="button"
+                  className={`save-button manual-label-save-btn--lightbox ${!isDirty ? 'saved' : ''}`}
+                  disabled={!isDirty || busy}
+                  onClick={() => void handleSave()}
+                >
+                  {saving ? <Loader2 size={18} className="spin" aria-hidden /> : <Save size={18} aria-hidden />}
+                  {saving ? 'Saving…' : isDirty ? 'Save edits' : 'Saved'}
+                </button>
+                <button
+                  type="button"
+                  className="reading-detail-tdr-approve-btn"
+                  disabled={busy || reading?.reviewerDatasetDestination !== 'test'}
+                  onClick={() => void handleApprove()}
+                >
+                  {approving ? <Loader2 size={18} className="spin" /> : <CheckCircle2 size={18} />}
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className="test-data-remove-btn test-data-pending-lightbox-reject-btn"
+                  disabled={busy}
+                  onClick={() => void handleReject()}
+                >
+                  {rejecting ? <Loader2 size={18} className="spin" /> : <XCircle size={18} />}
+                  Reject
+                </button>
+              </>
+            ) : null}
           </div>
         </aside>
       </div>

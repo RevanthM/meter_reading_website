@@ -119,6 +119,9 @@ export interface S3MeterReading extends MeterReading {
   isManuallyReviewed?: boolean;
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
   portalMetadataUpdatedBy?: string;
+  portalMetadataUpdatedAt?: string;
+  /** Image count when list API omits full `images` (Dynamo index path). */
+  imageCount?: number;
   /** Portal bulk upload awaiting a 4-digit label. */
   manualLabelPending?: boolean;
 }
@@ -1425,6 +1428,7 @@ export async function updateUnitTestImageExpected(
   s3Key: string,
   expectedMeterValue: string,
   imageDifficulty?: ImageDifficulty | null,
+  portalWorkMode: PortalWorkMode = 'test_data_reviewer',
 ): Promise<{
   ok: boolean;
   fileName: string;
@@ -1439,7 +1443,7 @@ export async function updateUnitTestImageExpected(
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
-      'x-portal-work-mode': 'test_data_reviewer',
+      'x-portal-work-mode': portalWorkMode,
     },
     body: JSON.stringify({ workType, s3Key, expectedMeterValue, imageDifficulty }),
   });
@@ -1453,12 +1457,13 @@ export async function updateUnitTestImageExpected(
 export async function deleteUnitTestImage(
   workType: WorkType,
   s3Key: string,
+  portalWorkMode: PortalWorkMode = 'test_data_reviewer',
 ): Promise<{ ok: boolean; s3Key: string; deleted: boolean }> {
   const response = await fetch(`${API_BASE_URL}/test-data/unit-test-images`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
-      'x-portal-work-mode': 'test_data_reviewer',
+      'x-portal-work-mode': portalWorkMode,
     },
     body: JSON.stringify({ workType, s3Key }),
   });
@@ -1474,10 +1479,11 @@ export async function approveSessionForUnitTest(
   workType: WorkType | undefined,
   userEmail?: string,
   s3SessionPrefix?: string,
+  portalWorkMode: PortalWorkMode = 'test_data_reviewer',
 ): Promise<{ ok: boolean; fileName: string; s3Key: string; reading: S3MeterReading }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-portal-work-mode': 'test_data_reviewer',
+    'x-portal-work-mode': portalWorkMode,
   };
   if (userEmail) headers['x-user-email'] = userEmail;
   const response = await fetch(`${API_BASE_URL}/test-data/approve`, {
@@ -1501,6 +1507,7 @@ export async function removeSessionFromTestDataset(
   workType: WorkType | undefined,
   userEmail?: string,
   s3SessionPrefix?: string,
+  portalWorkMode: PortalWorkMode = 'test_data_reviewer',
 ): Promise<{
   ok: boolean;
   removedFromQueue: boolean;
@@ -1510,7 +1517,7 @@ export async function removeSessionFromTestDataset(
 }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-portal-work-mode': 'test_data_reviewer',
+    'x-portal-work-mode': portalWorkMode,
   };
   if (userEmail) headers['x-user-email'] = userEmail;
   const response = await fetch(`${API_BASE_URL}/test-data/remove-from-dataset`, {

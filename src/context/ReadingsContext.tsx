@@ -9,6 +9,10 @@ import { buildTargetSessionPrefixFromSource } from '../utils/s3SessionPrefix';
 import { useAuth } from './AuthContext';
 
 type LoadCountsOptions = { /** When true, refresh S3 counts without toggling countsLoading (no KPI flash). */ silent?: boolean };
+type LoadReadingsOptions = { /** When true, skip loading spinner (background SWR refresh). */ silent?: boolean };
+
+/** Background poll while tab is open — server SWR + client keeps UI fresh without manual refresh. */
+const BACKGROUND_REFRESH_MS = 15_000;
 
 export type DataSource = 'all' | 'field' | 'simulator';
 
@@ -78,19 +82,22 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   }, []);
 
-  const loadReadings = useCallback(async (source?: DataSource, wt?: WorkType, refresh = false) => {
-    setReadingsLoading(true);
+  const loadReadings = useCallback(async (source?: DataSource, wt?: WorkType, refresh = false, options?: LoadReadingsOptions) => {
+    const silent = options?.silent === true;
+    if (!silent) setReadingsLoading(true);
     try {
       const apiReadings = await fetchReadings(source, wt, refresh);
       setAllReadings(apiReadings);
       console.log(`✅ Loaded ${apiReadings.length} readings from S3 (source: ${source || 'all'}, workType: ${wt || '1000'})`);
     } catch (err) {
-      console.warn('⚠️ Failed to load readings from API, using mock data:', err);
-      setAllReadings(mockReadings as S3MeterReading[]);
-      setIsUsingRealData(false);
-      setError('Using mock data - API server not running');
+      if (!silent) {
+        console.warn('⚠️ Failed to load readings from API, using mock data:', err);
+        setAllReadings(mockReadings as S3MeterReading[]);
+        setIsUsingRealData(false);
+        setError('Using mock data - API server not running');
+      }
     } finally {
-      setReadingsLoading(false);
+      if (!silent) setReadingsLoading(false);
     }
   }, []);
 
@@ -100,6 +107,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       return;
     }
     if (readingsLoadStarted.current && allReadings.length > 0) {
+      void loadReadings(dataSource, workType, false, { silent: true });
       return;
     }
     readingsLoadStarted.current = true;
@@ -147,6 +155,37 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       void loadCounts(dataSource, workType);
     }
   }, [loadCounts, dataSource, workType, user, anicaLoginUser, isAuthorized]);
+
+  /** Poll counts + readings while tab visible (pairs with server stale-while-revalidate). */
+  useEffect(() => {
+    if (!(user || anicaLoginUser) || !isAuthorized) return;
+
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      void loadCounts(dataSource, workType, { silent: true });
+      if (readingsLoadStarted.current && allReadings.length > 0) {
+        void loadReadings(dataSource, workType, false, { silent: true });
+      }
+    };
+
+    const id = window.setInterval(tick, BACKGROUND_REFRESH_MS);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [
+    allReadings.length,
+    dataSource,
+    isAuthorized,
+    loadCounts,
+    loadReadings,
+    user,
+    anicaLoginUser,
+    workType,
+  ]);
 
   const filteredReadings = useMemo(() => {
     if (dataSource === 'all') return allReadings;
