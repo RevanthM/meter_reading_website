@@ -16,6 +16,22 @@ on:
           - amrportal
           - amr-portal-prod
           - meter-reading-prod
+      dynamo_sessions_table:
+        description: "DynamoDB session index table (empty = do not change EB value)"
+        required: false
+        default: amr-sessions
+      dynamo_aws_region:
+        description: "AWS region for S3 + DynamoDB (empty = do not change EB value)"
+        required: false
+        default: us-east-1
+      dynamo_sessions_fallback_s3:
+        description: "Fall back to S3 if Dynamo query fails"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -109,6 +125,28 @@ jobs:
             "${{ env.AWS_REGION }}" \
             20
 
+      - name: Sync DynamoDB session index environment variables
+        if: github.event.inputs.dynamo_sessions_table != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          SETTINGS=(
+            "Namespace=aws:elasticbeanstalk:application:environment,OptionName=AWS_DYNAMODB_SESSIONS_TABLE,Value=${{ github.event.inputs.dynamo_sessions_table }}"
+            "Namespace=aws:elasticbeanstalk:application:environment,OptionName=DYNAMO_SESSIONS_FALLBACK_S3,Value=${{ github.event.inputs.dynamo_sessions_fallback_s3 }}"
+          )
+          if [ -n "${{ github.event.inputs.dynamo_aws_region }}" ]; then
+            SETTINGS+=("Namespace=aws:elasticbeanstalk:application:environment,OptionName=AWS_REGION,Value=${{ github.event.inputs.dynamo_aws_region }}")
+          fi
+          aws elasticbeanstalk update-environment \
+            --region "${AWS_REGION}" \
+            --environment-name "${{ steps.target.outputs.env_name }}" \
+            --option-settings "${SETTINGS[@]}"
+          aws elasticbeanstalk wait environment-updated \
+            --region "${AWS_REGION}" \
+            --environment-names "${{ steps.target.outputs.env_name }}"
+          echo "DynamoDB env synced: table=${{ github.event.inputs.dynamo_sessions_table }} region=${{ github.event.inputs.dynamo_aws_region }} fallback=${{ github.event.inputs.dynamo_sessions_fallback_s3 }}"
+
       - name: Sync Roboflow environment variables
         if: steps.target.outputs.env_name == 'amrportal' || steps.target.outputs.env_name == 'amrportal-prod' || steps.target.outputs.env_name == 'amrportal-prod-0519'
         env:
@@ -140,3 +178,6 @@ jobs:
           echo "- **Version label:** ${{ steps.version.outputs.label }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Triggered by:** ${{ github.actor }} (${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ github.event.inputs.dynamo_sessions_table }}" ]; then
+            echo "- **DynamoDB:** \`${{ github.event.inputs.dynamo_sessions_table }}\` (region \`${{ github.event.inputs.dynamo_aws_region }}\`, fallback S3=${{ github.event.inputs.dynamo_sessions_fallback_s3 }})" >> "$GITHUB_STEP_SUMMARY"
+          fi

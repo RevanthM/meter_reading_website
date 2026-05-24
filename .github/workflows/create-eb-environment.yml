@@ -35,6 +35,22 @@ on:
         options:
           - standard
           - loadbalanced
+      dynamo_sessions_table:
+        description: "DynamoDB session index table (empty = skip; portal uses S3-only lists)"
+        required: false
+        default: amr-sessions
+      dynamo_aws_region:
+        description: "AWS region for S3 + DynamoDB client (must match table region)"
+        required: false
+        default: us-east-1
+      dynamo_sessions_fallback_s3:
+        description: "Fall back to S3 folder scan if Dynamo query fails"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -155,6 +171,30 @@ jobs:
             /tmp/option-settings.json > /tmp/option-settings-with-iam.json
           mv /tmp/option-settings-with-iam.json /tmp/option-settings.json
 
+          TABLE="${{ inputs.dynamo_sessions_table }}"
+          DYNAMO_REGION="${{ inputs.dynamo_aws_region }}"
+          FALLBACK="${{ inputs.dynamo_sessions_fallback_s3 }}"
+          if [ -n "$TABLE" ]; then
+            jq --arg table "$TABLE" --arg region "$DYNAMO_REGION" --arg fallback "$FALLBACK" '
+              map(select(
+                .OptionName != "AWS_DYNAMODB_SESSIONS_TABLE"
+                and .OptionName != "DYNAMO_SESSIONS_FALLBACK_S3"
+                and (.OptionName != "AWS_REGION" or ($region | length) == 0)
+              ))
+              + [
+                {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "AWS_DYNAMODB_SESSIONS_TABLE", Value: $table},
+                {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "DYNAMO_SESSIONS_FALLBACK_S3", Value: $fallback}
+              ]
+              + (if ($region | length) > 0 then
+                [{Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "AWS_REGION", Value: $region}]
+              else [] end)
+            ' /tmp/option-settings.json > /tmp/dynamo-env.json
+            mv /tmp/dynamo-env.json /tmp/option-settings.json
+            echo "DynamoDB session index: table=${TABLE} region=${DYNAMO_REGION:-template} fallback=${FALLBACK}"
+          else
+            echo "DynamoDB session index: skipped (no table name)"
+          fi
+
           if [ "${{ inputs.tier_type }}" = "standard" ]; then
             echo "tier=Name=WebServer,Type=Standard" >> "$GITHUB_ENV"
             jq '. + [{Namespace: "aws:elasticbeanstalk:environment", OptionName: "EnvironmentType", Value: "SingleInstance"}]' \
@@ -234,6 +274,9 @@ jobs:
             echo "- **Platform:** Node.js ${{ steps.platform.outputs.node_major }} (latest AL2023 stack)" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Stack:** \`${{ steps.platform.outputs.stack }}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Tier:** ${{ inputs.tier_type }}" >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "${{ inputs.dynamo_sessions_table }}" ]; then
+              echo "- **DynamoDB:** \`${{ inputs.dynamo_sessions_table }}\` (region \`${{ inputs.dynamo_aws_region }}\`, fallback S3=${{ inputs.dynamo_sessions_fallback_s3 }})" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           aws elasticbeanstalk describe-environments \
             --region "${AWS_REGION}" \
