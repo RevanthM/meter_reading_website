@@ -3,7 +3,8 @@
  * Format matches AnalogMeterReader UnitTestPerImageCsv.swift.
  */
 
-import { ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { normalizeConfidencePct } from './unitTestMetricsApply.js';
 
 /** iOS export: d1/d2/d3 = normal / difficult / very_difficult (not meter dials). */
 const IMAGE_DIFFICULTY_TIERS = [
@@ -181,4 +182,120 @@ export async function listUnitTestResultCsvKeys(s3Client, bucket, prefix) {
 
   keys.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
   return keys;
+}
+
+/** Parse iOS export stem: `results_<UTC>_<pipelineId>_<appVer>_export.csv` */
+export function parseUnitTestFileName(fileName) {
+  const base = String(fileName || '').replace(/\.csv$/i, '');
+  const m = /^results_[^_]+_(.+)_export$/i.exec(base);
+  if (!m) return { pipelineId: null, appVersionHint: null };
+  const tail = m[1];
+  const parts = tail.split('_');
+  if (parts.length < 2) return { pipelineId: tail, appVersionHint: null };
+  const appVersionHint = parts[parts.length - 1] ?? null;
+  const pipelineId = parts.slice(0, -1).join('_');
+  return { pipelineId: pipelineId || null, appVersionHint };
+}
+
+/**
+ * @param {import('@aws-sdk/client-s3').S3Client} s3Client
+ * @param {string} bucket
+ * @param {string} key
+ */
+export async function fetchUnitTestCsvSummaryHead(s3Client, bucket, key, streamToString) {
+  const out = await s3Client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Range: 'bytes=0-65535',
+    }),
+  );
+  const partial = await streamToString(out.Body);
+  const parsed = parseUnitTestCsvSummary(partial);
+  return parsed.summary;
+}
+
+/**
+ * @param {{ key: string, fileName: string, size: number, lastModified: string | null }} run
+ * @param {Record<string, unknown>} summary
+ */
+export function buildUnitTestRunListItem(run, summary) {
+  const fileName = run.fileName || run.key.split('/').pop() || run.key;
+  const fromName = parseUnitTestFileName(fileName);
+  const imagesProcessed =
+    summary.imagesProcessed != null && Number.isFinite(summary.imagesProcessed)
+      ? summary.imagesProcessed
+      : null;
+  const accuracyPercent =
+    summary.accuracyPercent != null && Number.isFinite(summary.accuracyPercent)
+      ? Math.round(summary.accuracyPercent * 10) / 10
+      : null;
+  const averageConfidencePct = normalizeConfidencePct(summary.average_confidence);
+  const appVersion =
+    (typeof summary.app_version === 'string' && summary.app_version.trim()) ||
+    fromName.appVersionHint ||
+    null;
+  const runBy =
+    (typeof summary.user_name === 'string' && summary.user_name.trim()) ||
+    (typeof summary.run_by === 'string' && summary.run_by.trim()) ||
+    (typeof summary.runner_name === 'string' && summary.runner_name.trim()) ||
+    null;
+  const pipelineDisplayName =
+    (typeof summary.pipeline_display_name === 'string' && summary.pipeline_display_name.trim()) ||
+    null;
+  const pipelineId =
+    (typeof summary.pipeline_id === 'string' && summary.pipeline_id.trim()) ||
+    fromName.pipelineId ||
+    null;
+  const pipelineVersion =
+    (typeof summary.pipeline_version === 'string' && summary.pipeline_version.trim()) || null;
+  const generatedUtc =
+    (typeof summary.generated_utc === 'string' && summary.generated_utc.trim()) ||
+    run.lastModified ||
+    null;
+
+  return {
+    key: run.key,
+    fileName,
+    size: run.size,
+    lastModified: run.lastModified,
+    generatedUtc,
+    runBy,
+    pipelineDisplayName,
+    pipelineId,
+    pipelineVersion,
+    imagesProcessed,
+    appVersion,
+    accuracyPercent,
+    averageConfidencePct,
+  };
+}
+
+/**
+ * @param {import('@aws-sdk/client-s3').S3Client} s3Client
+ * @param {string} bucket
+ * @param {Array<{ key: string, fileName: string, size: number, lastModified: string | null }>} runs
+ * @param {(body: unknown) => Promise<string>} streamToString
+ */
+export async function enrichUnitTestRunsWithSummary(s3Client, bucket, runs, streamToString) {
+  const concurrency = 6;
+  const out = [];
+  for (let i = 0; i < runs.length; i += concurrency) {
+    const chunk = runs.slice(i, i + concurrency);
+    const batch = await Promise.all(
+      chunk.map(async (run) => {
+        try {
+          const summary = await fetchUnitTestCsvSummaryHead(s3Client, bucket, run.key, streamToString);
+          return buildUnitTestRunListItem(run, summary);
+        } catch {
+          return {
+            ...buildUnitTestRunListItem(run, {}),
+            summaryLoaded: false,
+          };
+        }
+      }),
+    );
+    out.push(...batch);
+  }
+  return out;
 }

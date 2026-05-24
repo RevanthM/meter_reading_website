@@ -2,7 +2,7 @@
  * Apply iOS unit-test CSV metrics onto pipeline iteration manualMetrics (app accuracy & confidence).
  */
 
-function normalizeConfidencePct(raw) {
+export function normalizeConfidencePct(raw) {
   if (raw == null || raw === '') return null;
   const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
   if (!Number.isFinite(n)) return null;

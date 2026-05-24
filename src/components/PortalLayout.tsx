@@ -18,6 +18,7 @@ import {
   Layers,
   Factory,
   Upload,
+  ClipboardList,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalOutletWorkContext, PortalWorkMode } from '../utils/portalWorkMode';
@@ -199,7 +200,6 @@ const PortalLayout: FC = () => {
             description: 'Charts & KPIs',
             hint: 'Session counts, trends, exports',
           },
-          ...manualUploadNav,
           {
             path: '/factory',
             label: 'Model factory',
@@ -208,15 +208,29 @@ const PortalLayout: FC = () => {
             icon: <Factory size={17} strokeWidth={2} />,
           },
           {
+            path: '/unit-test/results',
+            label: 'Unit test runs',
+            description: 'iOS CSV exports',
+            hint: 'Batch results · accuracy · download',
+            icon: <ClipboardList size={17} strokeWidth={2} />,
+          },
+          {
             path: '/pipeline-iterations',
-            label: 'Iterations table',
-            description: 'Spreadsheet · charts',
+            label: 'Pipeline',
+            description: 'Iterations · spreadsheet',
             hint: 'Same registry as factory (detailed edit)',
             icon: <Layers size={17} strokeWidth={2} />,
           },
           {
+            ...manualUploadNav[0]!,
+          },
+          {
+            ...manualUploadNav[1]!,
+            label: 'Label',
+          },
+          {
             path: '/readings/all',
-            label: 'All readings',
+            label: 'All data',
             description: 'Full session list',
             hint: 'Filter by cohort, version, date',
             icon: <ListTree size={17} />,
@@ -251,6 +265,20 @@ const PortalLayout: FC = () => {
           description: 'Assembly line · ship',
           hint: 'Planning → data → label → train → test → deployed',
           icon: <Factory size={17} strokeWidth={2} />,
+        },
+        {
+          path: '/unit-test/results',
+          label: 'Unit test runs',
+          description: 'iOS CSV exports',
+          hint: 'Batch results · accuracy · download',
+          icon: <ClipboardList size={17} strokeWidth={2} />,
+        },
+        {
+          path: '/pipeline-iterations',
+          label: 'Pipeline',
+          description: 'Iterations · spreadsheet',
+          hint: 'Same registry as factory (detailed edit)',
+          icon: <Layers size={17} strokeWidth={2} />,
         },
       ],
     };

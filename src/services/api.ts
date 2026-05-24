@@ -244,6 +244,17 @@ export interface UnitTestRunIndexRow {
   fileName: string;
   size: number;
   lastModified: string | null;
+  /** Present when listed with `includeSummary=true`. */
+  generatedUtc?: string | null;
+  runBy?: string | null;
+  pipelineDisplayName?: string | null;
+  pipelineId?: string | null;
+  pipelineVersion?: string | null;
+  imagesProcessed?: number | null;
+  appVersion?: string | null;
+  accuracyPercent?: number | null;
+  averageConfidencePct?: number | null;
+  summaryLoaded?: boolean;
 }
 
 export interface UnitTestRunListResponse {
@@ -417,8 +428,14 @@ export async function fetchPipelineIterations(): Promise<PipelineIterationsDoc> 
   }
 }
 
-export async function fetchUnitTestRuns(workType: string): Promise<UnitTestRunListResponse> {
+export async function fetchUnitTestRuns(
+  workType: string,
+  options?: { includeSummary?: boolean },
+): Promise<UnitTestRunListResponse> {
   const q = new URLSearchParams({ workType });
+  if (options?.includeSummary) {
+    q.set('includeSummary', 'true');
+  }
   try {
     const response = await fetch(`${API_BASE_URL}/unit-test/runs?${q}`);
     const text = await response.text();

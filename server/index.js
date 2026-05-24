@@ -22,7 +22,11 @@ import {
 } from './roboflowTrainingDataset.js';
 import { pullWeightsPtFromRoboflow } from './roboflowWeights.js';
 import { registerApiDocs } from './apiDocs.js';
-import { listUnitTestResultCsvKeys, parseUnitTestCsvSummary } from './unitTestCsv.js';
+import {
+  enrichUnitTestRunsWithSummary,
+  listUnitTestResultCsvKeys,
+  parseUnitTestCsvSummary,
+} from './unitTestCsv.js';
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
@@ -2581,6 +2585,11 @@ app.get('/api/unit-test/runs', async (req, res) => {
       }
     }
     runs.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
+    const includeSummary = req.query.includeSummary === 'true' || req.query.includeSummary === '1';
+    if (includeSummary && runs.length > 0) {
+      const enriched = await enrichUnitTestRunsWithSummary(s3Client, BUCKET_NAME, runs, streamToString);
+      return res.json({ workType, prefix: prefixes[0] ?? null, prefixes, runs: enriched });
+    }
     res.json({ workType, prefix: prefixes[0] ?? null, prefixes, runs });
   } catch (error) {
     console.error('GET /api/unit-test/runs:', error);
