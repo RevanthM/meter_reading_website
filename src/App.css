@@ -14261,6 +14261,101 @@ label.training-hub-filter-card-title--input {
   color: var(--text-muted);
 }
 
+.test-data-pending-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.test-data-pending-card-meta-muted {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.test-data-pending-card-notes {
+  margin: 0.45rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.test-data-pending-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.65rem 1rem;
+  margin-top: 0.85rem;
+}
+
+.test-data-pending-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 9rem;
+}
+
+.test-data-pending-filter-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.test-data-pending-filter select {
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.test-data-pending-clear-filters {
+  border: none;
+  background: transparent;
+  color: var(--accent-amber, #2563eb);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.35rem 0;
+}
+
+.test-data-pending-sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.test-data-pending-sort-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.test-data-pending-lightbox-submission {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.test-data-pending-lightbox-submission strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .test-data-pending-session-name code {
   font-size: 0.72rem;
 }

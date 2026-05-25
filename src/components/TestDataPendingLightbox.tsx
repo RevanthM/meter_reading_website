@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FC, type WheelEvent } from 'react';
 import {
+  Calendar,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Loader2,
   RotateCcw,
   Save,
+  User,
   X,
   XCircle,
   ZoomIn,
@@ -23,6 +25,12 @@ import type { WorkType } from '../types';
 import type { PortalWorkMode } from '../utils/portalWorkMode';
 import { concatDialDigitsFromRows, reconcileDialRowsForReading } from '../utils/dialDetails';
 import { formatSessionIdForDisplay } from '../utils/sessionDisplay';
+import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import {
+  formatSubmitterLabel,
+  testDataSubmittedAtIso,
+  testDataSubmittedBy,
+} from '../utils/testDataSubmission';
 import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
 import {
   dialDigitsFromExpected,
@@ -456,6 +464,35 @@ const TestDataPendingLightbox: FC<Props> = ({
           <p className="unit-test-image-lightbox-filename test-data-pending-lightbox-session">
             {formatSessionIdForDisplay(reading?.id ?? listItem.id)}
           </p>
+          {reading ? (
+            <p className="test-data-pending-lightbox-submission">
+              <User size={14} aria-hidden />
+              {(() => {
+                const submitter = testDataSubmittedBy(reading);
+                const submittedAt = testDataSubmittedAtIso(reading);
+                if (!submitter && !submittedAt) {
+                  return <span className="test-data-pending-card-meta-muted">Submission details unavailable</span>;
+                }
+                return (
+                  <span>
+                    {submitter ? (
+                      <>
+                        Sent by <strong title={submitter}>{formatSubmitterLabel(submitter)}</strong>
+                      </>
+                    ) : (
+                      'Sent by unknown'
+                    )}
+                    {submittedAt ? (
+                      <>
+                        {' '}
+                        · <Calendar size={13} aria-hidden /> {formatReadingShortDate(submittedAt)}
+                      </>
+                    ) : null}
+                  </span>
+                );
+              })()}
+            </p>
+          ) : null}
           {loadingDetail ? (
             <p className="test-data-pending-lightbox-loading">
               <Loader2 size={16} className="spin" aria-hidden /> Loading session…

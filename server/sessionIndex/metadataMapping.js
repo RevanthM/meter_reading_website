@@ -101,6 +101,12 @@ export function metadataToSessionItem(metadata, ctx) {
       typeof metadata.test_data_unit_test_file_name === 'string' ? metadata.test_data_unit_test_file_name : null,
     test_data_approved_at:
       typeof metadata.test_data_approved_at === 'string' ? metadata.test_data_approved_at : null,
+    test_data_approved_by:
+      typeof metadata.test_data_approved_by === 'string' ? metadata.test_data_approved_by : null,
+    test_data_submitted_at:
+      typeof metadata.test_data_submitted_at === 'string' ? metadata.test_data_submitted_at : null,
+    test_data_submitted_by:
+      typeof metadata.test_data_submitted_by === 'string' ? metadata.test_data_submitted_by : null,
     manual_label_pending: metadata.manual_label_pending === true,
     primary_image_key:
       typeof metadata.primary_image_key === 'string' && metadata.primary_image_key.trim()
@@ -166,6 +172,8 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     testDataUnitTestS3Key: item.test_data_unit_test_s3_key ?? undefined,
     testDataUnitTestFileName: item.test_data_unit_test_file_name ?? undefined,
     testDataApprovedAt: item.test_data_approved_at ?? undefined,
+    testDataSubmittedAt: item.test_data_submitted_at ?? undefined,
+    testDataSubmittedBy: item.test_data_submitted_by ?? undefined,
     isManuallyReviewed: item.is_manually_reviewed === true,
     portalMetadataUpdatedBy: item.portal_metadata_updated_by ?? undefined,
     portalMetadataUpdatedAt: item.portal_metadata_updated_at ?? undefined,

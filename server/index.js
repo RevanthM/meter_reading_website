@@ -1034,6 +1034,12 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
         typeof metadata.test_data_unit_test_file_name === 'string' ? metadata.test_data_unit_test_file_name : undefined,
       testDataApprovedAt:
         typeof metadata.test_data_approved_at === 'string' ? metadata.test_data_approved_at : undefined,
+      testDataSubmittedAt:
+        typeof metadata.test_data_submitted_at === 'string' ? metadata.test_data_submitted_at : undefined,
+      testDataSubmittedBy:
+        typeof metadata.test_data_submitted_by === 'string' && metadata.test_data_submitted_by.trim() !== ''
+          ? String(metadata.test_data_submitted_by).trim().slice(0, 320)
+          : undefined,
       /** Portal / iOS: `is_manually_reviewed` in metadata.json (legacy `is_human_reviewed` still honored when reading). */
       isManuallyReviewed:
         metadata.is_manually_reviewed === true || metadata.is_human_reviewed === true,
@@ -1971,6 +1977,12 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       if (dest != null && dest !== 'training' && dest !== 'test') {
         return res.status(400).json({ error: 'reviewer_dataset_destination must be training, test, or null' });
       }
+      const priorDest =
+        meta.reviewer_dataset_destination === 'training' || meta.reviewer_dataset_destination === 'test'
+          ? meta.reviewer_dataset_destination
+          : meta.reviewer_recommend_training === true
+            ? 'training'
+            : null;
       meta.reviewer_dataset_destination = dest;
       meta.reviewer_recommend_training = dest === 'training';
       if (dest === 'test' && meta.test_data_review_status !== 'approved') {
@@ -1978,6 +1990,10 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
       }
       if (dest !== 'test') {
         meta.test_data_review_status = null;
+        meta.test_data_submitted_by = null;
+        meta.test_data_submitted_at = null;
+      } else if (priorDest !== 'test') {
+        meta.test_data_submitted_at = new Date().toISOString();
       }
     }
 
@@ -2016,6 +2032,15 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
     const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
     meta.portal_metadata_updated_at = new Date().toISOString();
     if (userEmail) meta.portal_metadata_updated_by = userEmail.slice(0, 320);
+    if (
+      meta.reviewer_dataset_destination === 'test' &&
+      meta.test_data_review_status === 'pending' &&
+      meta.test_data_submitted_at &&
+      !meta.test_data_submitted_by &&
+      userEmail
+    ) {
+      meta.test_data_submitted_by = userEmail.slice(0, 320);
+    }
 
     await s3Client.send(
       new PutObjectCommand({

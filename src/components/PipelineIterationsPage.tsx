@@ -474,15 +474,6 @@ const PipelineIterationsPage: FC = () => {
           </div>
         ) : (
           <>
-            <PipelineIterationsCharts
-              rows={chartRows}
-              sourceRows={filteredRows}
-              onIterationClick={(id) => {
-                const r = filteredRows.find((x) => x.id === id);
-                if (r) openEdit(r);
-              }}
-            />
-
             <div className="table-container pipeline-iterations-table-wrap">
               <table className="readings-table pipeline-iterations-table pipeline-iterations-table--compact">
                 <thead>
@@ -594,6 +585,15 @@ const PipelineIterationsPage: FC = () => {
                 </p>
               ) : null}
             </div>
+
+            <PipelineIterationsCharts
+              rows={chartRows}
+              sourceRows={filteredRows}
+              onIterationClick={(id) => {
+                const r = filteredRows.find((x) => x.id === id);
+                if (r) openEdit(r);
+              }}
+            />
 
             <section className="pipeline-iterations-compare" aria-labelledby="pipeline-compare-heading">
               <h2 id="pipeline-compare-heading">Compare by pipeline</h2>

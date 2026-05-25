@@ -242,6 +242,8 @@ export async function removeSessionFromTestDataset(opts) {
   opts.meta.test_data_unit_test_file_name = null;
   opts.meta.test_data_approved_at = null;
   opts.meta.test_data_approved_by = null;
+  opts.meta.test_data_submitted_at = null;
+  opts.meta.test_data_submitted_by = null;
 
   return {
     workType,

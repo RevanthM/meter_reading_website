@@ -51,6 +51,8 @@ const LIST_READING_PROJECTION = [
   'test_data_unit_test_s3_key',
   'test_data_unit_test_file_name',
   'test_data_approved_at',
+  'test_data_submitted_at',
+  'test_data_submitted_by',
   'manual_label_pending',
   'primary_image_key',
   'image_count',

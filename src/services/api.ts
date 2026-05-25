@@ -115,6 +115,10 @@ export interface S3MeterReading extends MeterReading {
   testDataUnitTestS3Key?: string;
   testDataUnitTestFileName?: string;
   testDataApprovedAt?: string;
+  /** Reviewer who queued session for test-data approval (`test_data_submitted_by`). */
+  testDataSubmittedBy?: string;
+  /** When session was sent to pending test data (`test_data_submitted_at`). */
+  testDataSubmittedAt?: string;
   /** `is_manually_reviewed` in metadata; legacy `is_human_reviewed` is still read by the server until migrated. */
   isManuallyReviewed?: boolean;
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */

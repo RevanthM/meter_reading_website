@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ArrowLeft, Calendar, CheckCircle2, Edit3, Inbox, Loader2, XCircle } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Calendar,
+  CheckCircle2,
+  Edit3,
+  Inbox,
+  Loader2,
+  User,
+  XCircle,
+} from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import TestDataPendingLightbox from './TestDataPendingLightbox';
@@ -15,8 +26,19 @@ import { formatReadingShortDate } from '../utils/readingDisplayDates';
 import { formatSessionIdForDisplay } from '../utils/sessionDisplay';
 import { primaryMeterImageUrl } from '../utils/meterImagePartition';
 import { formatUnitTestDifficultyTag, normalizeUnitTestDifficulty } from '../utils/unitTestImageNaming';
+import {
+  formatSubmitterLabel,
+  matchesSubmittedDatePreset,
+  testDataSubmittedAtIso,
+  testDataSubmittedBy,
+  type SubmittedDatePreset,
+} from '../utils/testDataSubmission';
+import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
 
 type PendingDifficultyFilter = 'all' | Exclude<ImageDifficulty, null>;
+type SortOrder = 'submitted_desc' | 'submitted_asc' | 'capture_desc';
+
+const DATE_PRESETS: SubmittedDatePreset[] = ['all', 'today', 'yesterday', 'last7', 'last30'];
 
 const DIFFICULTY_FILTERS: { id: PendingDifficultyFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -49,6 +71,13 @@ function adjustLightboxIndexAfterRemove(
   return lb;
 }
 
+function sortTimestamp(r: S3MeterReading, mode: SortOrder): number {
+  if (mode === 'capture_desc') {
+    return Date.parse(r.dateOfReading) || 0;
+  }
+  return Date.parse(testDataSubmittedAtIso(r) ?? '') || Date.parse(r.dateOfReading) || 0;
+}
+
 const TestDataPendingPage: FC = () => {
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
@@ -61,6 +90,9 @@ const TestDataPendingPage: FC = () => {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [removedIds, setRemovedIds] = useState<Set<string>>(() => new Set());
   const [difficultyFilter, setDifficultyFilter] = useState<PendingDifficultyFilter>('all');
+  const [sentByFilter, setSentByFilter] = useState<string>('all');
+  const [datePreset, setDatePreset] = useState<SubmittedDatePreset>('all');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('submitted_desc');
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -88,6 +120,15 @@ const TestDataPendingPage: FC = () => {
     [filteredReadings, removedIds],
   );
 
+  const submitterOptions = useMemo(() => {
+    const emails = new Set<string>();
+    for (const r of pending) {
+      const who = testDataSubmittedBy(r);
+      if (who) emails.add(who);
+    }
+    return [...emails].sort((a, b) => a.localeCompare(b));
+  }, [pending]);
+
   const difficultyCounts = useMemo(() => {
     const counts: Record<PendingDifficultyFilter, number> = {
       all: pending.length,
@@ -103,9 +144,38 @@ const TestDataPendingPage: FC = () => {
   }, [pending]);
 
   const visiblePending = useMemo(() => {
-    if (difficultyFilter === 'all') return pending;
-    return pending.filter((r) => normalizeUnitTestDifficulty(r.imageDifficulty) === difficultyFilter);
-  }, [pending, difficultyFilter]);
+    let list = pending.filter((r) => {
+      if (difficultyFilter !== 'all' && normalizeUnitTestDifficulty(r.imageDifficulty) !== difficultyFilter) {
+        return false;
+      }
+      if (sentByFilter !== 'all') {
+        const who = testDataSubmittedBy(r);
+        if (who !== sentByFilter) return false;
+      }
+      if (!matchesSubmittedDatePreset(r, datePreset)) return false;
+      return true;
+    });
+
+    list = [...list].sort((a, b) => {
+      const ta = sortTimestamp(a, sortOrder);
+      const tb = sortTimestamp(b, sortOrder);
+      if (sortOrder === 'submitted_asc') return ta - tb;
+      return tb - ta;
+    });
+    return list;
+  }, [pending, difficultyFilter, sentByFilter, datePreset, sortOrder]);
+
+  const activeFilterCount = [
+    difficultyFilter !== 'all',
+    sentByFilter !== 'all',
+    datePreset !== 'all',
+  ].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setDifficultyFilter('all');
+    setSentByFilter('all');
+    setDatePreset('all');
+  };
 
   useEffect(() => {
     setLightboxIndex((lb) => {
@@ -200,6 +270,13 @@ const TestDataPendingPage: FC = () => {
   const lightboxItem = lightboxIndex != null ? visiblePending[lightboxIndex] : undefined;
   const lightboxUrl = lightboxItem ? primaryMeterImageUrl(lightboxItem.images) : null;
 
+  const headerSummary =
+    readingsLoading || refreshing
+      ? 'Loading…'
+      : activeFilterCount > 0 || visiblePending.length !== pending.length
+        ? `${visiblePending.length} of ${pending.length} session${pending.length === 1 ? '' : 's'} (${workType})`
+        : `${pending.length} session${pending.length === 1 ? '' : 's'} awaiting review (${workType})`;
+
   return (
     <div className="readings-list-page test-data-pending-page">
       <header className="page-header">
@@ -213,13 +290,7 @@ const TestDataPendingPage: FC = () => {
               <Inbox size={32} strokeWidth={1.5} />
               <div>
                 <h1>Pending test data</h1>
-                <p>
-                  {readingsLoading || refreshing
-                    ? 'Loading…'
-                    : difficultyFilter === 'all'
-                      ? `${pending.length} session${pending.length === 1 ? '' : 's'} awaiting review (${workType})`
-                      : `${visiblePending.length} of ${pending.length} session${pending.length === 1 ? '' : 's'} · ${formatUnitTestDifficultyTag(difficultyFilter)} (${workType})`}
-                </p>
+                <p>{headerSummary}</p>
               </div>
             </div>
           </div>
@@ -246,7 +317,7 @@ const TestDataPendingPage: FC = () => {
       ) : null}
 
       {!readingsLoading && pending.length > 0 ? (
-        <div className="test-data-pending-toolbar">
+        <section className="test-data-pending-toolbar" aria-label="Filter pending test data">
           <div className="test-data-pending-difficulty-filter" role="group" aria-label="Filter by difficulty">
             <span className="test-data-pending-difficulty-filter-label">Difficulty</span>
             {DIFFICULTY_FILTERS.map((f) => {
@@ -271,12 +342,78 @@ const TestDataPendingPage: FC = () => {
               );
             })}
           </div>
-        </div>
+
+          <div className="test-data-pending-filter-row">
+            <label className="test-data-pending-filter">
+              <span className="test-data-pending-filter-label">Sent by</span>
+              <select value={sentByFilter} onChange={(e) => setSentByFilter(e.target.value)}>
+                <option value="all">All reviewers</option>
+                {submitterOptions.map((email) => (
+                  <option key={email} value={email}>
+                    {formatSubmitterLabel(email)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="test-data-pending-filter">
+              <span className="test-data-pending-filter-label">Sent date</span>
+              <select
+                value={datePreset}
+                onChange={(e) => setDatePreset(e.target.value as SubmittedDatePreset)}
+              >
+                {DATE_PRESETS.map((preset) => (
+                  <option key={preset} value={preset}>
+                    {preset === 'all' ? 'Any time' : formatPresetLabel(preset as DateRangePresetId)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="test-data-pending-filter">
+              <span className="test-data-pending-filter-label">Sort</span>
+              <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as SortOrder)}>
+                <option value="submitted_desc">Newest sent first</option>
+                <option value="submitted_asc">Oldest sent first</option>
+                <option value="capture_desc">Newest capture first</option>
+              </select>
+            </label>
+
+            {activeFilterCount > 0 ? (
+              <button type="button" className="test-data-pending-clear-filters" onClick={clearFilters}>
+                Clear filters ({activeFilterCount})
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              className="test-data-pending-sort-toggle"
+              title={sortOrder === 'submitted_asc' ? 'Switch to newest first' : 'Switch to oldest first'}
+              aria-label="Toggle sent-date sort direction"
+              onClick={() =>
+                setSortOrder((prev) =>
+                  prev === 'submitted_asc' ? 'submitted_desc' : prev === 'submitted_desc' ? 'submitted_asc' : prev,
+                )
+              }
+              disabled={sortOrder === 'capture_desc'}
+            >
+              {sortOrder === 'submitted_asc' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+            </button>
+          </div>
+        </section>
       ) : null}
 
       {!readingsLoading && pending.length > 0 && visiblePending.length === 0 ? (
         <p className="pipeline-iterations-empty test-data-pending-empty">
-          No sessions match this difficulty filter.
+          No sessions match the current filters.
+          {activeFilterCount > 0 ? (
+            <>
+              {' '}
+              <button type="button" className="test-data-pending-clear-filters" onClick={clearFilters}>
+                Clear filters
+              </button>
+            </>
+          ) : null}
         </p>
       ) : null}
 
@@ -287,6 +424,9 @@ const TestDataPendingPage: FC = () => {
             const thumbUrl = primaryMeterImageUrl(r.images);
             const difficulty = r.imageDifficulty || 'normal';
             const expected = r.expectedValue ?? r.meterValue ?? '—';
+            const submitter = testDataSubmittedBy(r);
+            const submittedAt = testDataSubmittedAtIso(r);
+            const notesPreview = r.comments?.trim();
 
             return (
               <article key={r.id} className="unit-test-images-card test-data-pending-card">
@@ -315,10 +455,25 @@ const TestDataPendingPage: FC = () => {
                 <p className="unit-test-images-expected">
                   Expected: <strong>{expected}</strong>
                 </p>
+                <p className="test-data-pending-card-meta">
+                  <User size={14} aria-hidden />
+                  {submitter ? (
+                    <span title={submitter}>Sent by {formatSubmitterLabel(submitter)}</span>
+                  ) : (
+                    <span className="test-data-pending-card-meta-muted">Sent by unknown</span>
+                  )}
+                </p>
                 <p className="test-data-pending-card-date">
                   <Calendar size={14} aria-hidden />
-                  {formatReadingShortDate(r.dateOfReading)}
+                  {submittedAt
+                    ? `Sent ${formatReadingShortDate(submittedAt)}`
+                    : `Captured ${formatReadingShortDate(r.dateOfReading)}`}
                 </p>
+                {notesPreview ? (
+                  <p className="test-data-pending-card-notes" title={notesPreview}>
+                    {notesPreview.length > 72 ? `${notesPreview.slice(0, 72)}…` : notesPreview}
+                  </p>
+                ) : null}
 
                 <div className="unit-test-images-card-actions test-data-pending-card-actions">
                   <button
