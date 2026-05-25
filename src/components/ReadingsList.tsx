@@ -1149,7 +1149,7 @@ const ReadingsList: FC = () => {
                   key={reading.id} 
                   className={selectedIds.has(reading.id) ? 'selected' : ''}
                 >
-                  <td className="checkbox-col">
+                  <td className="checkbox-col" data-label="Select">
                     <button 
                       className={`checkbox-button ${selectedIds.has(reading.id) ? 'checked' : ''}`}
                       onClick={() => toggleSelect(reading.id)}
@@ -1157,7 +1157,7 @@ const ReadingsList: FC = () => {
                       {selectedIds.has(reading.id) ? <CheckSquare size={18} /> : <Square size={18} />}
                     </button>
                   </td>
-                  <td>
+                  <td data-label="Location">
                     <div
                       className="cell-with-icon"
                       title={
@@ -1172,7 +1172,7 @@ const ReadingsList: FC = () => {
                       <span>{reading.location}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Source">
                     <div className={`type-badge ${reading.type}`}>
                       {reading.type === 'simulator' ? (
                         <Monitor size={14} />
@@ -1182,7 +1182,7 @@ const ReadingsList: FC = () => {
                       <span>{reading.type === 'simulator' ? 'Simulator' : 'Field'}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <span className="readings-status-cell">
                       {(() => {
                         const { label, color } = getReadingListStatusDisplay(reading);
@@ -1206,13 +1206,13 @@ const ReadingsList: FC = () => {
                       ) : null}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Date">
                     <div className="cell-with-icon">
                       <Calendar size={16} className="cell-icon" />
                       <span>{formatReadingShortDate(reading.dateOfReading)}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Captured by">
                     <div className="cell-with-icon readings-col-captured">
                       <User size={16} className="cell-icon" aria-hidden />
                       <span className="readings-col-captured-text" title={reading.userName || undefined}>
@@ -1220,10 +1220,10 @@ const ReadingsList: FC = () => {
                       </span>
                     </div>
                   </td>
-                  <td className="readings-td-meter-value">
+                  <td className="readings-td-meter-value" data-label="Meter value">
                     <span className="meter-value">{reading.meterValue}</span>
                   </td>
-                  <td className="readings-col-confidence">
+                  <td className="readings-col-confidence" data-label="Confidence">
                     {(() => {
                       const c = effectiveConfidenceForDisplay(reading);
                       if (c === undefined) {
@@ -1244,11 +1244,11 @@ const ReadingsList: FC = () => {
                     })()}
                   </td>
                   {showImagesColumn ? (
-                    <td className="readings-col-images">
+                    <td className="readings-col-images" data-label="Images">
                       <span className="meter-value">{reading.imageCount ?? (Array.isArray(reading.images) ? reading.images.length : 0)}</span>
                     </td>
                   ) : null}
-                  <td>
+                  <td data-label="Actions">
                     <button
                       className="view-button"
                       onClick={() => {

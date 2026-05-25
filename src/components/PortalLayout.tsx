@@ -58,22 +58,29 @@ function navLeafActive(pathname: string, search: string, item: NavLeaf): boolean
 
 const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
-const TEST_DATA_NAV: NavLeaf[] = [
-  {
-    path: '/test-data/pending',
-    label: 'Pending test data',
-    description: 'Reviewer → test dataset',
-    hint: 'Sessions marked send to test dataset, not yet approved',
-    icon: <Inbox size={17} strokeWidth={2} />,
-  },
-  {
-    path: '/test-data/images',
-    label: 'Unit test images',
-    description: 'unittestng_manifest.json',
-    hint: 'Flat images under unit_test_images/',
-    icon: <ImageIcon size={17} strokeWidth={2} />,
-  },
-];
+const UNIT_TEST_IMAGES_NAV: NavLeaf = {
+  path: '/test-data/images',
+  label: 'Unit test images',
+  description: 'unittestng_manifest.json',
+  hint: 'Flat images under unit_test_images/',
+  icon: <ImageIcon size={17} strokeWidth={2} />,
+};
+
+const UNIT_TEST_RUNS_NAV: NavLeaf = {
+  path: '/unit-test/results',
+  label: 'Unit test runs',
+  description: 'iOS CSV exports',
+  hint: 'Batch results · accuracy · download',
+  icon: <ClipboardList size={17} strokeWidth={2} />,
+};
+
+const TEST_DATA_PENDING_NAV: NavLeaf = {
+  path: '/test-data/pending',
+  label: 'Pending test data',
+  description: 'Reviewer → test dataset',
+  hint: 'Sessions marked send to test dataset, not yet approved',
+  icon: <Inbox size={17} strokeWidth={2} />,
+};
 
 const PortalLayout: FC = () => {
   const navigate = useNavigate();
@@ -150,7 +157,8 @@ const PortalLayout: FC = () => {
             hint: 'Session counts and trends',
           },
           ...manualUploadNav,
-          ...TEST_DATA_NAV,
+          UNIT_TEST_IMAGES_NAV,
+          TEST_DATA_PENDING_NAV,
         ],
       };
     }
@@ -212,13 +220,8 @@ const PortalLayout: FC = () => {
             hint: 'Planning → data → label → train → test → deployed',
             icon: <Factory size={17} strokeWidth={2} />,
           },
-          {
-            path: '/unit-test/results',
-            label: 'Unit test runs',
-            description: 'iOS CSV exports',
-            hint: 'Batch results · accuracy · download',
-            icon: <ClipboardList size={17} strokeWidth={2} />,
-          },
+          UNIT_TEST_IMAGES_NAV,
+          UNIT_TEST_RUNS_NAV,
           {
             path: '/pipeline-iterations',
             label: 'Pipeline',
@@ -240,7 +243,7 @@ const PortalLayout: FC = () => {
             hint: 'Filter by cohort, version, date',
             icon: <ListTree size={17} />,
           },
-          ...TEST_DATA_NAV,
+          TEST_DATA_PENDING_NAV,
         ],
       };
     }
@@ -272,13 +275,8 @@ const PortalLayout: FC = () => {
           hint: 'Planning → data → label → train → test → deployed',
           icon: <Factory size={17} strokeWidth={2} />,
         },
-        {
-          path: '/unit-test/results',
-          label: 'Unit test runs',
-          description: 'iOS CSV exports',
-          hint: 'Batch results · accuracy · download',
-          icon: <ClipboardList size={17} strokeWidth={2} />,
-        },
+        UNIT_TEST_IMAGES_NAV,
+        UNIT_TEST_RUNS_NAV,
         {
           path: '/pipeline-iterations',
           label: 'Pipeline',
@@ -286,7 +284,7 @@ const PortalLayout: FC = () => {
           hint: 'Same registry as factory (detailed edit)',
           icon: <Layers size={17} strokeWidth={2} />,
         },
-        ...TEST_DATA_NAV,
+        TEST_DATA_PENDING_NAV,
       ],
     };
   }, [workMode]);

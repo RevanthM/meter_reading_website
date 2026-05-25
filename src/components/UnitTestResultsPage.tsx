@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ArrowDown, ArrowLeft, ArrowUp, ClipboardList, Download, Loader2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  BarChart3,
+  Calendar,
+  ClipboardList,
+  Download,
+  Filter,
+  Loader2,
+  Smartphone,
+  User,
+} from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import {
   fetchPipelineIterations,
   fetchUnitTestRunDownloadUrl,
   fetchUnitTestRuns,
+  type PipelineIterationRecord,
   type UnitTestRunIndexRow,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -52,6 +65,13 @@ function formatPct(value: number | null | undefined): string {
   return `${value.toFixed(1)}%`;
 }
 
+function accuracyStatClass(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'unit-test-run-stat-value--muted';
+  if (value >= 90) return 'unit-test-run-stat-value--good';
+  if (value >= 75) return 'unit-test-run-stat-value--mid';
+  return 'unit-test-run-stat-value--low';
+}
+
 function matchesDatePreset(run: EnrichedUnitTestRun, preset: DatePresetFilter): boolean {
   if (preset === 'all') return true;
   if (!isDateRangePresetId(preset)) return true;
@@ -77,14 +97,25 @@ function PipelineBadge({ line, label }: { line: FactoryProductLine; label: strin
   );
 }
 
+function averageMetric(
+  runs: EnrichedUnitTestRun[],
+  pick: (r: EnrichedUnitTestRun) => number | null | undefined,
+): number | null {
+  const vals = runs.map(pick).filter((v): v is number => v != null && Number.isFinite(v));
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
 const UnitTestResultsPage: FC = () => {
   const navigate = useNavigate();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
   const [loading, setLoading] = useState(true);
+  const [metricsLoading, setMetricsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [runs, setRuns] = useState<UnitTestRunIndexRow[]>([]);
+  const [iterations, setIterations] = useState<PipelineIterationRecord[]>([]);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
 
   const [productLineFilter, setProductLineFilter] = useState<ProductLineFilter>('all');
@@ -96,23 +127,29 @@ const UnitTestResultsPage: FC = () => {
   const workMode = outletCtx?.workMode;
   const allowed = workMode === 'admin' || workMode === 'labeler';
 
-  const loadRuns = useCallback(async () => {
+  /** S3 key list only — one list call, no per-CSV summary reads. */
+  const loadRunKeys = useCallback(async () => {
     setErr(null);
+    const runsRes = await fetchUnitTestRuns(workType);
+    setRuns(runsRes.runs);
+  }, [workType]);
+
+  /** Up to ~50 CSV summary heads from S3 + pipeline registry for iteration links. */
+  const loadRunMetrics = useCallback(async () => {
+    setMetricsLoading(true);
     try {
-      const [runsRes, iterationsRes] = await Promise.all([
+      const [summaryRes, iterationsRes] = await Promise.all([
         fetchUnitTestRuns(workType, { includeSummary: true }),
         fetchPipelineIterations(),
       ]);
-      setRuns(runsRes.runs);
-      void iterationsRes;
-      return iterationsRes.iterations ?? [];
+      setRuns(summaryRes.runs);
+      setIterations(iterationsRes.iterations ?? []);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to load unit test runs');
-      return [];
+      setErr(e instanceof Error ? e.message : 'Failed to load run metrics');
+    } finally {
+      setMetricsLoading(false);
     }
   }, [workType]);
-
-  const [iterations, setIterations] = useState<Awaited<ReturnType<typeof loadRuns>>>([]);
 
   useEffect(() => {
     if (!allowed) {
@@ -122,13 +159,25 @@ const UnitTestResultsPage: FC = () => {
 
   useEffect(() => {
     if (!allowed) return;
+    let cancelled = false;
     setLoading(true);
     void (async () => {
-      const iters = await loadRuns();
-      setIterations(iters);
-      setLoading(false);
+      try {
+        await loadRunKeys();
+      } catch (e) {
+        if (!cancelled) {
+          setErr(e instanceof Error ? e.message : 'Failed to load unit test runs');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+      if (cancelled) return;
+      await loadRunMetrics();
     })();
-  }, [allowed, loadRuns]);
+    return () => {
+      cancelled = true;
+    };
+  }, [allowed, loadRunKeys, loadRunMetrics]);
 
   const enrichedRuns = useMemo(
     () => enrichUnitTestRuns(runs, iterations),
@@ -186,6 +235,16 @@ const UnitTestResultsPage: FC = () => {
     return list;
   }, [enrichedRuns, productLineFilter, iterationFilter, datePreset, runByFilter, sortOrder]);
 
+  const filteredSummary = useMemo(() => {
+    const avgAccuracy = averageMetric(filteredRuns, (r) => r.accuracyPercent);
+    const avgConfidence = averageMetric(filteredRuns, (r) => r.averageConfidencePct);
+    const totalImages = filteredRuns.reduce(
+      (sum, r) => sum + (r.imagesProcessed != null && Number.isFinite(r.imagesProcessed) ? r.imagesProcessed : 0),
+      0,
+    );
+    return { avgAccuracy, avgConfidence, totalImages };
+  }, [filteredRuns]);
+
   const activeFilterCount = [
     productLineFilter !== 'all',
     iterationFilter !== 'all',
@@ -195,13 +254,16 @@ const UnitTestResultsPage: FC = () => {
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
+    setErr(null);
     try {
-      const iters = await loadRuns();
-      setIterations(iters);
+      await loadRunKeys();
+      await loadRunMetrics();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to refresh unit test runs');
     } finally {
       setRefreshing(false);
     }
-  }, [loadRuns]);
+  }, [loadRunKeys, loadRunMetrics]);
 
   const clearFilters = () => {
     setProductLineFilter('all');
@@ -232,22 +294,23 @@ const UnitTestResultsPage: FC = () => {
 
   return (
     <div className="readings-list-page unit-test-results-page">
-      <header className="page-header">
+      <header className="page-header unit-test-results-page-header">
         <div className="header-content list-page-header-with-actions">
           <div className="list-page-header-lead">
             <button type="button" className="back-button" onClick={() => navigate('/')}>
               <ArrowLeft size={20} />
-              <span>Back to Dashboard</span>
+              <span>Back</span>
             </button>
             <div className="page-title">
               <ClipboardList size={32} strokeWidth={1.5} />
               <div>
                 <h1>Unit test results</h1>
                 <p>
-                  iOS batch exports · work type {workType}
-                  {enrichedRuns.length
+                  iOS batch CSV exports · work type {workType}
+                  {!loading && enrichedRuns.length > 0
                     ? ` · ${filteredRuns.length} of ${enrichedRuns.length} run${enrichedRuns.length === 1 ? '' : 's'}`
                     : ''}
+                  {metricsLoading ? ' · loading metrics…' : ''}
                 </p>
               </div>
             </div>
@@ -257,179 +320,252 @@ const UnitTestResultsPage: FC = () => {
       </header>
 
       {err ? (
-        <div className="login-error" style={{ margin: '1rem 1.5rem' }}>
+        <div className="unit-test-results-alert" role="alert">
           <span>{err}</span>
         </div>
       ) : null}
 
       {!loading && enrichedRuns.length > 0 ? (
-        <div className="unit-test-results-toolbar">
-          <div className="model-factory-product-filters" role="group" aria-label="Pipeline product line">
-            <button
-              type="button"
-              className={`model-factory-product-filter${productLineFilter === 'all' ? ' model-factory-product-filter--active' : ''}`}
-              onClick={() => setProductLineFilter('all')}
-            >
-              All pipelines
-              <span className="model-factory-product-filter-count">{enrichedRuns.length}</span>
-            </button>
-            {FACTORY_PRODUCT_LINES.map((pl) => (
+        <>
+          <section className="unit-test-results-summary" aria-label="Filtered run summary">
+            <div className="unit-test-results-summary-card">
+              <span className="unit-test-results-summary-label">Runs shown</span>
+              <span className="unit-test-results-summary-value">{filteredRuns.length.toLocaleString()}</span>
+            </div>
+            <div className="unit-test-results-summary-card">
+              <span className="unit-test-results-summary-label">Avg accuracy</span>
+              <span
+                className={`unit-test-results-summary-value ${metricsLoading ? 'unit-test-run-stat-value--muted' : accuracyStatClass(filteredSummary.avgAccuracy)}`}
+              >
+                {metricsLoading ? '…' : formatPct(filteredSummary.avgAccuracy)}
+              </span>
+            </div>
+            <div className="unit-test-results-summary-card">
+              <span className="unit-test-results-summary-label">Avg confidence</span>
+              <span
+                className={`unit-test-results-summary-value${metricsLoading ? ' unit-test-run-stat-value--muted' : ''}`}
+              >
+                {metricsLoading ? '…' : formatPct(filteredSummary.avgConfidence)}
+              </span>
+            </div>
+            <div className="unit-test-results-summary-card">
+              <span className="unit-test-results-summary-label">Images tested</span>
+              <span
+                className={`unit-test-results-summary-value${metricsLoading ? ' unit-test-run-stat-value--muted' : ''}`}
+              >
+                {metricsLoading
+                  ? '…'
+                  : filteredSummary.totalImages > 0
+                    ? filteredSummary.totalImages.toLocaleString()
+                    : '—'}
+              </span>
+            </div>
+          </section>
+
+          <section className="unit-test-results-filters-panel" aria-label="Filter unit test runs">
+            <div className="unit-test-results-filters-head">
+              <Filter size={16} aria-hidden />
+              <span>Filters</span>
+              {activeFilterCount > 0 ? (
+                <button type="button" className="unit-test-results-clear-filters" onClick={clearFilters}>
+                  Clear ({activeFilterCount})
+                </button>
+              ) : null}
+            </div>
+
+            <div className="model-factory-product-filters unit-test-results-pipeline-filters" role="group" aria-label="Pipeline product line">
               <button
-                key={pl.id}
                 type="button"
-                className={`model-factory-product-filter model-factory-product-filter--${pl.id}${productLineFilter === pl.id ? ' model-factory-product-filter--active' : ''}`}
-                onClick={() => setProductLineFilter(pl.id as ProductLineFilter)}
-                title={pl.label}
+                className={`model-factory-product-filter${productLineFilter === 'all' ? ' model-factory-product-filter--active' : ''}`}
+                onClick={() => setProductLineFilter('all')}
               >
-                {pl.short}
-                <span className="model-factory-product-filter-count">
-                  {(pl.id === 'p1' || pl.id === 'p2' || pl.id === 'p3')
-                    ? (productLineCounts.get(pl.id) ?? 0)
-                    : 0}
-                </span>
+                All pipelines
+                <span className="model-factory-product-filter-count">{enrichedRuns.length}</span>
               </button>
-            ))}
-          </div>
+              {FACTORY_PRODUCT_LINES.map((pl) => (
+                <button
+                  key={pl.id}
+                  type="button"
+                  className={`model-factory-product-filter model-factory-product-filter--${pl.id}${productLineFilter === pl.id ? ' model-factory-product-filter--active' : ''}`}
+                  onClick={() => setProductLineFilter(pl.id as ProductLineFilter)}
+                  title={pl.label}
+                >
+                  {pl.short}
+                  <span className="model-factory-product-filter-count">
+                    {(pl.id === 'p1' || pl.id === 'p2' || pl.id === 'p3')
+                      ? (productLineCounts.get(pl.id) ?? 0)
+                      : 0}
+                  </span>
+                </button>
+              ))}
+            </div>
 
-          <div className="unit-test-results-filter-row">
-            <label className="unit-test-results-filter">
-              <span className="unit-test-results-filter-label">Iteration</span>
-              <select
-                value={iterationFilter === 'all' ? 'all' : String(iterationFilter)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setIterationFilter(v === 'all' ? 'all' : parseInt(v, 10));
-                }}
+            <div className="unit-test-results-filter-row">
+              <label className="unit-test-results-filter">
+                <span className="unit-test-results-filter-label">Iteration</span>
+                <select
+                  value={iterationFilter === 'all' ? 'all' : String(iterationFilter)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setIterationFilter(v === 'all' ? 'all' : parseInt(v, 10));
+                  }}
+                >
+                  <option value="all">All</option>
+                  {iterationOptions.map((n) => (
+                    <option key={n} value={n}>
+                      #{n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="unit-test-results-filter">
+                <span className="unit-test-results-filter-label">Date</span>
+                <select value={datePreset} onChange={(e) => setDatePreset(e.target.value as DatePresetFilter)}>
+                  <option value="all">All dates</option>
+                  {(['today', 'yesterday', 'last7', 'last30'] as const).map((p) => (
+                    <option key={p} value={p}>
+                      {formatPresetLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="unit-test-results-filter">
+                <span className="unit-test-results-filter-label">Run by</span>
+                <select value={runByFilter} onChange={(e) => setRunByFilter(e.target.value)}>
+                  <option value="all">Anyone</option>
+                  {runByOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="unit-test-results-filter">
+                <span className="unit-test-results-filter-label">Sort</span>
+                <select
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                  aria-label="Sort by run date"
+                >
+                  <option value="desc">Newest first</option>
+                  <option value="asc">Oldest first</option>
+                </select>
+              </label>
+
+              <button
+                type="button"
+                className="unit-test-results-sort-toggle"
+                onClick={() => setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+                title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+                aria-label={sortOrder === 'desc' ? 'Switch to oldest first' : 'Switch to newest first'}
               >
-                <option value="all">All</option>
-                {iterationOptions.map((n) => (
-                  <option key={n} value={n}>
-                    #{n}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="unit-test-results-filter">
-              <span className="unit-test-results-filter-label">Date</span>
-              <select value={datePreset} onChange={(e) => setDatePreset(e.target.value as DatePresetFilter)}>
-                <option value="all">All dates</option>
-                {(['today', 'yesterday', 'last7', 'last30'] as const).map((p) => (
-                  <option key={p} value={p}>
-                    {formatPresetLabel(p)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="unit-test-results-filter">
-              <span className="unit-test-results-filter-label">Run by</span>
-              <select value={runByFilter} onChange={(e) => setRunByFilter(e.target.value)}>
-                <option value="all">Anyone</option>
-                {runByOptions.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="unit-test-results-filter">
-              <span className="unit-test-results-filter-label">Sort</span>
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                aria-label="Sort by run date"
-              >
-                <option value="desc">Newest first</option>
-                <option value="asc">Oldest first</option>
-              </select>
-            </label>
-
-            <button
-              type="button"
-              className="unit-test-results-sort-toggle"
-              onClick={() => setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
-              title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
-              aria-label={sortOrder === 'desc' ? 'Switch to oldest first' : 'Switch to newest first'}
-            >
-              {sortOrder === 'desc' ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
-            </button>
-
-            {activeFilterCount > 0 ? (
-              <button type="button" className="login-link-btn" onClick={clearFilters}>
-                Clear filters ({activeFilterCount})
+                {sortOrder === 'desc' ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
               </button>
-            ) : null}
-          </div>
-        </div>
+            </div>
+          </section>
+        </>
       ) : null}
 
       {loading ? (
         <ListViewLoading message="Loading unit test runs…" />
       ) : enrichedRuns.length === 0 ? (
-        <p className="pipeline-iterations-empty" style={{ padding: '2rem 1.5rem' }}>
-          No unit test CSV exports found under <code>{workType}/unit_test_results/</code>.
-        </p>
+        <div className="unit-test-results-empty">
+          <BarChart3 size={40} strokeWidth={1.25} aria-hidden />
+          <p>
+            No unit test CSV exports found under <code>{workType}/unit_test_results/</code>.
+          </p>
+          <p className="unit-test-results-empty-hint">Run a batch from the iOS app to populate this list.</p>
+        </div>
       ) : filteredRuns.length === 0 ? (
-        <p className="pipeline-iterations-empty" style={{ padding: '2rem 1.5rem' }}>
-          No runs match the current filters.
-        </p>
+        <div className="unit-test-results-empty">
+          <Filter size={40} strokeWidth={1.25} aria-hidden />
+          <p>No runs match the current filters.</p>
+          <button type="button" className="unit-test-results-clear-filters" onClick={clearFilters}>
+            Clear filters
+          </button>
+        </div>
       ) : (
-        <div className="unit-test-results-table-wrap">
-          <table className="pipeline-iterations-table pipeline-iterations-table--compact unit-test-results-table">
-            <thead>
-              <tr>
-                <th>Run time</th>
-                <th>Run by</th>
-                <th>Pipeline</th>
-                <th>Iteration</th>
-                <th>Images</th>
-                <th>App version</th>
-                <th>Accuracy</th>
-                <th>Confidence</th>
-                <th aria-label="Download" />
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRuns.map((run) => (
-                <tr key={run.key}>
-                  <td>{formatRunTimestamp(run.runTimestamp)}</td>
-                  <td>{run.runBy?.trim() || '—'}</td>
-                  <td className="unit-test-results-td-pipeline">
-                    <PipelineBadge line={run.productLine} label={pipelineBadgeLabel(run)} />
-                    {run.pipelineVersion ? (
-                      <span className="unit-test-results-pipeline-version" title="Model version from CSV">
-                        v{run.pipelineVersion}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td>{run.iterationNumber != null ? `#${run.iterationNumber}` : '—'}</td>
-                  <td>{run.imagesProcessed != null ? run.imagesProcessed : '—'}</td>
-                  <td>{run.appVersion?.trim() || '—'}</td>
-                  <td>{formatPct(run.accuracyPercent)}</td>
-                  <td>{formatPct(run.averageConfidencePct)}</td>
-                  <td>
+        <ul className="unit-test-runs-list">
+          {filteredRuns.map((run) => {
+            const busy = downloadingKey === run.key;
+            const fileLabel = run.fileName || run.key.split('/').pop() || 'unit-test.csv';
+            return (
+              <li key={run.key}>
+                <article className="unit-test-run-card">
+                  <header className="unit-test-run-card-header">
+                    <div className="unit-test-run-card-when">
+                      <Calendar size={16} aria-hidden />
+                      <time dateTime={run.runTimestamp ?? undefined}>{formatRunTimestamp(run.runTimestamp)}</time>
+                    </div>
                     <button
                       type="button"
-                      className="pipeline-iterations-icon-btn"
-                      title="Download CSV"
-                      aria-label={`Download ${run.fileName}`}
+                      className="unit-test-run-download-btn"
+                      title={`Download ${fileLabel}`}
+                      aria-label={`Download ${fileLabel}`}
                       onClick={() => void handleDownload(run)}
-                      disabled={downloadingKey === run.key}
+                      disabled={busy}
                     >
-                      {downloadingKey === run.key ? (
-                        <Loader2 size={16} className="spin" />
+                      {busy ? (
+                        <Loader2 size={18} className="spin" aria-hidden />
                       ) : (
-                        <Download size={16} />
+                        <Download size={18} aria-hidden />
                       )}
+                      <span>{busy ? 'Preparing…' : 'Download CSV'}</span>
                     </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </header>
+
+                  <p className="unit-test-run-card-filename">
+                    <code title={run.key}>{fileLabel}</code>
+                  </p>
+
+                  <div className="unit-test-run-card-meta">
+                    <span className="unit-test-run-meta-chip">
+                      <User size={14} aria-hidden />
+                      {run.runBy?.trim() || 'Unknown'}
+                    </span>
+                    <span className="unit-test-run-meta-chip unit-test-run-meta-chip--pipeline">
+                      <PipelineBadge line={run.productLine} label={pipelineBadgeLabel(run)} />
+                      {run.pipelineVersion ? (
+                        <span className="unit-test-results-pipeline-version" title="Model version from CSV">
+                          v{run.pipelineVersion}
+                        </span>
+                      ) : null}
+                    </span>
+                    {run.iterationNumber != null ? (
+                      <span className="unit-test-run-meta-chip">Iter #{run.iterationNumber}</span>
+                    ) : null}
+                    {run.appVersion?.trim() ? (
+                      <span className="unit-test-run-meta-chip">
+                        <Smartphone size={14} aria-hidden />
+                        App {run.appVersion.trim()}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <dl className="unit-test-run-card-stats">
+                    <div>
+                      <dt>Images</dt>
+                      <dd>{run.imagesProcessed != null ? run.imagesProcessed.toLocaleString() : '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Accuracy</dt>
+                      <dd className={accuracyStatClass(run.accuracyPercent)}>
+                        {formatPct(run.accuracyPercent)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Confidence</dt>
+                      <dd>{formatPct(run.averageConfidencePct)}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ArrowDown, Download, ImageIcon, Loader2, Trash2 } from 'lucide-react';
+import { ArrowDown, Download, ImageIcon, Loader2, Search, Trash2, X } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import UnitTestImageLightbox from './UnitTestImageLightbox';
@@ -16,6 +16,12 @@ import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { canEditTestData, canViewTestData } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
+
+function matchesFileNameSearch(fileName: string, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return fileName.toLowerCase().includes(q);
+}
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -37,6 +43,7 @@ const UnitTestImagesPage: FC = () => {
   const [downloadingZip, setDownloadingZip] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [fileNameSearch, setFileNameSearch] = useState('');
 
   const loadImages = useCallback(async () => {
     setLoading(true);
@@ -80,11 +87,35 @@ const UnitTestImagesPage: FC = () => {
     void loadImages();
   }, [loadImages]);
 
+  useEffect(() => {
+    setFileNameSearch('');
+    setLightboxIndex(null);
+  }, [workType]);
+
+  const visibleImages = useMemo(
+    () => images.filter((img) => matchesFileNameSearch(img.fileName, fileNameSearch)),
+    [images, fileNameSearch],
+  );
+
+  useEffect(() => {
+    setLightboxIndex((lb) => {
+      if (lb == null) return lb;
+      if (visibleImages.length === 0) return null;
+      if (lb >= visibleImages.length) return visibleImages.length - 1;
+      return lb;
+    });
+  }, [visibleImages.length, fileNameSearch]);
+
   const handleImageUpdated = (previousS3Key: string, updated: UnitTestImageRow) => {
     setImages((prev) => {
       const next = prev.map((row) => (row.s3Key === previousS3Key ? updated : row));
-      const newIdx = next.findIndex((row) => row.s3Key === updated.s3Key);
-      if (newIdx >= 0) setLightboxIndex(newIdx);
+      const visible = next.filter((row) => matchesFileNameSearch(row.fileName, fileNameSearch));
+      const newIdx = visible.findIndex((row) => row.s3Key === updated.s3Key);
+      setLightboxIndex((lb) => {
+        if (lb == null) return lb;
+        if (newIdx < 0) return null;
+        return newIdx;
+      });
       return next;
     });
   };
@@ -101,13 +132,14 @@ const UnitTestImagesPage: FC = () => {
     try {
       await deleteUnitTestImage(workType, img.s3Key, outletCtx?.workMode ?? 'test_data_reviewer');
       setImages((prev) => {
-        const idx = prev.findIndex((row) => row.s3Key === img.s3Key);
         const next = prev.filter((row) => row.s3Key !== img.s3Key);
+        const visibleAfter = next.filter((row) => matchesFileNameSearch(row.fileName, fileNameSearch));
+        const removedVisibleIdx = visibleImages.findIndex((row) => row.s3Key === img.s3Key);
         setLightboxIndex((lb) => {
-          if (lb == null || idx < 0) return lb;
-          if (next.length === 0) return null;
-          if (lb > idx) return lb - 1;
-          if (lb === idx) return Math.min(lb, next.length - 1);
+          if (lb == null || removedVisibleIdx < 0) return lb;
+          if (visibleAfter.length === 0) return null;
+          if (lb > removedVisibleIdx) return lb - 1;
+          if (lb === removedVisibleIdx) return Math.min(lb, visibleAfter.length - 1);
           return lb;
         });
         return next;
@@ -148,21 +180,31 @@ const UnitTestImagesPage: FC = () => {
   };
 
   const imageCount = images.length;
+  const visibleCount = visibleImages.length;
+  const searchActive = fileNameSearch.trim().length > 0;
   const manifestFileName = manifestKey ? manifestKey.split('/').pop() : null;
 
+  const imageCountLabel = (() => {
+    if (loading || err) return null;
+    if (searchActive && imageCount > 0) {
+      return `${visibleCount.toLocaleString()} of ${imageCount.toLocaleString()} ${
+        imageCount === 1 ? 'image' : 'images'
+      }`;
+    }
+    return `${imageCount.toLocaleString()} ${imageCount === 1 ? 'image' : 'images'}`;
+  })();
+
   return (
-    <div className="readings-list-page">
-      <header className="page-header">
+    <div className="readings-list-page unit-test-images-page">
+      <header className="page-header unit-test-images-page-header">
         <div className="header-content list-page-header-with-actions">
           <div className="list-page-header-lead">
             <div className="page-title">
               <ImageIcon size={32} strokeWidth={1.5} />
               <div>
                 <h1>Unit test images</h1>
-                {!loading && !err ? (
-                  <p aria-live="polite">
-                    {imageCount.toLocaleString()} {imageCount === 1 ? 'image' : 'images'}
-                  </p>
+                {!loading && !err && imageCountLabel ? (
+                  <p aria-live="polite">{imageCountLabel}</p>
                 ) : null}
               </div>
             </div>
@@ -204,21 +246,60 @@ const UnitTestImagesPage: FC = () => {
             />
           </div>
         </div>
+
+        {!loading && !err && imageCount > 0 ? (
+          <div className="unit-test-images-search-row">
+            <label className="unit-test-images-search-field">
+              <Search size={18} className="unit-test-images-search-icon" aria-hidden />
+              <input
+                type="search"
+                placeholder="Search by file name (partial match)…"
+                value={fileNameSearch}
+                onChange={(e) => setFileNameSearch(e.target.value)}
+                aria-label="Filter unit test images by file name"
+              />
+              {fileNameSearch ? (
+                <button
+                  type="button"
+                  className="unit-test-images-search-clear"
+                  onClick={() => setFileNameSearch('')}
+                  aria-label="Clear file name search"
+                >
+                  <X size={16} aria-hidden />
+                </button>
+              ) : null}
+            </label>
+            {searchActive ? (
+              <p className="unit-test-images-search-meta" aria-live="polite">
+                Showing <strong>{visibleCount.toLocaleString()}</strong> of{' '}
+                {imageCount.toLocaleString()} images
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       {loading && images.length === 0 ? <ListViewLoading message="Loading unit test images…" /> : null}
       {loading && images.length > 0 ? (
         <ListViewLoading variant="inline" message="Refreshing images…" />
       ) : null}
-      {err ? <p className="training-hub-inline-error">{err}</p> : null}
+      {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
       {!loading && !err && images.length === 0 ? (
-        <p className="pipeline-iterations-empty">No unit test images in this prefix yet.</p>
+        <p className="unit-test-images-page-message pipeline-iterations-empty">
+          No unit test images in this prefix yet.
+        </p>
       ) : null}
 
-      {!loading ? (
-        <div className="unit-test-images-grid">
-          {images.map((img, index) => {
+      {!loading && !err && imageCount > 0 && visibleCount === 0 ? (
+        <p className="unit-test-images-page-message pipeline-iterations-empty">
+          No images match &ldquo;{fileNameSearch.trim()}&rdquo;. Try a shorter or partial file name.
+        </p>
+      ) : null}
+
+      {!loading && visibleCount > 0 ? (
+        <div className="unit-test-images-grid unit-test-images-page-grid">
+          {visibleImages.map((img, index) => {
             const busy = deletingKey === img.s3Key;
             const downloading = downloadingKey === img.s3Key;
             const difficulty = img.imageDifficulty || 'normal';
@@ -280,10 +361,10 @@ const UnitTestImagesPage: FC = () => {
         </div>
       ) : null}
 
-      {lightboxIndex != null && images[lightboxIndex]?.url ? (
+      {lightboxIndex != null && visibleImages[lightboxIndex]?.url ? (
         <UnitTestImageLightbox
           workType={workType}
-          images={images}
+          images={visibleImages}
           index={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onIndexChange={setLightboxIndex}
