@@ -107,7 +107,6 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       return;
     }
     if (readingsLoadStarted.current && allReadings.length > 0) {
-      void loadReadings(dataSource, workType, false, { silent: true });
       return;
     }
     readingsLoadStarted.current = true;

@@ -89,6 +89,9 @@ const TestDataPendingLightbox: FC<Props> = ({
   const [rejecting, setRejecting] = useState(false);
   const panStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  /** True once the reviewer edits the form — blocks late fetch/list sync from wiping in-progress work. */
+  const userEditedRef = useRef(false);
+  const sessionId = listItem?.id ?? null;
 
   const dialRows = useMemo(
     () => (reading ? reconcileDialRowsForReading(reading) : []),
@@ -111,20 +114,34 @@ const TestDataPendingLightbox: FC<Props> = ({
     setComments(row.comments ?? '');
   }, []);
 
+  const markUserEdited = useCallback(() => {
+    userEditedRef.current = true;
+  }, []);
+
   useEffect(() => {
-    if (!listItem) return;
+    if (!sessionId || !listItem) return;
+    userEditedRef.current = false;
+    let cancelled = false;
     setReading(listItem);
     syncFormFromReading(listItem);
     setLoadingDetail(true);
-    void fetchReadingById(listItem.id, (listItem.workType || workType) as WorkType, listItem.s3SessionPrefix)
+    const wt = (listItem.workType || workType) as WorkType;
+    const prefix = listItem.s3SessionPrefix;
+    void fetchReadingById(listItem.id, wt, prefix)
       .then((fresh) => {
-        if (fresh) {
-          setReading(fresh);
+        if (cancelled || !fresh) return;
+        setReading(fresh);
+        if (!userEditedRef.current) {
           syncFormFromReading(fresh);
         }
       })
-      .finally(() => setLoadingDetail(false));
-  }, [listItem, syncFormFromReading, workType]);
+      .finally(() => {
+        if (!cancelled) setLoadingDetail(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, syncFormFromReading, workType]);
 
   const baselineExpected = (reading?.expectedValue ?? reading?.meterValue ?? '').trim();
   const baselineDifficulty = normalizeUnitTestDifficulty(reading?.imageDifficulty);
@@ -211,6 +228,7 @@ const TestDataPendingLightbox: FC<Props> = ({
   }, [resetView, zoom]);
 
   const handleDialChange = (dialIndex: number, digit: number) => {
+    markUserEdited();
     setDialDigits((prev) => {
       const next = [...prev];
       const count = meterDialCount;
@@ -265,6 +283,7 @@ const TestDataPendingLightbox: FC<Props> = ({
       );
       setReading(saved);
       syncFormFromReading(saved);
+      userEditedRef.current = false;
       onReadingUpdated(saved);
       return saved;
     } catch (e) {
@@ -452,7 +471,10 @@ const TestDataPendingLightbox: FC<Props> = ({
                   name="pending-lightbox-difficulty"
                   checked={imageDifficulty === opt.value}
                   disabled={busy || readOnly}
-                  onChange={() => setImageDifficulty(opt.value)}
+                  onChange={() => {
+                    markUserEdited();
+                    setImageDifficulty(opt.value);
+                  }}
                 />
                 {opt.label}
               </label>
@@ -495,7 +517,10 @@ const TestDataPendingLightbox: FC<Props> = ({
               rows={2}
               value={comments}
               disabled={busy || readOnly}
-              onChange={(e) => setComments(e.target.value)}
+              onChange={(e) => {
+                markUserEdited();
+                setComments(e.target.value);
+              }}
               placeholder="Optional review notes"
             />
           </label>
