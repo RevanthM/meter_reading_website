@@ -349,7 +349,7 @@ const TrainingPipelinePage: FC = () => {
                   className="training-pipeline-copied-refresh"
                   disabled={copiedPreviewLoading || !row.folderPrefix}
                   onClick={() => void loadCopiedPreview(row.folderPrefix)}
-                  title="Reload thumbnails from S3"
+                  title="Refresh thumbnails"
                 >
                   {copiedPreviewLoading ? (
                     <Loader2 size={16} className="spin" aria-hidden />

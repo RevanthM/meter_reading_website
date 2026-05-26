@@ -61,24 +61,24 @@ const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 const UNIT_TEST_IMAGES_NAV: NavLeaf = {
   path: '/test-data/images',
   label: 'Unit test images',
-  description: 'unittestng_manifest.json',
-  hint: 'Flat images under unit_test_images/',
+  description: 'Image library',
+  hint: 'Browse images with difficulty tags',
   icon: <ImageIcon size={17} strokeWidth={2} />,
 };
 
 const UNIT_TEST_RUNS_NAV: NavLeaf = {
   path: '/unit-test/results',
-  label: 'Unit test runs',
-  description: 'iOS CSV exports',
-  hint: 'Batch results · accuracy · download',
+  label: 'Unit test results',
+  description: 'Accuracy · confidence',
+  hint: 'Download unit test files',
   icon: <ClipboardList size={17} strokeWidth={2} />,
 };
 
 const TEST_DATA_PENDING_NAV: NavLeaf = {
   path: '/test-data/pending',
   label: 'Pending test data',
-  description: 'Reviewer → test dataset',
-  hint: 'Sessions marked send to test dataset, not yet approved',
+  description: 'Awaiting approval',
+  hint: 'Approve into the unit test image library',
   icon: <Inbox size={17} strokeWidth={2} />,
 };
 
@@ -179,7 +179,7 @@ const PortalLayout: FC = () => {
             path: '/readings/incorrect_new',
             label: 'Awaiting review',
             description: 'New captures, not reviewed',
-            hint: 'Same folder as today; use is_manually_reviewed in metadata (legacy is_human_reviewed still read)',
+            hint: 'New captures not yet reviewed',
             icon: <Inbox size={17} strokeWidth={2} />,
           },
           ...manualUploadNav,
@@ -203,9 +203,9 @@ const PortalLayout: FC = () => {
 
     if (workMode === 'admin') {
       return {
-        roleHint: 'Iteration registry, Model Training Center, manual uploads, and full lists.',
+        roleHint: 'Iterations, Model Training Center, manual uploads, and full lists.',
         navSectionTitle: 'Admin',
-        navSectionSub: 'Dashboard · registry · lists',
+        navSectionSub: 'Dashboard · iterations · lists',
         mainLinks: [
           {
             ...dash,
@@ -225,8 +225,8 @@ const PortalLayout: FC = () => {
           {
             path: '/pipeline-iterations',
             label: 'Pipeline',
-            description: 'Iterations · spreadsheet',
-            hint: 'Same registry as factory (detailed edit)',
+            description: 'Iterations · metrics',
+            hint: 'Manage iteration details',
             icon: <Layers size={17} strokeWidth={2} />,
           },
           {
@@ -280,7 +280,7 @@ const PortalLayout: FC = () => {
         {
           path: '/pipeline-iterations',
           label: 'Pipeline',
-          description: 'Iterations · spreadsheet',
+          description: 'Iterations · metrics',
           hint: 'Same registry as factory (detailed edit)',
           icon: <Layers size={17} strokeWidth={2} />,
         },

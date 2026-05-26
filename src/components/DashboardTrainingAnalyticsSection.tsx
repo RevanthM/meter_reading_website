@@ -134,7 +134,7 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
           className="dashboard-report-pdf-btn"
           onClick={() => void handleGeneratePdf()}
           disabled={pdfGenerating || selectedIds.size === 0}
-          title="Download PDF with pipeline charts and unit test analytics"
+          title="Download PDF with pipeline charts and unit test results"
         >
           {pdfGenerating ? <Loader2 size={16} className="spin" /> : <FileDown size={16} />}
           <span>{pdfGenerating ? 'Building PDF…' : 'Generate report PDF'}</span>
@@ -160,18 +160,18 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
                   {' '}
                   —{' '}
                   <button type="button" className="training-hub-text-btn" onClick={onOpenRegistry}>
-                    edit in registry
+                    Manage iterations
                   </button>
                 </>
               ) : null}
-              . Check iterations on All details to include in the PDF report and load unit-test CSV analytics.
+              . Select iterations on All details to include in the PDF report and unit test results.
             </p>
-            {loading ? <p className="dashboard-section-loading-hint">Loading registry…</p> : null}
+            {loading ? <p className="dashboard-section-loading-hint">Loading iterations…</p> : null}
             {pdfError ? <p className="dashboard-report-error">{pdfError}</p> : null}
           </div>
         ) : (
           <div className="dashboard-section-head--graphs-only-inner">
-            {loading ? <p className="dashboard-section-loading-hint">Loading registry…</p> : null}
+            {loading ? <p className="dashboard-section-loading-hint">Loading iterations…</p> : null}
             {pdfError ? <p className="dashboard-report-error">{pdfError}</p> : null}
           </div>
         )}
@@ -181,7 +181,7 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
       {loading && !rows.length ? (
         <div className="chart-empty chart-empty--tight">
           <Loader2 size={28} className="spin" />
-          <span>Loading pipeline registry…</span>
+          <span>Loading iterations…</span>
         </div>
       ) : rows.length ? (
         <div ref={reportRootRef} className="dashboard-report-capture-root">
@@ -205,7 +205,7 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
           <p>No pipeline iterations yet.</p>
           {isAdmin && onOpenRegistry ? (
             <button type="button" className="view-button" onClick={onOpenRegistry}>
-              Open registry
+              Manage iterations
             </button>
           ) : null}
         </div>

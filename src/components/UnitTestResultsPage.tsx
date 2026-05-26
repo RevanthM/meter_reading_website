@@ -25,6 +25,7 @@ import {
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { PORTAL_DISPLAY_TIME_ZONE, calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
+import { formatUnitTestRunCardHeadline } from '../utils/unitTestDisplayLabels';
 import {
   FACTORY_PRODUCT_LINES,
   type FactoryProductLine,
@@ -306,7 +307,7 @@ const UnitTestResultsPage: FC = () => {
               <div>
                 <h1>Unit test results</h1>
                 <p>
-                  iOS batch CSV exports · work type {workType}
+                  Unit test results · work type {workType}
                   {!loading && enrichedRuns.length > 0
                     ? ` · ${filteredRuns.length} of ${enrichedRuns.length} run${enrichedRuns.length === 1 ? '' : 's'}`
                     : ''}
@@ -470,19 +471,19 @@ const UnitTestResultsPage: FC = () => {
       ) : null}
 
       {loading ? (
-        <ListViewLoading message="Loading unit test runs…" />
+        <ListViewLoading message="Loading unit test results…" />
       ) : enrichedRuns.length === 0 ? (
         <div className="unit-test-results-empty">
           <BarChart3 size={40} strokeWidth={1.25} aria-hidden />
           <p>
-            No unit test CSV exports found under <code>{workType}/unit_test_results/</code>.
+            No results yet.
           </p>
-          <p className="unit-test-results-empty-hint">Run a batch from the iOS app to populate this list.</p>
+          <p className="unit-test-results-empty-hint">Results appear here after a unit test completes.</p>
         </div>
       ) : filteredRuns.length === 0 ? (
         <div className="unit-test-results-empty">
           <Filter size={40} strokeWidth={1.25} aria-hidden />
-          <p>No runs match the current filters.</p>
+          <p>No results match the current filters.</p>
           <button type="button" className="unit-test-results-clear-filters" onClick={clearFilters}>
             Clear filters
           </button>
@@ -491,7 +492,14 @@ const UnitTestResultsPage: FC = () => {
         <ul className="unit-test-runs-list">
           {filteredRuns.map((run) => {
             const busy = downloadingKey === run.key;
-            const fileLabel = run.fileName || run.key.split('/').pop() || 'unit-test.csv';
+            const headline = formatUnitTestRunCardHeadline({
+              runTimestamp: run.runTimestamp,
+              generatedUtc: run.generatedUtc,
+              accuracyPercent: run.accuracyPercent,
+              imagesProcessed: run.imagesProcessed,
+              pipelineDisplayName: run.pipelineDisplayName,
+              pipelineId: run.pipelineId,
+            });
             return (
               <li key={run.key}>
                 <article className="unit-test-run-card">
@@ -503,8 +511,8 @@ const UnitTestResultsPage: FC = () => {
                     <button
                       type="button"
                       className="unit-test-run-download-btn"
-                      title={`Download ${fileLabel}`}
-                      aria-label={`Download ${fileLabel}`}
+                      title="Download unit test file"
+                      aria-label="Download unit test file"
                       onClick={() => void handleDownload(run)}
                       disabled={busy}
                     >
@@ -513,13 +521,11 @@ const UnitTestResultsPage: FC = () => {
                       ) : (
                         <Download size={18} aria-hidden />
                       )}
-                      <span>{busy ? 'Preparing…' : 'Download CSV'}</span>
+                      <span>{busy ? 'Preparing…' : 'Download unit test file'}</span>
                     </button>
                   </header>
 
-                  <p className="unit-test-run-card-filename">
-                    <code title={run.key}>{fileLabel}</code>
-                  </p>
+                  <p className="unit-test-run-card-filename">{headline}</p>
 
                   <div className="unit-test-run-card-meta">
                     <span className="unit-test-run-meta-chip">
@@ -529,7 +535,7 @@ const UnitTestResultsPage: FC = () => {
                     <span className="unit-test-run-meta-chip unit-test-run-meta-chip--pipeline">
                       <PipelineBadge line={run.productLine} label={pipelineBadgeLabel(run)} />
                       {run.pipelineVersion ? (
-                        <span className="unit-test-results-pipeline-version" title="Model version from CSV">
+                        <span className="unit-test-results-pipeline-version" title="Model version">
                           v{run.pipelineVersion}
                         </span>
                       ) : null}

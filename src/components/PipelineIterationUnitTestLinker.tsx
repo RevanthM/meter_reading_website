@@ -10,6 +10,7 @@ import {
   pickNewestLink,
   unitTestSummaryToLinkMeta,
 } from '../utils/unitTestIterationLink';
+import { formatUnitTestResultsSummary } from '../utils/unitTestDisplayLabels';
 
 type Props = {
   workType: WorkType;
@@ -72,7 +73,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
         }),
       );
     } catch (e) {
-      setRunsError(e instanceof Error ? e.message : 'Failed to load unit test CSVs from S3.');
+      setRunsError(e instanceof Error ? e.message : 'Could not load unit test files.');
       setRuns([]);
     } finally {
       setRunsLoading(false);
@@ -87,7 +88,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
 
   const linkRun = async (key: string, fileName: string) => {
     if (linkedKeys.has(key)) {
-      setLocalMsg('That CSV is already linked to this iteration.');
+      setLocalMsg('This unit test file is already attached to this iteration.');
       return;
     }
     setLinkingKey(key);
@@ -96,10 +97,18 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
       const detail = await fetchUnitTestRunDetail(key, { includeRows: false });
       const meta = unitTestSummaryToLinkMeta(key, fileName, detail.summary);
       onLinkedChange([...linked, meta]);
-      setLocalMsg(`Linked ${meta.fileName || fileName}.`);
+      setLocalMsg(
+        `Attached ${formatUnitTestResultsSummary({
+          pipelineDisplayName: meta.pipelineDisplayName,
+          pipelineId: meta.pipelineId,
+          generatedUtc: meta.generatedUtc,
+          accuracyPercent: meta.accuracyPercent,
+          imagesProcessed: meta.imagesProcessed,
+        })}.`,
+      );
       setPickerOpen(false);
     } catch (e) {
-      setLocalMsg(e instanceof Error ? e.message : 'Failed to read CSV from S3.');
+      setLocalMsg(e instanceof Error ? e.message : 'Could not read unit test file.');
     } finally {
       setLinkingKey(null);
     }
@@ -113,7 +122,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
   const applyFromLinked = async () => {
     const target = pickNewestLink(linked);
     if (!target) {
-      setLocalMsg('Link a unit test CSV first.');
+      setLocalMsg('Attach a unit test file first.');
       return;
     }
     setApplyBusy(true);
@@ -136,12 +145,12 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
       const fields =
         appliedLabels.length > 0
           ? appliedLabels.join(', ')
-          : 'summary only (no per-dial rows in CSV)';
+          : 'summary only (no per-dial detail)';
       setLocalMsg(
-        `Applied from ${target.fileName || 'CSV'}: ${fields}. Accuracy ${fmtPct(target.accuracyPercent)}, ${target.imagesProcessed ?? detail.perImageCount ?? '—'} images. Scroll down to review fields.`,
+        `Metrics applied: ${fields}. Accuracy ${fmtPct(target.accuracyPercent)}, ${target.imagesProcessed ?? detail.perImageCount ?? '—'} images. Scroll down to review fields.`,
       );
     } catch (e) {
-      setLocalMsg(e instanceof Error ? e.message : 'Failed to apply metrics from CSV.');
+      setLocalMsg(e instanceof Error ? e.message : 'Could not apply metrics from unit test file.');
     } finally {
       setApplyBusy(false);
     }
@@ -166,16 +175,15 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
 
   return (
     <fieldset className="pipeline-iteration-form-section pipeline-iteration-ut-section">
-      <legend>Unit test CSV (S3)</legend>
+      <legend>Unit test file</legend>
       <p className="pipeline-iteration-form-hint">
-        Link exports from <code>{workType}/unit_test_results/</code> on the training bucket. Saves with{' '}
-        Use <strong>Save &amp; sync to S3</strong> in the modal to persist links and metrics.
+        Attach unit test results to this iteration. Use <strong>Save</strong> in the modal to persist metrics.
       </p>
 
       <div className="pipeline-iteration-ut-actions">
         <button type="button" className="view-button" onClick={openPicker}>
           <Link2 size={16} aria-hidden />
-          Link unit test CSV…
+          Attach unit test file…
         </button>
         <button
           type="button"
@@ -188,7 +196,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
           ) : (
             <Wand2 size={16} aria-hidden />
           )}
-          Apply metrics from linked
+          Apply results to metrics
         </button>
       </div>
 
@@ -204,8 +212,14 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
             <li key={l.s3Key} className="pipeline-iteration-ut-linked-item">
               <FileSpreadsheet size={16} aria-hidden className="pipeline-iteration-ut-linked-icon" />
               <div className="pipeline-iteration-ut-linked-body">
-                <span className="pipeline-iteration-ut-linked-name" title={l.s3Key}>
-                  {l.fileName || l.s3Key.split('/').pop()}
+                <span className="pipeline-iteration-ut-linked-name">
+                  {formatUnitTestResultsSummary({
+                    pipelineDisplayName: l.pipelineDisplayName,
+                    pipelineId: l.pipelineId,
+                    generatedUtc: l.generatedUtc,
+                    accuracyPercent: l.accuracyPercent,
+                    imagesProcessed: l.imagesProcessed,
+                  })}
                 </span>
                 <span className="pipeline-iteration-ut-linked-meta">
                   {l.pipelineDisplayName || l.pipelineId || '—'}
@@ -218,8 +232,8 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
               <button
                 type="button"
                 className="pipeline-iterations-icon-btn"
-                title="Unlink"
-                aria-label="Unlink CSV"
+                title="Remove"
+                aria-label="Remove unit test file"
                 onClick={() => unlink(l.s3Key)}
               >
                 <Unlink size={16} />
@@ -228,13 +242,13 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
           ))}
         </ul>
       ) : (
-        <p className="pipeline-iteration-form-hint">No unit test CSV linked yet.</p>
+        <p className="pipeline-iteration-form-hint">No unit test file attached yet.</p>
       )}
 
       {pickerOpen ? (
-        <div className="pipeline-iteration-ut-picker" role="dialog" aria-label="Choose unit test CSV">
+        <div className="pipeline-iteration-ut-picker" role="dialog" aria-label="Select unit test file">
           <div className="pipeline-iteration-ut-picker-head">
-            <h3>Unit test results on S3</h3>
+            <h3>Select unit test file</h3>
             <button
               type="button"
               className="pipeline-iteration-modal-close"
@@ -247,7 +261,7 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
           {runsLoading ? (
             <p className="pipeline-iteration-form-hint">
               <Loader2 size={16} className="spin" style={{ display: 'inline', verticalAlign: 'middle' }} />{' '}
-              Loading CSV list…
+              Loading…
             </p>
           ) : null}
           {runsError ? (
@@ -256,16 +270,16 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
             </p>
           ) : null}
           {!runsLoading && !runsError && sortedRuns.length === 0 ? (
-            <p className="pipeline-iteration-form-hint">No CSV files found under unit_test_results for this work type.</p>
+            <p className="pipeline-iteration-form-hint">No unit test files available.</p>
           ) : null}
           {!runsLoading && sortedRuns.length > 0 ? (
             <div className="pipeline-iteration-ut-picker-table-wrap">
               <table className="roboflow-hub-table pipeline-iteration-ut-picker-table">
                 <thead>
                   <tr>
-                    <th>File</th>
-                    <th>Pipeline hint</th>
-                    <th>Modified</th>
+                    <th>Results</th>
+                    <th>Pipeline</th>
+                    <th>Date</th>
                     <th />
                   </tr>
                 </thead>
@@ -283,8 +297,11 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
                         }));
                     return (
                       <tr key={r.key} className={suggested ? 'pipeline-iteration-ut-picker-row--suggested' : ''}>
-                        <td className="pipeline-iteration-ut-picker-file" title={r.key}>
-                          {r.fileName}
+                        <td className="pipeline-iteration-ut-picker-file">
+                          {formatUnitTestResultsSummary({
+                            pipelineId: r.pipelineHint,
+                            generatedUtc: r.lastModified,
+                          })}
                           {suggested ? (
                             <span className="pipeline-iteration-ut-suggested-badge">Likely match</span>
                           ) : null}
@@ -301,9 +318,9 @@ const PipelineIterationUnitTestLinker: FC<Props> = ({
                             {linkingKey === r.key ? (
                               <Loader2 size={14} className="spin" aria-hidden />
                             ) : isLinked ? (
-                              'Linked'
+                              'Attached'
                             ) : (
-                              'Link'
+                              'Attach'
                             )}
                           </button>
                         </td>

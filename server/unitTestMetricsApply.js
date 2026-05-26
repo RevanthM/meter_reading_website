@@ -19,6 +19,34 @@ function parseDigit(raw) {
   return null;
 }
 
+function parseDigitMatch(raw) {
+  const t = String(raw ?? '').trim().toLowerCase();
+  if (t === 'true' || t === '1' || t === 'yes') return true;
+  if (t === 'false' || t === '0' || t === 'no') return false;
+  return null;
+}
+
+function dialDigitMatches(expected, predicted, dialNumber) {
+  if (expected === predicted) return true;
+  if (dialNumber === 4 && predicted < expected) return true;
+  return false;
+}
+
+function resolvePredictedDigit(row, dial) {
+  for (const key of [
+    `dial${dial}_predicted_digit`,
+    `dial${dial}_finalDigit`,
+    `dial${dial}_final_digit`,
+    `dial${dial}_stage3_final_digit`,
+    `dial${dial}_floorDigit`,
+    `dial${dial}_nearestDigit`,
+  ]) {
+    const digit = parseDigit(row[key]);
+    if (digit != null) return digit;
+  }
+  return null;
+}
+
 /** @param {Record<string, string | number | null | undefined>} summary */
 export function dialStatsFromCsvSummary(summary) {
   const out = [];
@@ -53,14 +81,19 @@ export function dialStatsFromPerImageRows(rows) {
     const confs = [];
     for (const row of rows) {
       const exp = parseDigit(row[`dial${d}_expected_digit`]);
-      const pred = parseDigit(
-        row[`dial${d}_predicted_digit`] ??
-          row[`dial${d}_final_digit`] ??
-          row[`dial${d}_stage3_final_digit`],
-      );
       if (exp == null) continue;
+      const pred = resolvePredictedDigit(row, d);
+      const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
       withGroundTruth += 1;
-      if (pred != null && exp === pred) correct += 1;
+      if (digitMatch === true) {
+        correct += 1;
+      } else if (
+        digitMatch !== false &&
+        pred != null &&
+        dialDigitMatches(exp, pred, d)
+      ) {
+        correct += 1;
+      }
       const conf = normalizeConfidencePct(
         row[`dial${d}_composite_confidence`] ?? row[`dial${d}_stage2_kp_model_confidence`],
       );

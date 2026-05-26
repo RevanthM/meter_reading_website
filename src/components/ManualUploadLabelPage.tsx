@@ -232,7 +232,7 @@ const ManualUploadLabelPage: FC = () => {
             onRefresh={() => void handleListRefresh()}
             busy={refreshing || readingsLoading}
             disabled={readingsLoading}
-            title="Reload manual uploads from S3"
+            title="Refresh manual uploads"
           />
         </div>
       </header>

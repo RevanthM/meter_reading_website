@@ -55,7 +55,10 @@ function matchesTrainingHubCohort(r: S3MeterReading, cohort: TrainingHubCohort):
         r.status === 'incorrect_training'
       );
     case 'training':
-      return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
+      return (
+        r.status !== 'incorrect_training' &&
+        (r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true)
+      );
     case 'test_data':
       return r.reviewerDatasetDestination === 'test';
   }
@@ -453,7 +456,7 @@ const TrainingHubPage: FC = () => {
             onRefresh={() => void handleHubRefresh()}
             busy={hubRefreshing || loading || readingsLoading}
             disabled={loading}
-            title="Reload sessions and training pipelines from S3"
+            title="Refresh sessions and training pipelines"
           />
         </div>
       </header>

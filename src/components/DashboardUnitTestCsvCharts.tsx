@@ -46,10 +46,6 @@ type DifficultyChartRow = {
   withGroundTruth: number;
 };
 
-function pctLabel(v: unknown): string {
-  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '';
-}
-
 function pctOneDecimal(v: unknown): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
 }
@@ -67,7 +63,7 @@ function DifficultyPerformanceTooltip({
       <p className="dashboard-unit-test-difficulty-tooltip-title">{label}</p>
       <p>
         <strong>{row.imageCount}</strong> images tested
-        {row.withGroundTruth > 0 ? ` · ${row.withGroundTruth} with ground truth` : ''}
+        {row.withGroundTruth > 0 ? ` · ${row.withGroundTruth} with ground truth labels` : ''}
       </p>
       {payload.map((entry) => (
         <p key={String(entry.dataKey)}>
@@ -254,7 +250,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                 </div>
               </div>
             ) : (
-              <p className="pipeline-iterations-chart-card-placeholder">No ground-truth readings in CSV.</p>
+              <p className="pipeline-iterations-chart-card-placeholder">No ground-truth readings in these results.</p>
             )}
           </div>
 
@@ -276,7 +272,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p className="pipeline-iterations-chart-card-placeholder">No ground-truth readings in CSV.</p>
+              <p className="pipeline-iterations-chart-card-placeholder">No ground-truth readings in these results.</p>
             )}
           </div>
         </div>
@@ -301,13 +297,11 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                     contentStyle={tooltipStyle}
                     formatter={(v: number) => [`${v.toFixed(1)}%`, 'Accuracy']}
                   />
-                  <Bar dataKey="accuracy" fill={ACCURACY_FILL} radius={[4, 4, 0, 0]} maxBarSize={48} isAnimationActive={false}>
-                    <LabelList dataKey="accuracy" position="top" fontSize={10} formatter={pctLabel} />
-                  </Bar>
+                  <Bar dataKey="accuracy" fill={ACCURACY_FILL} radius={[4, 4, 0, 0]} maxBarSize={48} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p className="pipeline-iterations-chart-card-placeholder">No per-dial ground truth in CSV.</p>
+              <p className="pipeline-iterations-chart-card-placeholder">No per-dial ground truth in these results.</p>
             )}
           </div>
 
@@ -315,7 +309,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
             <h5>Dial confidence vs accuracy</h5>
             {dialDualData.length > 0 ? (
               <ResponsiveContainer width="100%" height={240}>
-                <ComposedChart data={dialDualData} margin={{ top: 12, right: 48, left: 8, bottom: 4 }}>
+                <ComposedChart data={dialDualData} margin={{ top: 20, right: 48, left: 8, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" vertical={false} />
                   <XAxis dataKey="dial" type="category" tick={{ fontSize: 11 }} />
                   <YAxis
@@ -351,13 +345,14 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                     name="Avg confidence"
                     stroke={CONFIDENCE_STROKE}
                     strokeWidth={2}
-                    dot={{ r: 4, fill: CONFIDENCE_STROKE }}
+                    dot={{ r: 3, strokeWidth: 1.5, stroke: 'var(--bg-elevated, #fff)' }}
+                    activeDot={{ r: 5 }}
                     isAnimationActive={false}
                   />
                 </ComposedChart>
               </ResponsiveContainer>
             ) : (
-              <p className="pipeline-iterations-chart-card-placeholder">No per-dial metrics in CSV.</p>
+              <p className="pipeline-iterations-chart-card-placeholder">No per-dial metrics in these results.</p>
             )}
           </div>
         </div>
@@ -372,8 +367,8 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
           >
             <h5>Difficulty performance</h5>
             <p className="dashboard-pipeline-essential-sub">
-              Grouped bars compare full-reading accuracy vs average confidence per filename difficulty. If accuracy
-              drops but confidence stays high, the model may be overconfident on harder meters.
+              Compare full-reading accuracy and average confidence by difficulty tier. A large gap may indicate
+              overconfidence on harder meters.
             </p>
             {hasDifficultyChart ? (
               <>
@@ -403,9 +398,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                       radius={[4, 4, 0, 0]}
                       maxBarSize={40}
                       isAnimationActive={false}
-                    >
-                      <LabelList dataKey="accuracy" position="top" fontSize={9} formatter={pctLabel} />
-                    </Bar>
+                    />
                     <Bar
                       dataKey="confidence"
                       name="Avg confidence"
@@ -413,9 +406,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                       radius={[4, 4, 0, 0]}
                       maxBarSize={40}
                       isAnimationActive={false}
-                    >
-                      <LabelList dataKey="confidence" position="top" fontSize={9} formatter={pctLabel} />
-                    </Bar>
+                    />
                   </BarChart>
                 </ResponsiveContainer>
                 <div className="dashboard-unit-test-difficulty-table-wrap">
@@ -442,21 +433,21 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
                 </div>
               </>
             ) : (
-              <p className="pipeline-iterations-chart-card-placeholder">No difficulty metrics in CSV.</p>
+              <p className="pipeline-iterations-chart-card-placeholder">No difficulty metrics in these results.</p>
             )}
           </div>
         </section>
       ) : null}
 
       <section className="dashboard-unit-test-analytics-section">
-        <h4 className="dashboard-unit-test-analytics-section-title">Advanced</h4>
+        <h4 className="dashboard-unit-test-analytics-section-title">Detailed analysis</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--1">
           <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} />
 
           <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Confidence distribution')}>
             <h5>Confidence distribution</h5>
             <p className="dashboard-pipeline-essential-sub">
-              Histogram of dial-level prediction confidences — useful for threshold tuning.
+              Distribution of dial-level model confidence scores.
             </p>
             {histogram.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
@@ -470,7 +461,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
               </ResponsiveContainer>
             ) : (
               <p className="pipeline-iterations-chart-card-placeholder">
-                No confidence values in per-image CSV rows.
+                No confidence data in these results.
               </p>
             )}
           </div>

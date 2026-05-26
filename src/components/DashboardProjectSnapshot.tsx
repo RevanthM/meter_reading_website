@@ -230,7 +230,7 @@ const SnapshotCard: FC<SnapshotCardProps> = ({
     {card.scopeNote ? <p className="analytics-snapshot-card__note">{card.scopeNote}</p> : null}
     {card.hasLinkedCsv ? (
       <p className="analytics-snapshot-card__source">
-        Eval <code>{card.linkedCsvName}</code>
+        Results: {card.linkedCsvName}
       </p>
     ) : null}
   </article>
@@ -271,7 +271,7 @@ const DashboardProjectSnapshot: FC<Props> = ({
     return (
       <div className="analytics-empty-state">
         <p>No eval data yet</p>
-        <span>Link a unit-test CSV on a pipeline iteration to populate current metrics.</span>
+        <span>Attach a unit test file to an iteration to populate current metrics.</span>
       </div>
     );
   }

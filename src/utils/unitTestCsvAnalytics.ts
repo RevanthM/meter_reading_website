@@ -122,6 +122,58 @@ function parseDigit(raw: string | undefined): number | null {
   return null;
 }
 
+function parseDigitMatch(raw: string | undefined): boolean | null {
+  const t = (raw ?? '').trim().toLowerCase();
+  if (t === 'true' || t === '1' || t === 'yes') return true;
+  if (t === 'false' || t === '0' || t === 'no') return false;
+  return null;
+}
+
+/** Matches iOS UnitTestFilenameExpectation.dialDigitMatches (incl. dial 4 bill-lower). */
+export function dialDigitMatches(expected: number, predicted: number, dialNumber: number): boolean {
+  if (expected === predicted) return true;
+  if (dialNumber === 4 && predicted < expected) return true;
+  return false;
+}
+
+/** Resolve predicted digit from iOS export columns (camelCase + snake_case). */
+export function resolvePredictedDigit(row: Record<string, string>, dial: number): number | null {
+  const keys = [
+    `dial${dial}_predicted_digit`,
+    `dial${dial}_finalDigit`,
+    `dial${dial}_final_digit`,
+    `dial${dial}_stage3_final_digit`,
+    `dial${dial}_floorDigit`,
+    `dial${dial}_nearestDigit`,
+  ];
+  for (const key of keys) {
+    const digit = parseDigit(row[key]);
+    if (digit != null) return digit;
+  }
+  return null;
+}
+
+/**
+ * Column index for confusion matrix.
+ * Trust iOS digit_match when present; correct reads always land on the diagonal.
+ */
+export function confusionMatrixPredictedCol(
+  expected: number,
+  predicted: number | null,
+  dialNumber: number,
+  digitMatch: boolean | null,
+): number | null {
+  if (digitMatch === true) return expected;
+  if (digitMatch === false) {
+    if (predicted != null) return predicted;
+    return null;
+  }
+  if (predicted != null) {
+    return dialDigitMatches(expected, predicted, dialNumber) ? expected : predicted;
+  }
+  return null;
+}
+
 export function normalizeConfidencePct(raw: string | number | null | undefined): number | null {
   if (raw == null || raw === '') return null;
   const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
@@ -164,12 +216,19 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
     const confs: number[] = [];
     for (const row of rows) {
       const exp = parseDigit(row[`dial${d}_expected_digit`]);
-      const pred = parseDigit(
-        row[`dial${d}_predicted_digit`] ?? row[`dial${d}_final_digit`] ?? row[`dial${d}_stage3_final_digit`],
-      );
       if (exp == null) continue;
+      const pred = resolvePredictedDigit(row, d);
+      const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
       withGroundTruth += 1;
-      if (pred != null && exp === pred) correct += 1;
+      if (digitMatch === true) {
+        correct += 1;
+      } else if (
+        digitMatch !== false &&
+        pred != null &&
+        dialDigitMatches(exp, pred, d)
+      ) {
+        correct += 1;
+      }
       const conf = normalizeConfidencePct(
         row[`dial${d}_composite_confidence`] ?? row[`dial${d}_stage2_kp_model_confidence`],
       );
@@ -202,11 +261,12 @@ export function buildDigitConfusionMatrix(
   for (const row of rows) {
     for (const d of dials) {
       const exp = parseDigit(row[`dial${d}_expected_digit`]);
-      const pred = parseDigit(
-        row[`dial${d}_predicted_digit`] ?? row[`dial${d}_final_digit`] ?? row[`dial${d}_stage3_final_digit`],
-      );
-      if (exp == null || pred == null) continue;
-      matrix[exp][pred] += 1;
+      if (exp == null) continue;
+      const pred = resolvePredictedDigit(row, d);
+      const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
+      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch);
+      if (col == null) continue;
+      matrix[exp][col] += 1;
       total += 1;
     }
   }
@@ -214,13 +274,161 @@ export function buildDigitConfusionMatrix(
   return { matrix, total, digits: [...DIGITS] };
 }
 
-export function confusionCellTone(count: number, max: number, expected: number, predicted: number): string {
-  if (count === 0) return 'empty';
-  if (expected === predicted) return 'correct';
-  const intensity = max > 0 ? Math.min(1, count / max) : 0;
-  if (intensity > 0.6) return 'error-strong';
-  if (intensity > 0.25) return 'error-mid';
-  return 'error-light';
+export function confusionRowTotal(matrix: number[][], rowIndex: number): number {
+  const row = matrix[rowIndex];
+  if (!row) return 0;
+  return row.reduce((sum, n) => sum + n, 0);
+}
+
+/** Fraction of row that landed in this cell (0–1). */
+export function confusionRowShare(matrix: number[][], rowIndex: number, colIndex: number): number {
+  const rowTotal = confusionRowTotal(matrix, rowIndex);
+  if (rowTotal <= 0) return 0;
+  return matrix[rowIndex][colIndex] / rowTotal;
+}
+
+/** Per-digit recall for a ground-truth row (0–1). Diagonal share. */
+export function confusionRowRecall(matrix: number[][], rowIndex: number): number {
+  return confusionRowShare(matrix, rowIndex, rowIndex);
+}
+
+/** Format row share for display (0–100%). */
+export function formatConfusionPct(share: number): string {
+  if (share <= 0) return '0%';
+  if (share >= 0.995) return '100%';
+  return `${(share * 100).toFixed(0)}%`;
+}
+
+/** Ticks for the dual legend (0–100% of row). */
+export const CONFUSION_LEGEND_TICKS = [0, 20, 40, 60, 80, 100] as const;
+
+/** Green: stronger = more of the row predicted correctly (diagonal). */
+const CORRECT_STOPS: Array<[number, [number, number, number]]> = [
+  [0, [248, 250, 252]],
+  [0.25, [220, 252, 231]],
+  [0.5, [134, 239, 172]],
+  [0.75, [34, 197, 94]],
+  [1, [21, 128, 61]],
+];
+
+/** Amber → red: stronger = more of the row misread to this digit (off-diagonal). */
+const MISREAD_STOPS: Array<[number, [number, number, number]]> = [
+  [0, [248, 250, 252]],
+  [0.2, [254, 243, 199]],
+  [0.4, [253, 230, 138]],
+  [0.6, [245, 158, 11]],
+  [0.8, [234, 88, 12]],
+  [1, [220, 38, 38]],
+];
+
+function interpolateStops(
+  t: number,
+  stops: Array<[number, [number, number, number]]>,
+  fallback: [number, number, number],
+): string {
+  const clamped = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < stops.length; i += 1) {
+    const [t0, c0] = stops[i - 1];
+    const [t1, c1] = stops[i];
+    if (clamped <= t1) {
+      const f = t1 === t0 ? 1 : (clamped - t0) / (t1 - t0);
+      const r = Math.round(c0[0] + f * (c1[0] - c0[0]));
+      const g = Math.round(c0[1] + f * (c1[1] - c0[1]));
+      const b = Math.round(c0[2] + f * (c1[2] - c0[2]));
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+  }
+  const [r, g, b] = fallback;
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * Standard row-normalized confusion matrix coloring:
+ * diagonal = green (correct), off-diagonal = amber/red (misread).
+ * Intensity = share of that ground-truth row (0–1).
+ */
+export function confusionMatrixCellFill(
+  count: number,
+  rowShare: number,
+  isCorrect: boolean,
+): string {
+  if (count <= 0) return '#f8fafc';
+  const stops = isCorrect ? CORRECT_STOPS : MISREAD_STOPS;
+  const fallback = isCorrect ? ([21, 128, 61] as const) : ([220, 38, 38] as const);
+  return interpolateStops(rowShare, stops, [...fallback]);
+}
+
+export function confusionMatrixCellText(
+  count: number,
+  rowShare: number,
+  isCorrect: boolean,
+): string {
+  if (count <= 0) return '#94a3b8';
+  if (isCorrect) {
+    if (rowShare >= 0.75) return '#ffffff';
+    if (rowShare >= 0.4) return '#064e3b';
+    return '#0f172a';
+  }
+  if (rowShare >= 0.6) return '#ffffff';
+  if (rowShare >= 0.35) return '#78350f';
+  return '#0f172a';
+}
+
+/** @deprecated Use confusionMatrixCellFill */
+export function confusionCellDeviation(share: number, isMatch: boolean): number {
+  if (share <= 0) return 0;
+  return isMatch ? 1 - share : share;
+}
+
+/** @deprecated */
+export type ConfusionColorMode = 'errors' | 'distribution';
+
+/** @deprecated */
+export function confusionCellIntensity(
+  _mode: ConfusionColorMode,
+  share: number,
+  isMatch: boolean,
+): number {
+  return confusionCellDeviation(share, isMatch);
+}
+
+/** @deprecated */
+export const CONFUSION_DEVIATION_TICKS = CONFUSION_LEGEND_TICKS;
+
+/** @deprecated Use confusionMatrixCellFill */
+export function confusionCellHeatFill(
+  count: number,
+  intensity: number,
+  mode: ConfusionColorMode = 'errors',
+): string {
+  const isCorrect = mode !== 'distribution';
+  return confusionMatrixCellFill(count, mode === 'distribution' ? intensity : 1 - intensity, isCorrect);
+}
+
+/** @deprecated Use confusionMatrixCellFill */
+export function confusionCellDeviationFill(count: number, deviation: number): string {
+  return confusionMatrixCellFill(count, 1 - deviation, true);
+}
+
+/** @deprecated Use confusionMatrixCellText */
+export function confusionCellHeatTextColor(
+  count: number,
+  intensity: number,
+  mode: ConfusionColorMode = 'errors',
+): string {
+  const isCorrect = mode !== 'distribution';
+  const share = mode === 'distribution' ? intensity : 1 - intensity;
+  return confusionMatrixCellText(count, share, isCorrect);
+}
+
+/** @deprecated Use confusionMatrixCellText */
+export function confusionCellDeviationTextColor(count: number, deviation: number): string {
+  return confusionMatrixCellText(count, 1 - deviation, true);
+}
+
+/** @deprecated Use formatConfusionPct */
+export function formatDeviationPct(deviation: number): string {
+  return formatConfusionPct(deviation);
 }
 
 /** Full-reading correct / incorrect from CSV run summary. */

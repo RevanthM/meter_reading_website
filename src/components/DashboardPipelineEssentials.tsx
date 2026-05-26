@@ -1,14 +1,17 @@
 import { useMemo, useState, type FC, type ReactNode } from 'react';
 import {
   ResponsiveContainer,
+  ComposedChart,
   LineChart,
   Line,
+  Scatter,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
   Legend,
 } from 'recharts';
+import type { DotProps } from 'recharts';
 import type { PipelineIterationRecord } from '../services/api';
 import {
   buildAppMetricLineChart,
@@ -46,14 +49,93 @@ function pctTooltip(v: unknown): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
 }
 
-function imagesTooltip(v: unknown): string {
-  return typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString() : '—';
+function datasetDotRadius(imageCount: unknown, imageRange: { min: number; max: number }): number {
+  if (typeof imageCount !== 'number' || !Number.isFinite(imageCount)) return 4;
+  if (imageRange.max <= imageRange.min) return 8;
+  const t = (imageCount - imageRange.min) / (imageRange.max - imageRange.min);
+  return 4 + Math.max(0, Math.min(1, t)) * 10;
+}
+
+function mergeImageCountsIntoRows(
+  metricRows: AppLineChartRow[],
+  imageRows: AppLineChartRow[],
+  series: AppLineChartSeries[],
+): AppLineChartRow[] {
+  return metricRows.map((row) => {
+    const imgRow = imageRows.find((r) => r.iteration === row.iteration);
+    const merged: AppLineChartRow = { ...row };
+    for (const s of series) {
+      merged[`${s.dataKey}_images`] = (imgRow?.[s.dataKey] as number | null | undefined) ?? null;
+    }
+    return merged;
+  });
+}
+
+function imageCountForPayload(payload: AppLineChartRow | undefined, dataKey: string): number | null {
+  if (!payload) return null;
+  const v = payload[`${dataKey}_images`];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+type SizedDotProps = DotProps & {
+  payload?: AppLineChartRow;
+  dataKey?: string;
+  fill?: string;
+  imageRange: { min: number; max: number };
+};
+
+function DatasetSizedBubble({ cx, cy, payload, dataKey, fill, imageRange }: SizedDotProps) {
+  if (cx == null || cy == null || !dataKey || !payload) return null;
+  const raw = payload[dataKey];
+  const metric = typeof raw === 'number' ? raw : typeof raw === 'string' ? parseFloat(raw) : NaN;
+  if (!Number.isFinite(metric)) return null;
+  const imgCount = imageCountForPayload(payload, dataKey);
+  const r = datasetDotRadius(imgCount, imageRange);
+  const color = fill ?? 'currentColor';
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={r}
+      fill={color}
+      stroke={color}
+      strokeWidth={1}
+      fillOpacity={0.92}
+    />
+  );
+}
+
+function globalImageRange(imageRows: AppLineChartRow[], series: AppLineChartSeries[]): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const s of series) {
+    const range = seriesValueRange(imageRows, s.dataKey);
+    min = Math.min(min, range.min);
+    max = Math.max(max, range.max);
+  }
+  return Number.isFinite(min) ? { min, max } : { min: 0, max: 1 };
+}
+
+function seriesValueRange(rows: AppLineChartRow[], dataKey: string): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const row of rows) {
+    const v = row[dataKey];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+  }
+  if (!Number.isFinite(min)) return { min: 0, max: 1 };
+  return { min, max };
 }
 
 type MetricLineCardProps = {
   title: string;
   rows: AppLineChartRow[];
   series: AppLineChartSeries[];
+  imageRange?: { min: number; max: number };
+  sizeDotsByDataset?: boolean;
   yDomain?: [number, number];
   yFormatter: (v: number) => string;
   valueFormatter: (v: unknown) => string;
@@ -67,6 +149,8 @@ const MetricLineCard: FC<MetricLineCardProps> = ({
   title,
   rows,
   series,
+  imageRange = { min: 0, max: 1 },
+  sizeDotsByDataset = true,
   yDomain,
   yFormatter,
   valueFormatter,
@@ -76,7 +160,9 @@ const MetricLineCard: FC<MetricLineCardProps> = ({
   reportSection,
 }) => {
   const hasData = rows.length > 0 && series.length > 0;
-  const plotHeight = compact ? 168 : 260;
+  const plotHeight = compact ? 188 : 280;
+  const topMargin = sizeDotsByDataset && !compact ? 28 : compact ? 12 : 22;
+  const ChartRoot = sizeDotsByDataset ? ComposedChart : LineChart;
   const captureProps =
     reportCapture != null
       ? {
@@ -90,19 +176,33 @@ const MetricLineCard: FC<MetricLineCardProps> = ({
       {...captureProps}
     >
       <header className="analytics-chart-card__head">
-        <h4 className="analytics-chart-card__title">{title}</h4>
+        <div>
+          <h4 className="analytics-chart-card__title">{title}</h4>
+          {!compact && sizeDotsByDataset ? (
+            <p className="analytics-chart-card__subtitle">Circle size reflects training image count</p>
+          ) : null}
+        </div>
         {deltaStrip}
       </header>
       {hasData ? (
         <div className="analytics-chart-card__plot">
           <ResponsiveContainer width="100%" height={plotHeight}>
-            <LineChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+            <ChartRoot data={rows} margin={{ top: topMargin, right: 12, left: 4, bottom: 4 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" vertical={false} />
               <XAxis dataKey="iterationLabel" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis domain={yDomain} tickFormatter={yFormatter} width={42} axisLine={false} tickLine={false} />
               <Tooltip
                 contentStyle={tooltipStyle}
-                formatter={(v: number, name: string) => [valueFormatter(v), name]}
+                formatter={(v: number, name: string, item) => {
+                  const metric = valueFormatter(v);
+                  if (!sizeDotsByDataset) return [metric, name];
+                  const payload = item?.payload as AppLineChartRow | undefined;
+                  const dataKey = typeof item?.dataKey === 'string' ? item.dataKey : '';
+                  const images = dataKey ? imageCountForPayload(payload, dataKey) : null;
+                  return images != null
+                    ? [`${metric} · ${images.toLocaleString()} training images`, name]
+                    : [metric, name];
+                }}
                 labelFormatter={(label) => `Iteration ${label}`}
               />
               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" />
@@ -114,13 +214,40 @@ const MetricLineCard: FC<MetricLineCardProps> = ({
                   name={s.label}
                   stroke={s.stroke}
                   strokeWidth={2.5}
-                  dot={{ r: 3.5, fill: s.stroke, strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
+                  dot={
+                    sizeDotsByDataset
+                      ? false
+                      : { r: 3, fill: s.stroke, strokeWidth: 1.5, stroke: 'var(--bg-elevated, #fff)' }
+                  }
+                  activeDot={{ r: sizeDotsByDataset ? 8 : 5, fill: s.stroke, strokeWidth: 2, stroke: 'var(--bg-elevated, #fff)' }}
                   connectNulls
                   isAnimationActive={false}
                 />
               ))}
-            </LineChart>
+              {sizeDotsByDataset
+                ? series.map((s) => (
+                    <Scatter
+                      key={`${s.dataKey}-size`}
+                      dataKey={s.dataKey}
+                      name={s.label}
+                      legendType="none"
+                      fill={s.stroke}
+                      isAnimationActive={false}
+                      shape={(props: unknown) => {
+                        const p = props as SizedDotProps;
+                        return (
+                          <DatasetSizedBubble
+                            {...p}
+                            dataKey={s.dataKey}
+                            fill={s.stroke}
+                            imageRange={imageRange}
+                          />
+                        );
+                      }}
+                    />
+                  ))
+                : null}
+            </ChartRoot>
           </ResponsiveContainer>
         </div>
       ) : (
@@ -177,14 +304,35 @@ const DashboardPipelineEssentials: FC<Props> = ({
     () => (chartsReady ? buildAppMetricLineChart(rows, pipelineFilter, 'images') : null),
     [rows, pipelineFilter, chartsReady],
   );
-  const confidenceChart = useMemo(
-    () => (chartsReady ? buildAppMetricLineChart(rows, pipelineFilter, 'confidence') : null),
-    [rows, pipelineFilter, chartsReady],
-  );
+  const imageRange = useMemo(() => {
+    const chartRows = imagesChart?.chartRows ?? [];
+    const chartSeries = imagesChart?.series ?? [];
+    return globalImageRange(chartRows, chartSeries);
+  }, [imagesChart]);
   const accuracyChart = useMemo(
     () => (chartsReady ? buildAppMetricLineChart(rows, pipelineFilter, 'accuracy') : null),
     [rows, pipelineFilter, chartsReady],
   );
+  const confidenceChart = useMemo(
+    () => (chartsReady ? buildAppMetricLineChart(rows, pipelineFilter, 'confidence') : null),
+    [rows, pipelineFilter, chartsReady],
+  );
+  const accuracyRows = useMemo(() => {
+    if (!accuracyChart || !imagesChart) return [];
+    return mergeImageCountsIntoRows(
+      accuracyChart.chartRows,
+      imagesChart.chartRows,
+      accuracyChart.series,
+    );
+  }, [accuracyChart, imagesChart]);
+  const confidenceRows = useMemo(() => {
+    if (!confidenceChart || !imagesChart) return [];
+    return mergeImageCountsIntoRows(
+      confidenceChart.chartRows,
+      imagesChart.chartRows,
+      confidenceChart.series,
+    );
+  }, [confidenceChart, imagesChart]);
   const perDialAccuracyCharts = useMemo(
     () =>
       chartsReady
@@ -271,23 +419,12 @@ const DashboardPipelineEssentials: FC<Props> = ({
           aria-labelledby="analytics-tab-progress"
           className={panelClass('progress')}
         >
-            <div className="analytics-progress-grid">
-              <MetricLineCard
-                title="Training images"
-                rows={imagesChart?.chartRows ?? []}
-                series={imagesChart?.series ?? []}
-              yFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))}
-              valueFormatter={imagesTooltip}
-              deltaStrip={
-                <DashboardTrendDeltaStrip rows={rows} pipelineFilter={pipelineFilter} metric="images" />
-              }
-              reportCapture="Training images"
-              reportSection="Progress"
-            />
+          <div className="analytics-progress-grid">
             <MetricLineCard
               title="App confidence"
-              rows={confidenceChart?.chartRows ?? []}
+              rows={confidenceRows}
               series={confidenceChart?.series ?? []}
+              imageRange={imageRange}
               yDomain={[55, 100]}
               yFormatter={(v) => `${v}%`}
               valueFormatter={pctTooltip}
@@ -299,8 +436,9 @@ const DashboardPipelineEssentials: FC<Props> = ({
             />
             <MetricLineCard
               title="App accuracy"
-              rows={accuracyChart?.chartRows ?? []}
+              rows={accuracyRows}
               series={accuracyChart?.series ?? []}
+              imageRange={imageRange}
               yDomain={[55, 100]}
               yFormatter={(v) => `${v}%`}
               valueFormatter={pctTooltip}
@@ -312,21 +450,18 @@ const DashboardPipelineEssentials: FC<Props> = ({
             />
 
             <div
-              className="analytics-progress-dial-section"
+              className="analytics-progress-dial-block"
               data-report-capture="Per-dial accuracy trends"
               data-report-section="Progress"
             >
-              <header className="analytics-progress-dial-section__head">
-                <h4>Per-dial accuracy</h4>
-                <p>App read accuracy by dial over iterations.</p>
-              </header>
-              <div className="analytics-progress-dial-grid">
+              <div className="analytics-progress-dial-grid analytics-progress-dial-grid--four">
                 {(perDialAccuracyCharts ?? []).map(({ dial, chart }) => (
                   <MetricLineCard
                     key={`acc-d${dial}`}
                     title={`Dial ${dial}`}
                     rows={chart.chartRows}
                     series={chart.series}
+                    sizeDotsByDataset={false}
                     yDomain={[55, 100]}
                     yFormatter={(v) => `${v}%`}
                     valueFormatter={pctTooltip}
@@ -345,13 +480,14 @@ const DashboardPipelineEssentials: FC<Props> = ({
                 <h4>Per-dial confidence</h4>
                 <p>App keypoint confidence by dial over iterations.</p>
               </header>
-              <div className="analytics-progress-dial-grid">
+              <div className="analytics-progress-dial-grid analytics-progress-dial-grid--four">
                 {(perDialConfidenceCharts ?? []).map(({ dial, chart }) => (
                   <MetricLineCard
                     key={`conf-d${dial}`}
                     title={`Dial ${dial}`}
                     rows={chart.chartRows}
                     series={chart.series}
+                    sizeDotsByDataset={false}
                     yDomain={[55, 100]}
                     yFormatter={(v) => `${v}%`}
                     valueFormatter={pctTooltip}
@@ -415,7 +551,7 @@ const DashboardPipelineEssentials: FC<Props> = ({
                   </div>
                 </div>
               ) : (
-                <p className="analytics-empty-state">No per-dial metrics in registry yet.</p>
+                <p className="analytics-empty-state">No per-dial metrics available yet.</p>
               )}
             </div>
           ) : null}
@@ -443,7 +579,7 @@ const DashboardPipelineEssentials: FC<Props> = ({
       </div>
 
       <footer className="analytics-shell__foot">
-        App metrics from linked iOS unit-test CSVs · Sempra (blue) · Anica (violet) · Combined (green)
+        From unit test results · Sempra (blue) · Anica (violet) · Combined (green)
       </footer>
     </div>
   );

@@ -209,7 +209,7 @@ const TestDataPendingPage: FC = () => {
       const expected = (r.expectedValue ?? r.meterValue ?? '').trim() || '—';
       if (
         !window.confirm(
-          `Approve for unit test library?\n\nSession: ${formatSessionIdForDisplay(r.id)}\nExpected reading: ${expected}`,
+          `Approve for unit test library?\n\nSession: ${formatSessionIdForDisplay(r.id)}\nGround truth reading: ${expected}`,
         )
       ) {
         return;
@@ -298,7 +298,7 @@ const TestDataPendingPage: FC = () => {
             onRefresh={() => void handleRefresh()}
             busy={refreshing || readingsLoading}
             disabled={readingsLoading}
-            title="Reload pending sessions from S3"
+            title="Refresh pending sessions"
           />
         </div>
       </header>
@@ -453,7 +453,7 @@ const TestDataPendingPage: FC = () => {
                   <code title={r.id}>{formatSessionIdForDisplay(r.id)}</code>
                 </p>
                 <p className="unit-test-images-expected">
-                  Expected: <strong>{expected}</strong>
+                  Ground truth: <strong>{expected}</strong>
                 </p>
                 <p className="test-data-pending-card-meta">
                   <User size={14} aria-hidden />

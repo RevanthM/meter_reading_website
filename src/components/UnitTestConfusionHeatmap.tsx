@@ -1,6 +1,15 @@
 import { useMemo, useState, type FC } from 'react';
 import type { UnitTestRunDetailResponse } from '../services/api';
-import { buildDigitConfusionMatrix, confusionCellTone } from '../utils/unitTestCsvAnalytics';
+import {
+  buildDigitConfusionMatrix,
+  CONFUSION_LEGEND_TICKS,
+  confusionMatrixCellFill,
+  confusionMatrixCellText,
+  confusionRowRecall,
+  confusionRowShare,
+  confusionRowTotal,
+  formatConfusionPct,
+} from '../utils/unitTestCsvAnalytics';
 
 type Props = {
   perImageRows: UnitTestRunDetailResponse['perImageRows'];
@@ -8,6 +17,17 @@ type Props = {
   reportCapture?: boolean;
   reportSection?: string;
 };
+
+function legendGradient(stops: string): string {
+  return `linear-gradient(to right, ${stops})`;
+}
+
+const CORRECT_LEGEND = legendGradient(
+  '#f8fafc 0%, #dcfce7 25%, #86efac 50%, #22c55e 75%, #15803d 100%',
+);
+const MISREAD_LEGEND = legendGradient(
+  '#f8fafc 0%, #fef3c7 20%, #fde68a 40%, #f59e0b 60%, #ea580c 80%, #dc2626 100%',
+);
 
 const UnitTestConfusionHeatmap: FC<Props> = ({
   perImageRows,
@@ -21,86 +41,172 @@ const UnitTestConfusionHeatmap: FC<Props> = ({
     return buildDigitConfusionMatrix(perImageRows, confusionDial);
   }, [perImageRows, confusionDial]);
 
-  const confusionMax = useMemo(() => {
-    if (!confusion) return 0;
-    return Math.max(0, ...confusion.matrix.flat());
-  }, [confusion]);
-
   if (!confusion || confusion.total <= 0) {
     return (
       <p className="pipeline-iterations-chart-card-placeholder">
-        Confusion heatmap needs per-image rows with expected and predicted digits.
+        Not enough data to display this matrix.
       </p>
     );
   }
+
+  const title =
+    confusionDial === 'all'
+      ? 'Digit confusion matrix (all dials)'
+      : `Digit confusion matrix — dial ${confusionDial}`;
 
   return (
     <div
       className="dashboard-pipeline-essential-card dashboard-confusion-card"
       {...(reportCapture
         ? {
-            'data-report-capture': 'Confusion heatmap',
+            'data-report-capture': 'Digit confusion matrix',
             ...(reportSection ? { 'data-report-section': reportSection } : {}),
           }
         : {})}
     >
       <div className="dashboard-confusion-head">
         <div>
-          <h5>Confusion heatmap (expected → predicted)</h5>
+          <h5>{title}</h5>
           <p className="dashboard-pipeline-essential-sub">
-            Rows = correct digit from filename · columns = model prediction. Off-diagonal cells show common
-            misreads ({confusion.total} dial readings).
+            {confusion.total} dial readings · each row is normalized to 100% (standard ML confusion
+            matrix)
+          </p>
+          <p className="dashboard-confusion-help">
+            <strong>Rows</strong> = true digit on the meter. <strong>Columns</strong> = model
+            prediction. <strong>Diagonal (green)</strong> = correct. <strong>Off-diagonal
+            (amber/red)</strong> = misread. Darker color = larger share of that row.
           </p>
         </div>
-        <div className="dashboard-confusion-dial-toggle" role="group" aria-label="Dial for confusion matrix">
-          {(['all', 1, 2, 3, 4] as const).map((d) => (
-            <button
-              key={String(d)}
-              type="button"
-              className={`dashboard-improvement-metric-btn${
-                confusionDial === d ? ' dashboard-improvement-metric-btn--active' : ''
-              }`}
-              onClick={() => setConfusionDial(d)}
-              aria-pressed={confusionDial === d}
-            >
-              {d === 'all' ? 'All dials' : `Dial ${d}`}
-            </button>
-          ))}
+        <div className="dashboard-confusion-head-controls">
+          <div className="dashboard-confusion-mode-block">
+            <span className="dashboard-confusion-mode-label">Filter by dial</span>
+            <div className="dashboard-confusion-dial-toggle" role="group" aria-label="Filter by dial">
+              {(['all', 1, 2, 3, 4] as const).map((d) => (
+                <button
+                  key={String(d)}
+                  type="button"
+                  className={`dashboard-improvement-metric-btn${
+                    confusionDial === d ? ' dashboard-improvement-metric-btn--active' : ''
+                  }`}
+                  onClick={() => setConfusionDial(d)}
+                  aria-pressed={confusionDial === d}
+                >
+                  {d === 'all' ? 'All dials' : `Dial ${d}`}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
-      <div className="dashboard-confusion-table-wrap">
-        <table className="dashboard-confusion-table">
-          <thead>
-            <tr>
-              <th scope="col">Expected \ Pred</th>
-              {confusion.digits.map((d) => (
-                <th key={d} scope="col">
-                  {d}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {confusion.digits.map((expDigit, ei) => (
-              <tr key={expDigit}>
-                <th scope="row">{expDigit}</th>
-                {confusion.digits.map((predDigit, pi) => {
-                  const count = confusion.matrix[ei][pi];
-                  const tone = confusionCellTone(count, confusionMax, ei, pi);
+
+      <div className="dashboard-confusion-body dashboard-confusion-body--standard">
+        <div className="dashboard-confusion-chart">
+          <p className="dashboard-confusion-y-label">True digit</p>
+          <div className="dashboard-confusion-table-wrap">
+            <table className="dashboard-confusion-table dashboard-confusion-table--standard">
+              <thead>
+                <tr>
+                  <th scope="col" className="dashboard-confusion-corner" aria-hidden />
+                  {confusion.digits.map((d) => (
+                    <th key={d} scope="col" className="dashboard-confusion-pred-col">
+                      {d}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {confusion.digits.map((expDigit, ei) => {
+                  const rowTotal = confusionRowTotal(confusion.matrix, ei);
+                  const rowRecall = confusionRowRecall(confusion.matrix, ei);
                   return (
-                    <td
-                      key={predDigit}
-                      className={`dashboard-confusion-cell dashboard-confusion-cell--${tone}`}
-                      title={`Expected ${expDigit}, predicted ${predDigit}: ${count}`}
-                    >
-                      {count > 0 ? count : ''}
-                    </td>
+                    <tr key={expDigit}>
+                      <th
+                        scope="row"
+                        className="dashboard-confusion-row-label"
+                        title={
+                          rowTotal > 0
+                            ? `True digit ${expDigit}: ${rowTotal} readings, ${formatConfusionPct(rowRecall)} correct`
+                            : undefined
+                        }
+                      >
+                        <span className="dashboard-confusion-row-digit">{expDigit}</span>
+                        {rowTotal > 0 ? (
+                          <span className="dashboard-confusion-row-n">n={rowTotal}</span>
+                        ) : null}
+                      </th>
+                      {confusion.digits.map((predDigit, pi) => {
+                        const count = confusion.matrix[ei][pi];
+                        const share = confusionRowShare(confusion.matrix, ei, pi);
+                        const isCorrect = ei === pi;
+                        const background = confusionMatrixCellFill(count, share, isCorrect);
+                        const color = confusionMatrixCellText(count, share, isCorrect);
+                        return (
+                          <td
+                            key={predDigit}
+                            className={`dashboard-confusion-cell${
+                              isCorrect ? ' dashboard-confusion-cell--correct' : ''
+                            }${count > 0 && !isCorrect ? ' dashboard-confusion-cell--misread' : ''}`}
+                            style={{ backgroundColor: background, color }}
+                            title={
+                              rowTotal > 0
+                                ? isCorrect
+                                  ? `True ${expDigit} → predicted ${predDigit}: ${count} of ${rowTotal} (${formatConfusionPct(share)}) — correct`
+                                  : `True ${expDigit} → predicted ${predDigit}: ${count} of ${rowTotal} (${formatConfusionPct(share)}) — misread`
+                                : undefined
+                            }
+                          >
+                            {count > 0 ? (
+                              <>
+                                <span className="dashboard-confusion-cell-count">{count}</span>
+                                <span className="dashboard-confusion-cell-pct">
+                                  {formatConfusionPct(share)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="dashboard-confusion-cell-empty">·</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
                   );
                 })}
-              </tr>
+              </tbody>
+            </table>
+            <p className="dashboard-confusion-x-label">Predicted digit</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="dashboard-confusion-legend" aria-label="Color legend">
+        <div className="dashboard-confusion-legend-item">
+          <p className="dashboard-confusion-legend-title">Correct (diagonal)</p>
+          <div
+            className="dashboard-confusion-legend-bar"
+            style={{ background: CORRECT_LEGEND }}
+            aria-hidden
+          />
+          <div className="dashboard-confusion-legend-ticks" aria-hidden>
+            {CONFUSION_LEGEND_TICKS.map((tick) => (
+              <span key={`c-${tick}`}>{tick}%</span>
             ))}
-          </tbody>
-        </table>
+          </div>
+          <p className="dashboard-confusion-legend-caption">Darker green = more of the row correct</p>
+        </div>
+        <div className="dashboard-confusion-legend-item">
+          <p className="dashboard-confusion-legend-title">Misread (off-diagonal)</p>
+          <div
+            className="dashboard-confusion-legend-bar"
+            style={{ background: MISREAD_LEGEND }}
+            aria-hidden
+          />
+          <div className="dashboard-confusion-legend-ticks" aria-hidden>
+            {CONFUSION_LEGEND_TICKS.map((tick) => (
+              <span key={`m-${tick}`}>{tick}%</span>
+            ))}
+          </div>
+          <p className="dashboard-confusion-legend-caption">Darker red = more of the row misread</p>
+        </div>
       </div>
     </div>
   );

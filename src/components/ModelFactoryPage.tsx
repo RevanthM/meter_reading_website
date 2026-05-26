@@ -170,7 +170,7 @@ const ModelFactoryPage: FC = () => {
       a.click();
       a.remove();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'CSV download failed');
+      setSaveError(e instanceof Error ? e.message : 'Unit test file download failed');
     } finally {
       setUtDownloadBusy(null);
     }

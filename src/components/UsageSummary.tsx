@@ -74,7 +74,7 @@ const UsageSummary: React.FC = () => {
             <Users size={32} strokeWidth={1.5} />
             <div>
               <h1>App usage</h1>
-              <p>Sessions and images from S3 metadata (rolling window)</p>
+              <p>Sessions and images (rolling window)</p>
             </div>
           </div>
         </div>
@@ -151,7 +151,7 @@ const UsageSummary: React.FC = () => {
         {loading && (
           <div className="loading-state">
             <Loader2 size={40} className="spin" />
-            <p>Loading usage from S3…</p>
+            <p>Loading usage…</p>
           </div>
         )}
 

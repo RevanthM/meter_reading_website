@@ -48,7 +48,7 @@ const DashboardReportIterationBlocks: FC<Props> = ({
         <p>
           {latestOnly
             ? 'Latest eval snapshot per pipeline with pp vs the previous iteration.'
-            : 'Check iterations to include in the PDF report and load unit-test CSV analytics. Current shows the latest only.'}
+            : 'Select iterations to include in the PDF report and unit test results. Current shows the latest only.'}
         </p>
       </header>
       <div className="dashboard-report-iteration-blocks">
@@ -167,7 +167,7 @@ const DashboardReportIterationBlocks: FC<Props> = ({
               ) : null}
               {d.linkedCsvName ? (
                 <p className="dashboard-report-iteration-csv">
-                  <strong>Unit test:</strong> <code>{d.linkedCsvName}</code>
+                  <strong>Results:</strong> {d.linkedCsvName}
                 </p>
               ) : null}
             </article>

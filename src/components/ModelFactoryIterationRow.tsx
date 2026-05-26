@@ -113,8 +113,8 @@ const ModelFactoryIterationRow: FC<ModelFactoryIterationRowProps> = ({
               className="view-button model-factory-card-mini-btn"
               title={
                 utLinks.length > 1
-                  ? `Download UT CSV (${utLinks.length} linked)`
-                  : `Download ${primaryUt.fileName || primaryUt.s3Key}`
+                  ? `Download unit test file (${utLinks.length} attached)`
+                  : 'Download unit test file'
               }
               disabled={utDownloadBusy === primaryUt.s3Key}
               onClick={() => onDownloadUt(primaryUt)}

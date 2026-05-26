@@ -12,6 +12,7 @@ import {
   type ChartPipelineFilter,
   type LatestDialAppMetric,
 } from '../constants/pipelineChartTheme';
+import { formatUnitTestResultsSummary } from './unitTestDisplayLabels';
 
 export type MetricDelta = {
   value: number | null;
@@ -210,7 +211,7 @@ function evalDateForRow(row: PipelineIterationRecord): string | null {
   return null;
 }
 
-function linkedCsvName(row: PipelineIterationRecord): string | null {
+function linkedResultsLabel(row: PipelineIterationRecord): string | null {
   const links = row.linkedUnitTests ?? [];
   if (!links.length) return null;
   const sorted = [...links].sort((a, b) => {
@@ -219,7 +220,14 @@ function linkedCsvName(row: PipelineIterationRecord): string | null {
     return tb - ta;
   });
   const link = sorted[0];
-  return link?.fileName || link?.s3Key?.split('/').pop() || null;
+  if (!link) return null;
+  return formatUnitTestResultsSummary({
+    pipelineDisplayName: link.pipelineDisplayName,
+    pipelineId: link.pipelineId,
+    generatedUtc: link.generatedUtc,
+    accuracyPercent: link.accuracyPercent,
+    imagesProcessed: link.imagesProcessed,
+  });
 }
 
 function buildSnapshotCardForRow(
@@ -268,7 +276,7 @@ function buildSnapshotCardForRow(
     trainingImages: metricForRow(row, 'images'),
     unitTestImages: row.manualMetrics?.unitTestImagesLaptop ?? null,
     hasLinkedCsv: (row.linkedUnitTests?.length ?? 0) > 0,
-    linkedCsvName: linkedCsvName(row),
+    linkedCsvName: linkedResultsLabel(row),
     scopeNote: row.scope?.trim() || null,
     perDial,
     accuracyTrend,
@@ -523,7 +531,7 @@ export function buildReportIterationDetails(
       ...summary,
       perDial,
       outcome: row?.outcome?.trim() || null,
-      linkedCsvName: row ? linkedCsvName(row) : null,
+      linkedCsvName: row ? linkedResultsLabel(row) : null,
       accuracyDelta:
         acc != null && prevAcc != null ? Math.round((acc - prevAcc) * 10) / 10 : null,
       confidenceDelta:

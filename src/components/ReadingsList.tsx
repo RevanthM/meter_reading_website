@@ -107,7 +107,10 @@ function matchesReadingsCohort(r: S3MeterReading, cohort: ReadingsCohortId): boo
         (r.status === 'incorrect_new' && r.isManuallyReviewed === true)
       );
     case 'training':
-      return r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true;
+      return (
+        r.status !== 'incorrect_training' &&
+        (r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true)
+      );
     case 'test_data':
       return r.reviewerDatasetDestination === 'test';
   }
@@ -571,7 +574,7 @@ const ReadingsList: FC = () => {
 
   const handleDownloadListZip = useCallback(async () => {
     if (!isUsingRealData) {
-      window.alert('Start the API server and use live S3 data, then try again.');
+      window.alert('Start the API server and refresh, then try again.');
       return;
     }
     setZipExporting(true);
@@ -625,7 +628,7 @@ const ReadingsList: FC = () => {
 
   const handleCopyToTrainingDataset = useCallback(async () => {
     if (!isUsingRealData) {
-      window.alert('Start the API server and use live S3 data, then try again.');
+      window.alert('Start the API server and refresh, then try again.');
       return;
     }
     if (!trainingFolderPrefix) {
@@ -663,6 +666,10 @@ const ReadingsList: FC = () => {
       if (bad) {
         window.alert(allErrors.map((e) => `${e.sessionId}: ${e.error}`).join('\n'));
       }
+      if (ok > 0) {
+        setSelectedIds(new Set());
+        await refreshData();
+      }
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Copy to training dataset failed.');
     } finally {
@@ -675,6 +682,7 @@ const ReadingsList: FC = () => {
     selectedIds,
     readings,
     workType,
+    refreshData,
   ]);
 
   return (
@@ -740,7 +748,7 @@ const ReadingsList: FC = () => {
             onRefresh={() => void handleListRefresh()}
             busy={listRefreshing}
             disabled={readingsLoading}
-            title="Reload sessions from S3"
+            title="Refresh sessions"
           />
         </div>
       </header>
@@ -822,9 +830,8 @@ const ReadingsList: FC = () => {
               · app version <strong>{zipExportOpts.appVersion === 'unknown' ? 'unknown' : zipExportOpts.appVersion}</strong>
             </>
           ) : null}
-          ). Uses the full S3 slice for those filters, not only the rows on this page. ZIP is flat at the root: raw
-          full-frame images (no <code>dial_*</code> crops) plus <code>dataset.json</code> — suitable to upload to
-          Roboflow.
+          ). Includes all sessions matching these filters, not only the rows on this page. Downloads as a ZIP of
+          full-frame images.
         </p>
         <button
           type="button"
@@ -1068,7 +1075,7 @@ const ReadingsList: FC = () => {
 
       <main className="list-content">
         {readingsLoading && readings.length === 0 ? (
-          <ListViewLoading message="Loading sessions from S3…" />
+          <ListViewLoading message="Loading sessions…" />
         ) : (
         <div className="table-container">
           {readingsLoading ? (

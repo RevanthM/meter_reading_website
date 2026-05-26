@@ -4,6 +4,7 @@ import type { PipelineIterationRecord, UnitTestRunDetailResponse } from '../serv
 import { fetchUnitTestRunDetail } from '../services/api';
 import { filterEvalChartRows } from '../constants/pipelineChartTheme';
 import { pickNewestLink } from '../utils/unitTestIterationLink';
+import { formatUnitTestSourceLabel } from '../utils/unitTestDisplayLabels';
 import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
 import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
 
@@ -34,11 +35,12 @@ const DashboardUnitTestInsights: FC<Props> = ({
       if (!selectedIterationIds.has(r.id)) continue;
       const link = pickNewestLink(r.linkedUnitTests ?? []);
       if (!link) continue;
+      const iterationLabel = `${r.pipeline.trim()} · #${r.iterationNumber}`;
       opts.push({
         iterationId: r.id,
         s3Key: link.s3Key,
-        label: link.fileName || link.s3Key.split('/').pop() || link.s3Key,
-        iterationLabel: `${r.pipeline.trim()} · #${r.iterationNumber}`,
+        label: formatUnitTestSourceLabel(iterationLabel, link),
+        iterationLabel,
       });
     }
     return opts;
@@ -78,7 +80,7 @@ const DashboardUnitTestInsights: FC<Props> = ({
         next.delete(key);
         return next;
       });
-      setError(e instanceof Error ? e.message : 'Failed to load unit test CSV');
+      setError(e instanceof Error ? e.message : 'Could not load unit test results');
     } finally {
       setLoadingKeys((prev) => {
         const next = new Set(prev);
@@ -110,9 +112,9 @@ const DashboardUnitTestInsights: FC<Props> = ({
     if (confusionOnly) return null;
     return (
       <div className="dashboard-unit-test-insights dashboard-unit-test-insights--empty">
-        <h3>Unit test analytics (CSV)</h3>
+        <h3>Unit test results</h3>
         <p className="pipeline-iterations-chart-card-placeholder">
-          Check one or more iterations under All details to load unit-test CSV analytics.
+          Select one or more iterations under All details to view unit test results.
         </p>
       </div>
     );
@@ -122,9 +124,10 @@ const DashboardUnitTestInsights: FC<Props> = ({
     if (confusionOnly) return null;
     return (
       <div className="dashboard-unit-test-insights dashboard-unit-test-insights--empty">
-        <h3>Unit test analytics (CSV)</h3>
+        <h3>Unit test results</h3>
         <p className="pipeline-iterations-chart-card-placeholder">
-          Selected iterations have no linked unit-test CSV yet. Link a CSV in the registry to see charts here.
+          Selected iterations have no unit test file attached yet. Attach a unit test file to an iteration to view
+          results here.
         </p>
       </div>
     );
@@ -134,17 +137,17 @@ const DashboardUnitTestInsights: FC<Props> = ({
     return (
       <div className="analytics-details-block analytics-details-block--current-confusion">
         <header className="analytics-details-block__head">
-          <h4>Confusion matrix — current iteration</h4>
-          <p>Expected vs predicted digits from the linked unit-test CSV.</p>
+          <h4>Digit confusion — current iteration</h4>
+          <p>Ground truth vs predicted digits for this iteration.</p>
         </header>
         {linkOptions.length > 1 ? (
           <label className="dashboard-per-dial-select-wrap analytics-current-confusion-run">
-            <span className="dashboard-per-dial-select-label">CSV run</span>
+            <span className="dashboard-per-dial-select-label">Unit test file</span>
             <select
               className="dashboard-per-dial-select"
               value={selectedKey}
               onChange={(e) => setSelectedKey(e.target.value)}
-              aria-label="Unit test CSV run"
+              aria-label="Unit test file"
             >
               {linkOptions.map((o) => (
                 <option key={o.s3Key} value={o.s3Key}>
@@ -161,7 +164,7 @@ const DashboardUnitTestInsights: FC<Props> = ({
         {loading ? (
           <div className="chart-empty chart-empty--tight">
             <Loader2 size={24} className="spin" />
-            <span>Loading confusion matrix…</span>
+            <span>Loading digit confusion matrix…</span>
           </div>
         ) : error ? (
           <p className="pipeline-iterations-chart-card-placeholder">{error}</p>
@@ -180,19 +183,20 @@ const DashboardUnitTestInsights: FC<Props> = ({
     <div className="dashboard-unit-test-insights">
       <div className="dashboard-unit-test-insights-head">
         <div>
-          <h3>Unit test analytics (CSV)</h3>
+          <h3>Unit test results</h3>
           <p className="dashboard-pipeline-essential-sub">
-            Loaded for checked iterations — per-dial breakdowns, confusion heatmap, and confidence histogram.
+            Shown for selected iterations — per-dial breakdowns, digit confusion matrix, and confidence
+            distribution.
           </p>
         </div>
         {linkOptions.length > 1 ? (
           <label className="dashboard-per-dial-select-wrap">
-            <span className="dashboard-per-dial-select-label">CSV run</span>
+            <span className="dashboard-per-dial-select-label">Unit test file</span>
             <select
               className="dashboard-per-dial-select"
               value={selectedKey}
               onChange={(e) => setSelectedKey(e.target.value)}
-              aria-label="Unit test CSV run"
+              aria-label="Unit test file"
             >
               {linkOptions.map((o) => (
                 <option key={o.s3Key} value={o.s3Key}>
@@ -211,7 +215,7 @@ const DashboardUnitTestInsights: FC<Props> = ({
       {loading ? (
         <div className="chart-empty chart-empty--tight">
           <Loader2 size={24} className="spin" />
-          <span>Loading CSV…</span>
+          <span>Loading results…</span>
         </div>
       ) : error ? (
         <p className="pipeline-iterations-chart-card-placeholder">{error}</p>

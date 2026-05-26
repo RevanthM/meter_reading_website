@@ -728,8 +728,8 @@ const ReadingDetail: React.FC = () => {
     if (!r?.s3SessionPrefix) {
       alert(
         isLabelerMode
-          ? 'Missing S3 session prefix; cannot move this session.'
-          : 'Missing S3 session prefix; cannot save metadata.',
+          ? 'This session cannot be moved. Contact an administrator.'
+          : 'This session cannot be saved. Contact an administrator.',
       );
       return false;
     }
@@ -857,7 +857,7 @@ const ReadingDetail: React.FC = () => {
 
       if (metaDirty || shouldMarkManual) {
         if (!patchPrefix) {
-          alert('Missing S3 session prefix; cannot save metadata.');
+          alert('This session cannot be saved. Contact an administrator.');
           return false;
         }
         const patch: SessionMetadataPatch = {};
@@ -980,7 +980,7 @@ const ReadingDetail: React.FC = () => {
       setDirectReading(res.reading);
       upsertReading(res.reading);
       void refreshCounts({ silent: true });
-      window.alert(`Approved — unit test image ${res.fileName} uploaded and manifest updated.`);
+      window.alert(`Approved — unit test image ${res.fileName} added to the library.`);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Approve failed');
     } finally {
@@ -1697,7 +1697,7 @@ const ReadingDetail: React.FC = () => {
                       rows={4}
                     />
                     <p id="reading-detail-comments-hint" className="reading-detail-field-hint">
-                      Saved to S3 as <code>portal_review_notes</code> when you save.
+                      Review notes are saved when you save.
                     </p>
                   </div>
 
@@ -1711,7 +1711,7 @@ const ReadingDetail: React.FC = () => {
                     {isSaving ? (
                       <>
                         <Loader2 size={18} className="spin" aria-hidden />
-                        <span>Saving to S3…</span>
+                        <span>Saving…</span>
                       </>
                     ) : isSaved ? (
                       <>
@@ -1843,11 +1843,11 @@ const ReadingDetail: React.FC = () => {
                   <p className="reading-detail-review-summary-hint">
                     {reading.isManuallyReviewed ? (
                       <>
-                        Marked manually reviewed (<code>is_manually_reviewed</code> in metadata).
+                        Marked as manually reviewed.
                       </>
                     ) : (
                       <>
-                        Not marked yet — saving as reviewer sets <code>is_manually_reviewed</code> in metadata.json.
+                        Not marked yet — saving as reviewer marks this session as reviewed.
                         Legacy <code>is_human_reviewed</code> is still read until migrated.
                       </>
                     )}

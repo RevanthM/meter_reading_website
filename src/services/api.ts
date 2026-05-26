@@ -452,7 +452,7 @@ export async function fetchUnitTestRuns(
     }
     return parseJsonBody<UnitTestRunListResponse>(text, response.status);
   } catch (e) {
-    throw wrapFetchNetworkError(e, 'Listing unit test CSVs failed.');
+    throw wrapFetchNetworkError(e, 'Listing unit test results failed.');
   }
 }
 
@@ -473,7 +473,7 @@ export async function fetchUnitTestRunDetail(
     }
     return parseJsonBody<UnitTestRunDetailResponse>(text, response.status);
   } catch (e) {
-    throw wrapFetchNetworkError(e, 'Reading unit test CSV failed.');
+    throw wrapFetchNetworkError(e, 'Reading unit test file failed.');
   }
 }
 
@@ -490,7 +490,7 @@ export async function fetchUnitTestRunDownloadUrl(
     }
     return parseJsonBody<{ url: string; expiresInSeconds: number }>(text, response.status);
   } catch (e) {
-    throw wrapFetchNetworkError(e, 'Unit test CSV download failed.');
+    throw wrapFetchNetworkError(e, 'Unit test file download failed.');
   }
 }
 

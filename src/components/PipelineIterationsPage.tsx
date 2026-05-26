@@ -386,8 +386,8 @@ const PipelineIterationsPage: FC = () => {
             <div>
               <h1>Pipeline iterations</h1>
               <p>
-                Registry in S3: portal metrics by app version, manual Roboflow / eval fields, and optional sub-status.
-                Charts reflect the current filter when a pipeline is selected. Save changes with <strong>Save to S3</strong>.
+                Track metrics by app version and iteration status. Charts reflect the current filter when a pipeline
+                is selected. Save changes with <strong>Save</strong>.
               </p>
             </div>
           </div>
@@ -395,7 +395,7 @@ const PipelineIterationsPage: FC = () => {
           <ListPageRefreshButton
             onRefresh={() => void load()}
             busy={loading}
-            title="Reload registry from S3"
+            title="Refresh"
           />
         </div>
       </header>
@@ -430,7 +430,7 @@ const PipelineIterationsPage: FC = () => {
           <div className="pipeline-iterations-toolbar-actions">
             <button type="button" className="view-button" onClick={exportCsv} disabled={!filteredRows.length}>
               <Download size={16} />
-              Export CSV (filtered)
+              Export table
             </button>
             <button
               type="button"
@@ -455,7 +455,7 @@ const PipelineIterationsPage: FC = () => {
               disabled={saving || loading}
             >
               {saving ? <Loader2 size={18} className="spin" aria-hidden /> : <Save size={18} aria-hidden />}
-              Save to S3
+              Save
             </button>
           </div>
         </div>
@@ -470,7 +470,7 @@ const PipelineIterationsPage: FC = () => {
         {loading ? (
           <div className="loading-state">
             <Loader2 size={40} className="spin" aria-hidden />
-            <p>Loading registry…</p>
+            <p>Loading iterations…</p>
           </div>
         ) : (
           <>
@@ -494,7 +494,7 @@ const PipelineIterationsPage: FC = () => {
                     </th>
                     <th>Status</th>
                     <th>Sub</th>
-                    <th title="Linked iOS unit-test CSV exports on S3">UT CSV</th>
+                    <th title="Attached unit test files">Results</th>
                     <th>Outcome</th>
                     <th>List</th>
                     <th>Edit</th>
@@ -529,7 +529,7 @@ const PipelineIterationsPage: FC = () => {
                               className="pipeline-iterations-portal-pill"
                               title={(r.linkedUnitTests ?? []).map((l) => l.fileName || l.s3Key).join('\n')}
                             >
-                              {r.linkedUnitTests!.length} linked
+                              {r.linkedUnitTests!.length}
                             </span>
                           ) : (
                             <span className="readings-confidence-missing">—</span>

@@ -195,7 +195,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
     return (
       <RoleHomeShell
         title="Test data"
-        subtitle="Approve reviewer picks into unit test images and update the manifest."
+        subtitle="Approve reviewer selections into the unit test image library."
         icon={<ImageIcon size={28} strokeWidth={2} />}
       >
         {countsLoading ? <CountsLoadingBar /> : null}
@@ -209,7 +209,7 @@ export const DashboardRoleHome: FC<DashboardRoleHomeProps> = ({
           <KpiMiniCard
             label="Unit test images"
             value="Browse"
-            hint="Flat folder + unittestng_manifest.json (portal only; iOS uses filenames)"
+            hint="Browse the unit test image library with difficulty tags"
             onClick={() => navigate('/test-data/images')}
             variant="accent"
           />

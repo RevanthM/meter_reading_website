@@ -220,7 +220,7 @@ const ModelAnalytics: React.FC = () => {
         {loading && (
           <div className="loading-state">
             <Loader2 size={40} className="spin" />
-            <p>Computing analytics from S3…</p>
+            <p>Computing analytics…</p>
           </div>
         )}
 

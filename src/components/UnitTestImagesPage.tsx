@@ -37,7 +37,6 @@ const UnitTestImagesPage: FC = () => {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [images, setImages] = useState<UnitTestImageRow[]>([]);
-  const [manifestKey, setManifestKey] = useState('');
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [downloadingZip, setDownloadingZip] = useState(false);
@@ -51,7 +50,6 @@ const UnitTestImagesPage: FC = () => {
     try {
       const data = await fetchUnitTestImages(workType);
       const rows = data.images;
-      setManifestKey(data.manifestKey);
       if (rows.length === 0) {
         setImages([]);
         return;
@@ -123,7 +121,7 @@ const UnitTestImagesPage: FC = () => {
   const handleDelete = async (img: UnitTestImageRow) => {
     if (
       !window.confirm(
-        `Delete ${img.fileName} from unit test images?\n\nThis removes the file from S3 and the manifest. Session folders are not deleted.`,
+        `Remove ${img.fileName} from the unit test library? This cannot be undone.`,
       )
     ) {
       return;
@@ -182,7 +180,6 @@ const UnitTestImagesPage: FC = () => {
   const imageCount = images.length;
   const visibleCount = visibleImages.length;
   const searchActive = fileNameSearch.trim().length > 0;
-  const manifestFileName = manifestKey ? manifestKey.split('/').pop() : null;
 
   const imageCountLabel = (() => {
     if (loading || err) return null;
@@ -219,16 +216,10 @@ const UnitTestImagesPage: FC = () => {
               title={
                 downloadingZip
                   ? 'Building ZIP on server (may take up to a minute)…'
-                  : manifestFileName
-                    ? `Download all images and ${manifestFileName} as a ZIP`
-                    : 'Download all images and manifest as a ZIP'
+                  : 'Download all images as a ZIP'
               }
               aria-label={
-                downloadingZip
-                  ? 'Building ZIP download'
-                  : manifestFileName
-                    ? `Download all images and ${manifestFileName} as a ZIP`
-                    : 'Download all images and manifest as a ZIP'
+                downloadingZip ? 'Building ZIP download' : 'Download all images as a ZIP'
               }
             >
               {downloadingZip ? (
@@ -242,7 +233,7 @@ const UnitTestImagesPage: FC = () => {
               onRefresh={() => void handleRefresh()}
               busy={refreshing || loading}
               disabled={loading}
-              title="Reload unit test images from S3"
+              title="Refresh unit test images"
             />
           </div>
         </div>
@@ -326,7 +317,7 @@ const UnitTestImagesPage: FC = () => {
                   <code>{img.fileName}</code>
                 </p>
                 <p className="unit-test-images-expected">
-                  Expected: <strong>{img.expectedMeterValue ?? '—'}</strong>
+                  Ground truth: <strong>{img.expectedMeterValue ?? '—'}</strong>
                 </p>
                 <div className="unit-test-images-card-actions">
                   <button

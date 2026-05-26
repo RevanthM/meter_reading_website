@@ -543,6 +543,84 @@ export function buildAppMetricLineChart(
   return { chartRows, series: series.filter((s) => chartRows.some((r) => r[s.dataKey] != null)) };
 }
 
+export type CombinedProgressSeries = {
+  line: Exclude<FactoryProductLine, 'unknown'>;
+  label: string;
+  stroke: string;
+  imagesKey: string;
+  accuracyKey: string;
+  confidenceKey: string;
+};
+
+function combinedMetricKey(line: Exclude<FactoryProductLine, 'unknown'>, metric: 'images' | 'accuracy' | 'confidence'): string {
+  return `${line}_${metric}`;
+}
+
+/** Merged rows for progress ComposedChart: circles = training images, lines = accuracy & confidence. */
+export function buildCombinedProgressChart(
+  rows: PipelineIterationRecord[],
+  pipelineFilter: ChartPipelineFilter,
+): { chartRows: AppLineChartRow[]; series: CombinedProgressSeries[]; imageRange: { min: number; max: number } } {
+  const images = buildAppMetricLineChart(rows, pipelineFilter, 'images');
+  const accuracy = buildAppMetricLineChart(rows, pipelineFilter, 'accuracy');
+  const confidence = buildAppMetricLineChart(rows, pipelineFilter, 'confidence');
+
+  const iterationSet = new Set<number>();
+  for (const r of images.chartRows) iterationSet.add(r.iteration);
+  for (const r of accuracy.chartRows) iterationSet.add(r.iteration);
+  for (const r of confidence.chartRows) iterationSet.add(r.iteration);
+  const iterations = [...iterationSet].sort((a, b) => a - b);
+
+  const lines =
+    pipelineFilter === 'all'
+      ? PIPELINE_CHART_LINES
+      : [pipelineFilter as Exclude<FactoryProductLine, 'unknown'>];
+
+  const series: CombinedProgressSeries[] = lines.map((line) => ({
+    line,
+    label: FACTORY_PRODUCT_LINE_CHART[line].label,
+    stroke: FACTORY_PRODUCT_LINE_CHART[line].stroke,
+    imagesKey: combinedMetricKey(line, 'images'),
+    accuracyKey: combinedMetricKey(line, 'accuracy'),
+    confidenceKey: combinedMetricKey(line, 'confidence'),
+  }));
+
+  const chartRows: AppLineChartRow[] = iterations.map((iteration) => {
+    const row: AppLineChartRow = { iteration, iterationLabel: `#${iteration}` };
+    for (const s of series) {
+      const imgRow = images.chartRows.find((r) => r.iteration === iteration);
+      const accRow = accuracy.chartRows.find((r) => r.iteration === iteration);
+      const confRow = confidence.chartRows.find((r) => r.iteration === iteration);
+      row[s.imagesKey] = (imgRow?.[s.line] as number | null | undefined) ?? null;
+      row[s.accuracyKey] = (accRow?.[s.line] as number | null | undefined) ?? null;
+      row[s.confidenceKey] = (confRow?.[s.line] as number | null | undefined) ?? null;
+    }
+    return row;
+  });
+
+  let min = Infinity;
+  let max = -Infinity;
+  for (const row of chartRows) {
+    for (const s of series) {
+      const v = row[s.imagesKey];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        min = Math.min(min, v);
+        max = Math.max(max, v);
+      }
+    }
+  }
+  const imageRange =
+    Number.isFinite(min) && Number.isFinite(max) ? { min, max } : { min: 0, max: 1 };
+
+  const activeSeries = series.filter((s) =>
+    chartRows.some(
+      (r) => r[s.imagesKey] != null || r[s.accuracyKey] != null || r[s.confidenceKey] != null,
+    ),
+  );
+
+  return { chartRows, series: activeSeries, imageRange };
+}
+
 export type LatestDialAppMetric = {
   dial: number;
   accuracy: number | null;
