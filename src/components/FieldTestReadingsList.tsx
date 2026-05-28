@@ -84,57 +84,79 @@ const FieldTestReadingsList: FC = () => {
     return () => window.clearTimeout(t);
   }, [filters.query]);
 
-  const load = useCallback(async () => {
-    setFetching(true);
-    setErr(null);
+  const loadCycles = useCallback(async () => {
     try {
       const cyclesRes = await fetchFieldTestCycles(workType);
       setCycles(cyclesRes.cycles);
       const selected =
-        cyclesRes.cycles.find((c) => c.id === cycleId) || cyclesRes.activeCycle || cyclesRes.cycles[0] || null;
+        cyclesRes.cycles.find((c) => c.id === cycleId) ||
+        cyclesRes.activeCycle ||
+        cyclesRes.cycles[0] ||
+        null;
       setActiveCycle(selected);
-
-      const res = (await fetchFieldTestCaptures(workType, {
-        cycleId: showCyclePicker ? selected?.id : undefined,
-        page: 1,
-        limit: 2000,
-        format: 'readings',
-        q: debouncedQuery,
-        difficulty: filters.difficulty,
-        user: filters.user,
-        corrected: filters.corrected,
-        location: filters.location,
-      })) as FieldTestReadingsListResponse;
-
-      setReadings(res.readings);
-      setUsers(res.filterOptions.users);
-      setCities(res.filterOptions.cities ?? []);
-      setTotal(res.total);
+      return selected;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
-    } finally {
-      setFetching(false);
-      setInitialLoading(false);
+      setErr(e instanceof Error ? e.message : 'Failed to load field test cycles');
+      return null;
     }
-  }, [
-    workType,
-    cycleId,
-    showCyclePicker,
-    debouncedQuery,
-    filters.difficulty,
-    filters.user,
-    filters.corrected,
-    filters.location,
-  ]);
+  }, [workType, cycleId]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadCycles();
+  }, [loadCycles]);
+
+  const effectiveCycleId = cycleId || activeCycle?.id || '';
+
+  const loadCaptures = useCallback(
+    async (opts?: { refresh?: boolean }) => {
+      setFetching(true);
+      setErr(null);
+      try {
+        const res = (await fetchFieldTestCaptures(workType, {
+          cycleId: showCyclePicker ? effectiveCycleId || undefined : undefined,
+          page: 1,
+          limit: 2000,
+          format: 'readings',
+          q: debouncedQuery,
+          difficulty: filters.difficulty,
+          user: filters.user,
+          corrected: filters.corrected,
+          location: filters.location,
+          refresh: opts?.refresh,
+        })) as FieldTestReadingsListResponse;
+
+        setReadings(res.readings);
+        setUsers(res.filterOptions.users);
+        setCities(res.filterOptions.cities ?? []);
+        setTotal(res.total);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
+      } finally {
+        setFetching(false);
+        setInitialLoading(false);
+      }
+    },
+    [
+      workType,
+      showCyclePicker,
+      effectiveCycleId,
+      debouncedQuery,
+      filters.difficulty,
+      filters.user,
+      filters.corrected,
+      filters.location,
+    ],
+  );
+
+  useEffect(() => {
+    void loadCaptures();
+  }, [loadCaptures]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await load();
+      await loadCycles();
+      await loadCaptures({ refresh: true });
     } finally {
       setRefreshing(false);
     }

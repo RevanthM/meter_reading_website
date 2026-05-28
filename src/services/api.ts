@@ -741,10 +741,12 @@ export async function fetchFieldTestCaptures(
     location?: string;
     presign?: boolean;
     format?: 'captures' | 'readings';
+    refresh?: boolean;
   },
 ): Promise<FieldTestCapturesResponse | FieldTestReadingsListResponse> {
   const q = new URLSearchParams({ workType });
   if (options?.cycleId) q.set('cycleId', options.cycleId);
+  if (options?.refresh) q.set('refresh', '1');
   if (options?.page) q.set('page', String(options.page));
   if (options?.limit) q.set('limit', String(options.limit));
   if (options?.q) q.set('q', options.q);

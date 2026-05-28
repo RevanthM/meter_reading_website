@@ -10,6 +10,7 @@ import {
 } from './fieldTestCycles.js';
 import {
   buildFieldTestRollup,
+  filterReadingsForCycle,
   filterSessionsForCycle,
   readFieldTestRollup,
   writeFieldTestRollup,
@@ -104,12 +105,40 @@ export function registerFieldTestRoutes(app, deps) {
     staleMs: FIELD_TEST_CACHE_FRESH_MS * 4,
   });
 
+  const listReadingsCache = createResponseCache({
+    name: 'field-test-list-readings',
+    freshMs: FIELD_TEST_CACHE_FRESH_MS,
+    staleMs: FIELD_TEST_CACHE_FRESH_MS * 4,
+  });
+
+  function invalidateFieldTestCaches() {
+    analyticsCache.invalidate();
+    listReadingsCache.invalidate();
+  }
+
+  function isFieldTestReading(reading) {
+    if (reading?.fieldTestCapture === true) return true;
+    return (
+      String(reading?.uploadMode || '').trim().toLowerCase() === 'field' &&
+      String(reading?.type || 'field').toLowerCase() === 'field'
+    );
+  }
+
   async function loadFieldSessionItems(workType) {
     if (!sessionIndex?.enabled) {
       throw new Error('Dynamo session index is not enabled.');
     }
     const items = await sessionIndex.queryReadingItems('field', workType);
     return items.filter(isFieldSessionItem).map(prepareSessionItem);
+  }
+
+  /** List/reviewer table — projected Dynamo rows, no dial_details blobs. */
+  async function loadFieldReadingsForList(workType) {
+    if (!sessionIndex?.enabled) {
+      throw new Error('Dynamo session index is not enabled.');
+    }
+    const rows = await sessionIndex.queryReadings('field', workType);
+    return (rows || []).filter(isFieldTestReading);
   }
 
   app.get('/api/field-test/cycles', async (req, res) => {
@@ -133,7 +162,7 @@ export function registerFieldTestRoutes(app, deps) {
     try {
       const workType = String(req.body?.workType || '1000').trim() || '1000';
       const result = await createFieldTestCycle(s3Client, BUCKET_NAME, { ...req.body, workType });
-      analyticsCache.invalidate();
+      invalidateFieldTestCaches();
       res.status(201).json(result);
     } catch (e) {
       console.error('POST /api/field-test/cycles:', e);
@@ -147,7 +176,7 @@ export function registerFieldTestRoutes(app, deps) {
       const cycleId = String(req.params.cycleId || '').trim();
       const result = await deleteFieldTestCycle(s3Client, BUCKET_NAME, workType, cycleId);
       if (!result) return res.status(404).json({ error: 'Cycle not found' });
-      analyticsCache.invalidate();
+      invalidateFieldTestCaches();
       res.json(result);
     } catch (e) {
       console.error('DELETE /api/field-test/cycles/:cycleId:', e);
@@ -161,7 +190,7 @@ export function registerFieldTestRoutes(app, deps) {
       const cycleId = String(req.params.cycleId || '').trim();
       const result = await updateFieldTestCycle(s3Client, BUCKET_NAME, workType, cycleId, req.body || {});
       if (!result) return res.status(404).json({ error: 'Cycle not found' });
-      analyticsCache.invalidate();
+      invalidateFieldTestCaches();
       res.json(result);
     } catch (e) {
       console.error('PATCH /api/field-test/cycles/:cycleId:', e);
@@ -264,8 +293,21 @@ export function registerFieldTestRoutes(app, deps) {
         if (!cycle) return res.status(404).json({ error: 'Cycle not found' });
       }
 
-      const items = filterSessionsForCycle(await loadFieldSessionItems(workType), cycle);
-      const readings = items.map((item) => sessionItemToReading(item, { images: [] })).filter(Boolean);
+      const refreshList = req.query.refresh === '1' || req.query.refresh === 'true';
+      let readings;
+      let listCacheStatus = 'miss';
+      if (isReadingsFormat) {
+        const cached = await listReadingsCache.get(
+          workType,
+          async () => loadFieldReadingsForList(workType),
+          { force: refreshList },
+        );
+        readings = filterReadingsForCycle(cached.data, cycle);
+        listCacheStatus = cached.cacheStatus;
+      } else {
+        const items = filterSessionsForCycle(await loadFieldSessionItems(workType), cycle);
+        readings = items.map((item) => sessionItemToReading(item, { images: [] })).filter(Boolean);
+      }
       const cities = buildFieldTestCityOptions(readings);
       let filteredReadings = readings.filter((r) => matchesReadingFilters(r, filters));
       filteredReadings.sort((a, b) =>
@@ -278,8 +320,9 @@ export function registerFieldTestRoutes(app, deps) {
 
       if (isReadingsFormat) {
         const users = [
-          ...new Set(filteredReadings.map((r) => (r.userName || '').trim()).filter(Boolean)),
+          ...new Set(readings.map((r) => (r.userName || '').trim()).filter(Boolean)),
         ].sort();
+        setApiCacheHeaders(res, listCacheStatus, FIELD_TEST_CACHE_FRESH_MS);
         return res.json({
           workType,
           cycle,

@@ -209,3 +209,13 @@ export function filterSessionsForCycle(sessions, cycle) {
     return day >= cycle.startDate && day <= cycle.endDate;
   });
 }
+
+/** Portal reading rows (list endpoint — uses dateOfReading). */
+export function filterReadingsForCycle(readings, cycle) {
+  if (!cycle) return readings;
+  return readings.filter((r) => {
+    const day = captureDayFromIso(r.dateOfReading || r.date || r.createdAt);
+    if (!day) return false;
+    return day >= cycle.startDate && day <= cycle.endDate;
+  });
+}
