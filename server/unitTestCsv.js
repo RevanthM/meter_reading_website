@@ -55,7 +55,7 @@ export function parseUnitTestCsvSummary(csvText) {
   for (const line of lines) {
     const cols = parseCsvLine(line);
     if (cols.length >= 2 && cols[0] === 'section') {
-      if (cols[1] === 'UNIT_TEST_RUN_SUMMARY') {
+      if (cols[1] === 'UNIT_TEST_RUN_SUMMARY' || cols[1] === 'FIELD_CAPTURE_SUMMARY') {
         summarySection = 'run';
         continue;
       }
@@ -97,6 +97,19 @@ export function parseUnitTestCsvSummary(csvText) {
       });
       perImageRows.push(row);
     }
+  }
+
+  if (!summary.images_processed && summary.overall_reading_match != null && summary.overall_reading_match !== '') {
+    summary.images_processed = '1';
+    const expected = String(summary.expected_reading || '').trim();
+    if (expected) {
+      summary.with_filename_ground_truth = '1';
+      const match = String(summary.overall_reading_match).trim().toLowerCase();
+      summary.correct_readings = match === 'true' || match === '1' ? '1' : '0';
+    }
+  }
+  if (!summary.run_by && summary.captured_by) {
+    summary.run_by = summary.captured_by;
   }
 
   const imagesProcessed = parseInt(summary.images_processed || '0', 10) || 0;

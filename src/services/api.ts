@@ -494,6 +494,227 @@ export async function fetchUnitTestRunDownloadUrl(
   }
 }
 
+export type FieldTestCycleStatus = 'draft' | 'active' | 'closed';
+
+export interface FieldTestCycle {
+  id: string;
+  name: string;
+  workType: string;
+  startDate: string;
+  endDate: string;
+  status: FieldTestCycleStatus;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface FieldTestCyclesResponse {
+  workType: string;
+  key: string | null;
+  updatedAt: string | null;
+  cycles: FieldTestCycle[];
+  activeCycle: FieldTestCycle | null;
+}
+
+export interface FieldTestCaptureRow {
+  sessionId: string;
+  s3SessionPrefix?: string;
+  primaryImageKey?: string;
+  capturedAt: string;
+  capturedBy: string;
+  finalReading: string | null;
+  predictedReading: string | null;
+  imageDifficulty: ImageDifficulty;
+  onTickDialCount: number | null;
+  readsCorrectedCount: number;
+  hadUserCorrection: boolean;
+  dialCount: number;
+  confidence: number | null;
+  appVersion: string | null;
+  url?: string;
+}
+
+export interface FieldTestCapturesResponse {
+  workType: string;
+  cycle: FieldTestCycle | null;
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  captures: FieldTestCaptureRow[];
+  filterOptions: { users: string[] };
+}
+
+export interface FieldTestRollup {
+  version: number;
+  cycleId: string;
+  cycleName: string;
+  workType: string;
+  startDate: string;
+  endDate: string;
+  builtAt: string;
+  captureCount: number;
+  totalReads: number;
+  readsWithGroundTruth: number;
+  readsCorrect: number;
+  readsCorrected: number;
+  correctionPct: number | null;
+  summary: UnitTestCsvSummary;
+  imageDifficultyBreakdown: UnitTestImageDifficultyTier[];
+  perImageRows: Record<string, string>[];
+  perImageCount: number;
+}
+
+export interface FieldTestCycleAnalyticsResponse {
+  source: 'rollup' | 'computed';
+  cycle: FieldTestCycle;
+  rollup: FieldTestRollup;
+  rollupKey: string;
+}
+
+export async function fetchFieldTestCycles(workType: string): Promise<FieldTestCyclesResponse> {
+  const q = new URLSearchParams({ workType });
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<FieldTestCyclesResponse>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Loading field test cycles failed.');
+  }
+}
+
+export async function deleteFieldTestCycle(
+  workType: string,
+  cycleId: string,
+): Promise<{ cycles: FieldTestCycle[] }> {
+  const q = new URLSearchParams({ workType });
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}?${q}`, {
+      method: 'DELETE',
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Deleting field test cycle failed.');
+  }
+}
+
+export async function updateFieldTestCycle(
+  workType: string,
+  cycleId: string,
+  patch: {
+    name?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: FieldTestCycleStatus;
+    notes?: string;
+  },
+): Promise<{ cycle: FieldTestCycle; cycles: FieldTestCycle[] }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workType, ...patch }),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Updating field test cycle failed.');
+  }
+}
+
+export async function createFieldTestCycle(payload: {
+  workType: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  status?: FieldTestCycleStatus;
+  notes?: string;
+}): Promise<{ cycle: FieldTestCycle; cycles: FieldTestCycle[] }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Creating field test cycle failed.');
+  }
+}
+
+export async function fetchFieldTestCycleAnalytics(
+  workType: string,
+  cycleId: string,
+  options?: { refresh?: boolean },
+): Promise<FieldTestCycleAnalyticsResponse> {
+  const q = new URLSearchParams({ workType });
+  if (options?.refresh) q.set('refresh', '1');
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}/analytics?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<FieldTestCycleAnalyticsResponse>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Loading field test analytics failed.');
+  }
+}
+
+export async function fetchFieldTestCaptures(
+  workType: string,
+  options?: {
+    cycleId?: string;
+    page?: number;
+    limit?: number;
+    q?: string;
+    difficulty?: string;
+    user?: string;
+    corrected?: string;
+    presign?: boolean;
+  },
+): Promise<FieldTestCapturesResponse> {
+  const q = new URLSearchParams({ workType });
+  if (options?.cycleId) q.set('cycleId', options.cycleId);
+  if (options?.page) q.set('page', String(options.page));
+  if (options?.limit) q.set('limit', String(options.limit));
+  if (options?.q) q.set('q', options.q);
+  if (options?.difficulty) q.set('difficulty', options.difficulty);
+  if (options?.user) q.set('user', options.user);
+  if (options?.corrected) q.set('corrected', options.corrected);
+  if (options?.presign) q.set('presign', '1');
+  try {
+    const response = await fetch(`${API_BASE_URL}/field-test/captures?${q}`);
+    const text = await response.text();
+    if (!response.ok) {
+      const err = parseJsonBody<{ error?: string }>(text, response.status);
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return parseJsonBody<FieldTestCapturesResponse>(text, response.status);
+  } catch (e) {
+    throw wrapFetchNetworkError(e, 'Listing field test captures failed.');
+  }
+}
+
 export type PipelineIterationWeightRole = 'dial_detection' | 'keypoint';
 
 export interface UploadPipelineIterationWeightsResponse {

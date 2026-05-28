@@ -230,7 +230,10 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
         correct += 1;
       }
       const conf = normalizeConfidencePct(
-        row[`dial${d}_composite_confidence`] ?? row[`dial${d}_stage2_kp_model_confidence`],
+        row[`dial${d}_composite_confidence`] ??
+          row[`dial${d}_stage2_kp_model_confidence`] ??
+          row[`dial${d}_confidence`] ??
+          row.average_confidence,
       );
       if (conf != null) confs.push(conf);
     }

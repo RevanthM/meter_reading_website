@@ -47,6 +47,12 @@ const LIST_READING_PROJECTION = [
   'portal_metadata_updated_by',
   'reviewer_dataset_destination',
   'image_difficulty',
+  'on_tick_dial_count',
+  'reads_corrected_count',
+  'had_user_correction',
+  'final_reading',
+  'per_dial_compact',
+  'field_test_capture',
   'test_data_review_status',
   'test_data_unit_test_s3_key',
   'test_data_unit_test_file_name',
@@ -229,6 +235,20 @@ export function createSessionIndexStore({ tableName, region, credentials } = {})
     return queryReadings(source, portalWorkType);
   }
 
+  /** Full items (includes dial_details) for field-test rollup rebuild. */
+  async function queryReadingItems(source = 'all', portalWorkType = '1000') {
+    const jobs = gsi1QueryJobs(source, portalWorkType);
+    const chunks = await Promise.all(jobs.map(({ gsi1pk }) => queryGsi1(gsi1pk)));
+    const byId = new Map();
+    for (const item of chunks.flat()) {
+      if (!item?.session_id) continue;
+      byId.set(item.session_id, item);
+    }
+    return [...byId.values()].sort((a, b) =>
+      String(b.captured_at || '').localeCompare(String(a.captured_at || '')),
+    );
+  }
+
   /** Count sessions whose captured_at falls on portal calendar day (dayKey = YYYY-MM-DD). */
   async function countUploadedOnPortalDay(source = 'all', portalWorkType = '1000', dayKey, dayKeyFromIso) {
     const jobs = gsi1QueryJobs(source, portalWorkType);
@@ -308,6 +328,7 @@ export function createSessionIndexStore({ tableName, region, credentials } = {})
     getBySessionId,
     queryReadings,
     queryLightReadings,
+    queryReadingItems,
     queryCounts,
     countUploadedOnPortalDay,
     putItem,

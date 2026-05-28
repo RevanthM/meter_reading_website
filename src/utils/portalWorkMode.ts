@@ -131,3 +131,8 @@ export function canViewTestData(mode: PortalWorkMode): boolean {
 export function canEditTestData(mode: PortalWorkMode): boolean {
   return mode === 'test_data_reviewer' || mode === 'admin';
 }
+
+/** Field test cycles, captures, and analytics (same roles as unit test library). */
+export function canViewFieldTest(mode: PortalWorkMode): boolean {
+  return canViewTestData(mode);
+}

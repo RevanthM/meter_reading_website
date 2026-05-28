@@ -6,6 +6,7 @@ import {
   normalizeDialDetailsFromMetadata,
   normalizeSessionConfidenceValue,
 } from './normalize.js';
+import { deriveFieldTestFromMetadata, isFieldUploadMetadata } from '../fieldTestDerive.js';
 
 export function buildGsi1Pk(portalWorkType, folderStatus, sourceType) {
   return `WT#${portalWorkType}#ST#${folderStatus}#SRC#${sourceType}`;
@@ -128,6 +129,29 @@ export function metadataToSessionItem(metadata, ctx) {
     item.capture_location = metadata.capture_location;
   }
 
+  if (Array.isArray(metadata.user_incorrect_dial_numbers) && metadata.user_incorrect_dial_numbers.length > 0) {
+    item.user_incorrect_dial_numbers = metadata.user_incorrect_dial_numbers.filter((n) =>
+      Number.isInteger(n),
+    );
+  }
+  if (Array.isArray(metadata.user_corrected_positions) && metadata.user_corrected_positions.length > 0) {
+    item.user_corrected_positions = metadata.user_corrected_positions.filter((n) => Number.isInteger(n));
+  }
+
+  if (isFieldUploadMetadata(metadata)) {
+    const derived = deriveFieldTestFromMetadata({
+      ...metadata,
+      dial_details: dialDetails,
+    });
+    item.image_difficulty = derived.image_difficulty;
+    item.on_tick_dial_count = derived.on_tick_dial_count;
+    item.reads_corrected_count = derived.reads_corrected_count;
+    item.had_user_correction = derived.had_user_correction;
+    item.final_reading = derived.final_reading;
+    item.per_dial_compact = derived.per_dial_compact;
+    item.field_test_capture = derived.field_test_capture;
+  }
+
   return item;
 }
 
@@ -168,6 +192,12 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     reviewerRecommendTraining: item.reviewer_dataset_destination === 'training',
     reviewerDatasetDestination: item.reviewer_dataset_destination ?? null,
     imageDifficulty: item.image_difficulty ?? null,
+    onTickDialCount: item.on_tick_dial_count ?? null,
+    readsCorrectedCount: item.reads_corrected_count ?? null,
+    hadUserCorrection: item.had_user_correction === true,
+    finalReading: item.final_reading ?? null,
+    perDialCompact: item.per_dial_compact ?? null,
+    fieldTestCapture: item.field_test_capture === true,
     testDataReviewStatus: item.test_data_review_status ?? null,
     testDataUnitTestS3Key: item.test_data_unit_test_s3_key ?? undefined,
     testDataUnitTestFileName: item.test_data_unit_test_file_name ?? undefined,

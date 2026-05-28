@@ -16,12 +16,13 @@ import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { canEditTestData, canViewTestData } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
-
-function matchesFileNameSearch(fileName: string, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return fileName.toLowerCase().includes(q);
-}
+import {
+  filterUnitTestImages,
+  UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
+  unitTestImageFiltersActive,
+  type UnitTestImageDifficultyFilter,
+  type UnitTestImageListFilters,
+} from '../utils/unitTestImageFilters';
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -42,7 +43,10 @@ const UnitTestImagesPage: FC = () => {
   const [downloadingZip, setDownloadingZip] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [fileNameSearch, setFileNameSearch] = useState('');
+  const [filters, setFilters] = useState<UnitTestImageListFilters>({
+    query: '',
+    difficulty: 'all',
+  });
 
   const loadImages = useCallback(async () => {
     setLoading(true);
@@ -86,14 +90,11 @@ const UnitTestImagesPage: FC = () => {
   }, [loadImages]);
 
   useEffect(() => {
-    setFileNameSearch('');
+    setFilters({ query: '', difficulty: 'all' });
     setLightboxIndex(null);
   }, [workType]);
 
-  const visibleImages = useMemo(
-    () => images.filter((img) => matchesFileNameSearch(img.fileName, fileNameSearch)),
-    [images, fileNameSearch],
-  );
+  const visibleImages = useMemo(() => filterUnitTestImages(images, filters), [images, filters]);
 
   useEffect(() => {
     setLightboxIndex((lb) => {
@@ -102,12 +103,12 @@ const UnitTestImagesPage: FC = () => {
       if (lb >= visibleImages.length) return visibleImages.length - 1;
       return lb;
     });
-  }, [visibleImages.length, fileNameSearch]);
+  }, [visibleImages.length, filters]);
 
   const handleImageUpdated = (previousS3Key: string, updated: UnitTestImageRow) => {
     setImages((prev) => {
       const next = prev.map((row) => (row.s3Key === previousS3Key ? updated : row));
-      const visible = next.filter((row) => matchesFileNameSearch(row.fileName, fileNameSearch));
+      const visible = filterUnitTestImages(next, filters);
       const newIdx = visible.findIndex((row) => row.s3Key === updated.s3Key);
       setLightboxIndex((lb) => {
         if (lb == null) return lb;
@@ -131,7 +132,7 @@ const UnitTestImagesPage: FC = () => {
       await deleteUnitTestImage(workType, img.s3Key, outletCtx?.workMode ?? 'test_data_reviewer');
       setImages((prev) => {
         const next = prev.filter((row) => row.s3Key !== img.s3Key);
-        const visibleAfter = next.filter((row) => matchesFileNameSearch(row.fileName, fileNameSearch));
+        const visibleAfter = filterUnitTestImages(next, filters);
         const removedVisibleIdx = visibleImages.findIndex((row) => row.s3Key === img.s3Key);
         setLightboxIndex((lb) => {
           if (lb == null || removedVisibleIdx < 0) return lb;
@@ -179,17 +180,19 @@ const UnitTestImagesPage: FC = () => {
 
   const imageCount = images.length;
   const visibleCount = visibleImages.length;
-  const searchActive = fileNameSearch.trim().length > 0;
+  const filtersActive = unitTestImageFiltersActive(filters);
 
   const imageCountLabel = (() => {
     if (loading || err) return null;
-    if (searchActive && imageCount > 0) {
+    if (filtersActive && imageCount > 0) {
       return `${visibleCount.toLocaleString()} of ${imageCount.toLocaleString()} ${
         imageCount === 1 ? 'image' : 'images'
       }`;
     }
     return `${imageCount.toLocaleString()} ${imageCount === 1 ? 'image' : 'images'}`;
   })();
+
+  const clearFilters = () => setFilters({ query: '', difficulty: 'all' });
 
   return (
     <div className="readings-list-page unit-test-images-page">
@@ -239,32 +242,57 @@ const UnitTestImagesPage: FC = () => {
         </div>
 
         {!loading && !err && imageCount > 0 ? (
-          <div className="unit-test-images-search-row">
+          <div className="unit-test-images-filter-toolbar">
             <label className="unit-test-images-search-field">
               <Search size={18} className="unit-test-images-search-icon" aria-hidden />
               <input
                 type="search"
-                placeholder="Search by file name (partial match)…"
-                value={fileNameSearch}
-                onChange={(e) => setFileNameSearch(e.target.value)}
-                aria-label="Filter unit test images by file name"
+                placeholder="Search by file name or reading…"
+                value={filters.query}
+                onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}
+                aria-label="Search unit test images by file name or ground-truth reading"
               />
-              {fileNameSearch ? (
+              {filters.query ? (
                 <button
                   type="button"
                   className="unit-test-images-search-clear"
-                  onClick={() => setFileNameSearch('')}
-                  aria-label="Clear file name search"
+                  onClick={() => setFilters((prev) => ({ ...prev, query: '' }))}
+                  aria-label="Clear search"
                 >
                   <X size={16} aria-hidden />
                 </button>
               ) : null}
             </label>
-            {searchActive ? (
-              <p className="unit-test-images-search-meta" aria-live="polite">
-                Showing <strong>{visibleCount.toLocaleString()}</strong> of{' '}
-                {imageCount.toLocaleString()} images
-              </p>
+            <label className="unit-test-images-filter-select-wrap">
+              <span className="unit-test-images-filter-label">Difficulty</span>
+              <select
+                className="unit-test-images-filter-select"
+                value={filters.difficulty}
+                onChange={(e) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    difficulty: e.target.value as UnitTestImageDifficultyFilter,
+                  }))
+                }
+                aria-label="Filter by image difficulty"
+              >
+                {UNIT_TEST_DIFFICULTY_FILTER_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {filtersActive ? (
+              <>
+                <p className="unit-test-images-search-meta" aria-live="polite">
+                  Showing <strong>{visibleCount.toLocaleString()}</strong> of{' '}
+                  {imageCount.toLocaleString()} images
+                </p>
+                <button type="button" className="unit-test-images-filter-clear" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -284,7 +312,20 @@ const UnitTestImagesPage: FC = () => {
 
       {!loading && !err && imageCount > 0 && visibleCount === 0 ? (
         <p className="unit-test-images-page-message pipeline-iterations-empty">
-          No images match &ldquo;{fileNameSearch.trim()}&rdquo;. Try a shorter or partial file name.
+          No images match the current filters.
+          {filters.query.trim() ? (
+            <>
+              {' '}
+              Search: &ldquo;{filters.query.trim()}&rdquo;.
+            </>
+          ) : null}
+          {filters.difficulty !== 'all' ? (
+            <>
+              {' '}
+              Difficulty:{' '}
+              {UNIT_TEST_DIFFICULTY_FILTER_OPTIONS.find((o) => o.id === filters.difficulty)?.label}.
+            </>
+          ) : null}
         </p>
       ) : null}
 

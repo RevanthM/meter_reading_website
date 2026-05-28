@@ -30,6 +30,7 @@ import {
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
+import { registerFieldTestRoutes } from './fieldTestRoutes.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
@@ -3204,6 +3205,13 @@ registerTestDataReviewRoutes(app, {
       ingestSource: 'portal_dual_write',
       ...ctx,
     }),
+});
+
+registerFieldTestRoutes(app, {
+  s3Client,
+  BUCKET_NAME,
+  sessionIndex,
+  getPresignedUrl: getSignedImageUrl,
 });
 
 const MANUAL_UPLOAD_MAX_BYTES = Math.max(

@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AmrSessionsPortal",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:125814691451:table/amr-sessions",
+        "arn:aws:dynamodb:us-east-1:125814691451:table/amr-sessions/index/*"
+      ]
+    }
+  ]
+}

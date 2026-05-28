@@ -20,6 +20,7 @@ import {
   Upload,
   ClipboardList,
   ImageIcon,
+  ChevronDown,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalOutletWorkContext, PortalWorkMode } from '../utils/portalWorkMode';
@@ -44,6 +45,15 @@ type NavLeaf = {
   activeWhenSearch?: Record<string, string>;
 };
 
+type NavGroup = {
+  id: string;
+  label: string;
+  hint?: string;
+  items: NavLeaf[];
+};
+
+type NavEntry = { kind: 'leaf'; item: NavLeaf } | { kind: 'group'; group: NavGroup };
+
 function navLeafActive(pathname: string, search: string, item: NavLeaf): boolean {
   if (item.path === '/') return pathname === '/';
   if (pathname.startsWith('/reading/')) return false;
@@ -56,11 +66,19 @@ function navLeafActive(pathname: string, search: string, item: NavLeaf): boolean
   return true;
 }
 
+function navGroupActive(pathname: string, search: string, group: NavGroup): boolean {
+  return group.items.some((item) => navLeafActive(pathname, search, item));
+}
+
+function navGroup(id: string, label: string, hint: string | undefined, items: NavLeaf[]): NavEntry {
+  return { kind: 'group', group: { id, label, hint, items } };
+}
+
 const STORAGE_SIDEBAR_COLLAPSED = 'portal_sidebar_collapsed';
 
 const UNIT_TEST_IMAGES_NAV: NavLeaf = {
   path: '/test-data/images',
-  label: 'Unit test images',
+  label: 'Images',
   description: 'Image library',
   hint: 'Browse images with difficulty tags',
   icon: <ImageIcon size={17} strokeWidth={2} />,
@@ -68,7 +86,7 @@ const UNIT_TEST_IMAGES_NAV: NavLeaf = {
 
 const UNIT_TEST_RUNS_NAV: NavLeaf = {
   path: '/unit-test/results',
-  label: 'Unit test results',
+  label: 'Results',
   description: 'Accuracy · confidence',
   hint: 'Download unit test files',
   icon: <ClipboardList size={17} strokeWidth={2} />,
@@ -76,16 +94,64 @@ const UNIT_TEST_RUNS_NAV: NavLeaf = {
 
 const TEST_DATA_PENDING_NAV: NavLeaf = {
   path: '/test-data/pending',
-  label: 'Pending test data',
+  label: 'Pending approval',
   description: 'Awaiting approval',
   hint: 'Approve into the unit test image library',
   icon: <Inbox size={17} strokeWidth={2} />,
 };
 
+const MANUAL_UPLOAD_NAV: NavLeaf[] = [
+  {
+    path: '/manual-upload',
+    label: 'Bulk upload',
+    description: 'Many images at once',
+    hint: 'Upload now, label readings on the next screen',
+    icon: <Upload size={17} strokeWidth={2} />,
+  },
+  {
+    path: '/manual-upload/label',
+    label: 'Label uploads',
+    description: '4-digit reading per image',
+    hint: 'Simple grid — type reading and save',
+    icon: <Inbox size={17} strokeWidth={2} />,
+  },
+];
+
+const UNIT_TEST_GROUP = navGroup(
+  'unit-test',
+  'Unit test',
+  'Image library and accuracy runs',
+  [UNIT_TEST_IMAGES_NAV, UNIT_TEST_RUNS_NAV],
+);
+
+const FIELD_TEST_IMAGES_NAV: NavLeaf = {
+  path: '/field-test/images',
+  label: 'Images',
+  description: 'Field captures in cycle',
+  hint: 'Filter by cycle, user, difficulty, reading',
+  icon: <ImageIcon size={17} strokeWidth={2} />,
+};
+
+const FIELD_TEST_RESULTS_NAV: NavLeaf = {
+  path: '/field-test/results',
+  label: 'Results',
+  description: 'Cycle analytics',
+  hint: 'Reads, corrections, confusion matrix',
+  icon: <ClipboardList size={17} strokeWidth={2} />,
+};
+
+const FIELD_TEST_GROUP = navGroup('field-test', 'Field test', 'Field captures and cycle metrics', [
+  FIELD_TEST_IMAGES_NAV,
+  FIELD_TEST_RESULTS_NAV,
+]);
+
+const UPLOADS_GROUP = navGroup('uploads', 'Uploads', 'Bulk upload and label sessions', MANUAL_UPLOAD_NAV);
+
 const PortalLayout: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const pathname = location.pathname;
+  const search = location.search;
   const { userEmail, logout, portalWorkMode: authWorkMode, canSwitchPortalRoles } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [workMode, setWorkMode] = useState<PortalWorkMode>(authWorkMode);
@@ -119,147 +185,114 @@ const PortalLayout: FC = () => {
     return false;
   });
 
-  const { mainLinks, roleHint, navSectionTitle, navSectionSub } = useMemo((): {
-    mainLinks: NavLeaf[];
-    roleHint: string;
-    navSectionTitle: string;
-    navSectionSub: string;
-  } => {
-    const dash: NavLeaf = { path: '/', label: 'Home', icon: <LayoutDashboard size={17} /> };
-
-    const manualUploadNav: NavLeaf[] = [
-      {
-        path: '/manual-upload',
-        label: 'Bulk upload',
-        description: 'Many images at once',
-        hint: 'Upload now, label readings on the next screen',
-        icon: <Upload size={17} strokeWidth={2} />,
-      },
-      {
-        path: '/manual-upload/label',
-        label: 'Label uploads',
-        description: '4-digit reading per image',
-        hint: 'Simple grid — type reading and save',
-        icon: <Inbox size={17} strokeWidth={2} />,
-      },
-    ];
+  const { navEntries, roleHint } = useMemo((): { navEntries: NavEntry[]; roleHint: string } => {
+    const homeDash: NavLeaf = {
+      path: '/',
+      label: 'Home',
+      description: 'Charts & KPIs',
+      hint: 'Session counts and trends',
+      icon: <LayoutDashboard size={17} />,
+    };
 
     if (workMode === 'test_data_reviewer') {
       return {
-        roleHint: 'Approve sessions reviewers marked for unit test; browse existing unit test images.',
-        navSectionTitle: 'Test data',
-        navSectionSub: 'Pending approvals and unit test images',
-        mainLinks: [
-          {
-            ...dash,
-            label: 'Dashboard',
-            description: 'Charts & KPIs',
-            hint: 'Session counts and trends',
-          },
-          ...manualUploadNav,
-          UNIT_TEST_IMAGES_NAV,
-          TEST_DATA_PENDING_NAV,
+        roleHint: 'Approve sessions for unit test; browse and upload test images.',
+        navEntries: [
+          { kind: 'leaf', item: { ...homeDash, label: 'Dashboard' } },
+          UPLOADS_GROUP,
+          navGroup('test-data', 'Test data', 'Unit test library and pending approvals', [
+            UNIT_TEST_IMAGES_NAV,
+            TEST_DATA_PENDING_NAV,
+          ]),
+          FIELD_TEST_GROUP,
         ],
       };
     }
 
     if (workMode === 'reviewer') {
       return {
-        roleHint: 'Awaiting review = not human-reviewed yet. Other lists = reviewed outcomes.',
-        navSectionTitle: 'Review',
-        navSectionSub: 'See new captures, then reviewed outcomes',
-        mainLinks: [
-          {
-            ...dash,
-            label: 'Dashboard',
-            description: 'Charts & KPIs',
-            hint: 'Session counts, trends, exports',
-          },
-          {
-            path: '/readings/incorrect_new',
-            label: 'Awaiting review',
-            description: 'New captures, not reviewed',
-            hint: 'New captures not yet reviewed',
-            icon: <Inbox size={17} strokeWidth={2} />,
-          },
-          ...manualUploadNav,
-          {
-            path: '/readings/incorrect-queues',
-            label: 'Incorrect',
-            description: 'Incorrect pipeline',
-            hint: 'Analyzed → labeled → training and related incorrect queues',
-            icon: <ListTree size={17} />,
-          },
-          {
-            path: '/readings/correct',
-            label: 'Correct',
-            description: 'Reviewed · good read',
-            hint: statusLabels.correct,
-            icon: <CheckCircle2 size={17} />,
-          },
+        roleHint: 'Review new captures, then browse outcomes and upload sessions.',
+        navEntries: [
+          { kind: 'leaf', item: { ...homeDash, label: 'Dashboard', hint: 'Session counts, trends, exports' } },
+          navGroup('review', 'Review', 'Queues by review outcome', [
+            {
+              path: '/readings/incorrect_new',
+              label: 'Awaiting review',
+              description: 'New captures, not reviewed',
+              hint: 'New captures not yet reviewed',
+              icon: <Inbox size={17} strokeWidth={2} />,
+            },
+            {
+              path: '/readings/incorrect-queues',
+              label: 'Incorrect',
+              description: 'Incorrect pipeline',
+              hint: 'Analyzed → labeled → training and related incorrect queues',
+              icon: <ListTree size={17} />,
+            },
+            {
+              path: '/readings/correct',
+              label: 'Correct',
+              description: 'Reviewed · good read',
+              hint: statusLabels.correct,
+              icon: <CheckCircle2 size={17} />,
+            },
+          ]),
+          UPLOADS_GROUP,
         ],
       };
     }
 
     if (workMode === 'admin') {
       return {
-        roleHint: 'Iterations, Model Training Center, manual uploads, and full lists.',
-        navSectionTitle: 'Admin',
-        navSectionSub: 'Dashboard · iterations · lists',
-        mainLinks: [
-          {
-            ...dash,
-            label: 'Dashboard',
-            description: 'Charts & KPIs',
-            hint: 'Session counts, trends, exports',
-          },
-          {
-            path: '/factory',
-            label: 'Model factory',
-            description: 'Assembly line · ship',
-            hint: 'Planning → data → label → train → test → deployed',
-            icon: <Factory size={17} strokeWidth={2} />,
-          },
-          UNIT_TEST_IMAGES_NAV,
-          UNIT_TEST_RUNS_NAV,
-          {
-            path: '/pipeline-iterations',
-            label: 'Pipeline',
-            description: 'Iterations · metrics',
-            hint: 'Manage iteration details',
-            icon: <Layers size={17} strokeWidth={2} />,
-          },
-          {
-            ...manualUploadNav[0]!,
-          },
-          {
-            ...manualUploadNav[1]!,
-            label: 'Label',
-          },
-          {
-            path: '/readings/all',
-            label: 'All data',
-            description: 'Full session list',
-            hint: 'Filter by cohort, version, date',
-            icon: <ListTree size={17} />,
-          },
-          TEST_DATA_PENDING_NAV,
+        roleHint: 'Iterations, training center, uploads, and full session lists.',
+        navEntries: [
+          { kind: 'leaf', item: { ...homeDash, label: 'Dashboard', hint: 'Session counts, trends, exports' } },
+          navGroup('model-pipeline', 'Model & pipeline', 'Factory assembly line and iteration registry', [
+            {
+              path: '/factory',
+              label: 'Model factory',
+              description: 'Assembly line · ship',
+              hint: 'Planning → data → label → train → test → deployed',
+              icon: <Factory size={17} strokeWidth={2} />,
+            },
+            {
+              path: '/pipeline-iterations',
+              label: 'Pipeline',
+              description: 'Iterations · metrics',
+              hint: 'Manage iteration details',
+              icon: <Layers size={17} strokeWidth={2} />,
+            },
+          ]),
+          UNIT_TEST_GROUP,
+          FIELD_TEST_GROUP,
+          UPLOADS_GROUP,
+          navGroup('data', 'Data', 'All sessions and test-data queue', [
+            {
+              path: '/readings/all',
+              label: 'All data',
+              description: 'Full session list',
+              hint: 'Filter by cohort, version, date',
+              icon: <ListTree size={17} />,
+            },
+            TEST_DATA_PENDING_NAV,
+          ]),
         ],
       };
     }
 
     return {
-      roleHint: 'Model Training Center = all pipelines. Training picks = send to training dataset.',
-      navSectionTitle: 'Model Training',
-      navSectionSub: 'Overview & reviewer picks',
-      mainLinks: [
+      roleHint: 'Pipeline metrics, training picks, factory, and unit test tools.',
+      navEntries: [
         {
-          ...dash,
-          label: 'Metrics',
-          description: 'Pipeline charts',
-          hint: 'Images, accuracy & confidence by iteration',
+          kind: 'leaf',
+          item: {
+            ...homeDash,
+            label: 'Metrics',
+            description: 'Pipeline charts',
+            hint: 'Images, accuracy & confidence by iteration',
+          },
         },
-        {
+        { kind: 'leaf', item: {
           path: '/readings/all',
           to: '/readings/all?cohort=training',
           label: 'Training picks',
@@ -267,29 +300,45 @@ const PortalLayout: FC = () => {
           hint: 'Sessions reviewer marked for training',
           icon: <Sparkles size={17} strokeWidth={2} />,
           activeWhenSearch: { cohort: 'training' },
-        },
-        {
-          path: '/factory',
-          label: 'Model factory',
-          description: 'Assembly line · ship',
-          hint: 'Planning → data → label → train → test → deployed',
-          icon: <Factory size={17} strokeWidth={2} />,
-        },
-        UNIT_TEST_IMAGES_NAV,
-        UNIT_TEST_RUNS_NAV,
-        {
-          path: '/pipeline-iterations',
-          label: 'Pipeline',
-          description: 'Iterations · metrics',
-          hint: 'Same registry as factory (detailed edit)',
-          icon: <Layers size={17} strokeWidth={2} />,
-        },
-        TEST_DATA_PENDING_NAV,
+        } },
+        navGroup('model-pipeline', 'Model & pipeline', 'Factory and iteration registry', [
+          {
+            path: '/factory',
+            label: 'Model factory',
+            description: 'Assembly line · ship',
+            hint: 'Planning → data → label → train → test → deployed',
+            icon: <Factory size={17} strokeWidth={2} />,
+          },
+          {
+            path: '/pipeline-iterations',
+            label: 'Pipeline',
+            description: 'Iterations · metrics',
+            hint: 'Same registry as factory (detailed edit)',
+            icon: <Layers size={17} strokeWidth={2} />,
+          },
+        ]),
+        UNIT_TEST_GROUP,
+        FIELD_TEST_GROUP,
+        { kind: 'leaf', item: TEST_DATA_PENDING_NAV },
       ],
     };
   }, [workMode]);
 
   const trainingNavActive = pathname.startsWith('/training');
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const next = { ...prev };
+      for (const entry of navEntries) {
+        if (entry.kind === 'group' && navGroupActive(pathname, search, entry.group)) {
+          next[entry.group.id] = true;
+        }
+      }
+      return next;
+    });
+  }, [pathname, search, navEntries]);
 
   useEffect(() => {
     try {
@@ -322,8 +371,12 @@ const PortalLayout: FC = () => {
     [navigate],
   );
 
+  const toggleGroup = useCallback((id: string) => {
+    setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
   const renderLeaf = (item: NavLeaf) => {
-    const active = navLeafActive(pathname, location.search, item);
+    const active = navLeafActive(pathname, search, item);
     const dest = item.to ?? item.path;
     return (
       <li key={dest}>
@@ -345,6 +398,58 @@ const PortalLayout: FC = () => {
       </li>
     );
   };
+
+  const renderGroup = (group: NavGroup) => {
+    const childActive = navGroupActive(pathname, search, group);
+    const open = openGroups[group.id] ?? childActive;
+    const panelId = `portal-nav-group-${group.id}`;
+
+    return (
+      <div
+        key={group.id}
+        className={`portal-nav-disclosure${childActive ? ' portal-nav-disclosure--child-active' : ''}`}
+      >
+        <button
+          type="button"
+          className="portal-nav-disclosure-trigger"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => toggleGroup(group.id)}
+          title={group.hint}
+        >
+          <span className="portal-nav-disclosure-title">
+            <span className="portal-nav-disclosure-heading">{group.label}</span>
+            {group.hint ? <span className="portal-nav-disclosure-hint">{group.hint}</span> : null}
+          </span>
+          <ChevronDown
+            size={16}
+            strokeWidth={2}
+            className={`portal-nav-disclosure-chevron${open ? ' portal-nav-disclosure-chevron--open' : ''}`}
+            aria-hidden
+          />
+        </button>
+        {open ? (
+          <div id={panelId} className="portal-nav-disclosure-panel">
+            <ul className="portal-nav-nested portal-nav-nested--tight">{group.items.map((item) => renderLeaf(item))}</ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderNavMenu = () => (
+    <div className="portal-nav-menu">
+      {navEntries.map((entry) =>
+        entry.kind === 'leaf' ? (
+          <ul key={entry.item.path + (entry.item.to ?? '')} className="portal-nav-standalone">
+            {renderLeaf(entry.item)}
+          </ul>
+        ) : (
+          renderGroup(entry.group)
+        ),
+      )}
+    </div>
+  );
 
   return (
     <div
@@ -393,11 +498,7 @@ const PortalLayout: FC = () => {
             ) : (
               <span className="portal-role-value">{PORTAL_ROLE_LABELS[workMode]}</span>
             )}
-            <p className="portal-role-hint">
-              {canSwitchPortalRoles
-                ? `${roleHint} Switch role to view reviewer, test data, trainer, or admin dashboards.`
-                : roleHint}
-            </p>
+            <p className="portal-role-hint">{roleHint}</p>
           </div>
 
           {workMode === 'labeler' || workMode === 'admin' ? (
@@ -420,25 +521,10 @@ const PortalLayout: FC = () => {
                   </span>
                 </button>
               </div>
-
-              <div className="portal-nav-section">
-                <div className="portal-nav-section-head">
-                  <span className="portal-nav-section-title">{navSectionTitle}</span>
-                  <span className="portal-nav-section-sub">{navSectionSub}</span>
-                </div>
-                <ul className="portal-nav-nested portal-nav-nested--sections">
-                  {mainLinks.map((item) => renderLeaf(item))}
-                </ul>
-              </div>
+              {renderNavMenu()}
             </>
           ) : (
-            <div className="portal-nav-section">
-              <div className="portal-nav-section-head">
-                <span className="portal-nav-section-title">{navSectionTitle}</span>
-                <span className="portal-nav-section-sub">{navSectionSub}</span>
-              </div>
-              <ul className="portal-nav-nested portal-nav-nested--sections">{mainLinks.map((item) => renderLeaf(item))}</ul>
-            </div>
+            renderNavMenu()
           )}
 
           <div className="portal-nav-spacer" aria-hidden />
