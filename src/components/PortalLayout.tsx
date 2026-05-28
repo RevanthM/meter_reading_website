@@ -20,6 +20,7 @@ import {
   Upload,
   ClipboardList,
   ImageIcon,
+  MapPin,
   ChevronDown,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
@@ -124,6 +125,14 @@ const UNIT_TEST_GROUP = navGroup(
   [UNIT_TEST_IMAGES_NAV, UNIT_TEST_RUNS_NAV],
 );
 
+const FIELD_TEST_LIST_NAV: NavLeaf = {
+  path: '/field-test',
+  label: 'Field test',
+  description: 'Field capture review list',
+  hint: 'Review outcome, difficulty, and location',
+  icon: <MapPin size={17} strokeWidth={2} />,
+};
+
 const FIELD_TEST_IMAGES_NAV: NavLeaf = {
   path: '/field-test/images',
   label: 'Images',
@@ -204,7 +213,7 @@ const PortalLayout: FC = () => {
             UNIT_TEST_IMAGES_NAV,
             TEST_DATA_PENDING_NAV,
           ]),
-          FIELD_TEST_GROUP,
+          { kind: 'leaf', item: FIELD_TEST_LIST_NAV },
         ],
       };
     }
@@ -237,6 +246,7 @@ const PortalLayout: FC = () => {
               icon: <CheckCircle2 size={17} />,
             },
           ]),
+          { kind: 'leaf', item: FIELD_TEST_LIST_NAV },
           UPLOADS_GROUP,
         ],
       };

@@ -149,7 +149,14 @@ function normalizeRow(raw) {
   const image_difficulty = normalizeUnitTestDifficulty(
     raw.image_difficulty ?? raw.imageDifficulty ?? 'normal',
   );
-  return { image_file_name, expected_meter_value, s3_key, image_difficulty };
+  const row = { image_file_name, expected_meter_value, s3_key, image_difficulty };
+  if (raw.capture_location && typeof raw.capture_location === 'object') {
+    row.capture_location = raw.capture_location;
+  }
+  if (raw.source_session_id != null && String(raw.source_session_id).trim()) {
+    row.source_session_id = String(raw.source_session_id).trim();
+  }
+  return row;
 }
 
 function rowsFromJsonDocument(doc) {

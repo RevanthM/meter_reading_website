@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState, type FC } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { ClipboardList } from 'lucide-react';
+import { ClipboardList, Download } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import FieldTestCycleDashboard from './FieldTestCycleDashboard';
 import {
   createFieldTestCycle,
   deleteFieldTestCycle,
+  downloadFieldTestCycleCsv,
   fetchFieldTestCycleAnalytics,
   fetchFieldTestCycles,
   updateFieldTestCycle,
@@ -15,7 +16,7 @@ import {
   type FieldTestRollup,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
-import { canViewFieldTest } from '../utils/portalWorkMode';
+import { canViewFieldTestResults } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 
 const FieldTestResultsPage: FC = () => {
@@ -36,9 +37,10 @@ const FieldTestResultsPage: FC = () => {
   const [formStatus, setFormStatus] = useState<FieldTestCycleStatus>('active');
   const [formNotes, setFormNotes] = useState('');
   const [savingCycle, setSavingCycle] = useState(false);
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
 
   useEffect(() => {
-    if (!outletCtx?.workMode || !canViewFieldTest(outletCtx.workMode)) {
+    if (!outletCtx?.workMode || !canViewFieldTestResults(outletCtx.workMode)) {
       navigate('/', { replace: true });
     }
   }, [navigate, outletCtx?.workMode]);
@@ -187,78 +189,103 @@ const FieldTestResultsPage: FC = () => {
 
   const selectedCycle = cycles.find((c) => c.id === selectedCycleId) ?? null;
 
+  const handleDownloadCsv = async () => {
+    if (!selectedCycleId) return;
+    setDownloadingCsv(true);
+    try {
+      await downloadFieldTestCycleCsv(workType, selectedCycleId);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'CSV export failed');
+    } finally {
+      setDownloadingCsv(false);
+    }
+  };
+
   return (
     <div className="readings-list-page unit-test-results-page field-test-results-page">
-      <header className="page-header unit-test-results-page-header">
-        <div className="header-content list-page-header-with-actions">
-          <div className="list-page-header-lead">
-            <div className="page-title">
-              <ClipboardList size={32} strokeWidth={1.5} />
-              <div>
-                <h1>Field test results</h1>
-                <p>Cycle analytics from field-mode iOS captures (reads, not images).</p>
+      <header className="page-header unit-test-results-page-header field-test-results-page-header">
+        <div className="field-test-results-header-inner">
+          <div className="header-content list-page-header-with-actions">
+            <div className="list-page-header-lead">
+              <div className="page-title">
+                <ClipboardList size={32} strokeWidth={1.5} />
+                <div>
+                  <h1>Field test results</h1>
+                  <p>Cycle analytics from field-mode iOS captures (reads, not images).</p>
+                </div>
               </div>
             </div>
+            <ListPageRefreshButton
+              variant="icon"
+              onRefresh={() => void handleRefreshAll()}
+              busy={loading || analyticsLoading}
+              disabled={loading}
+              title="Reload cycles and rebuild analytics"
+            />
           </div>
-          <ListPageRefreshButton
-            variant="icon"
-            onRefresh={() => void handleRefreshAll()}
-            busy={loading || analyticsLoading}
-            disabled={loading}
-            title="Reload cycles and rebuild analytics"
-          />
-        </div>
 
-        <div className="field-test-results-toolbar">
-          <label className="unit-test-images-filter-select-wrap">
-            <span className="unit-test-images-filter-label">Cycle</span>
-            <select
-              className="unit-test-images-filter-select"
-              value={selectedCycleId}
-              onChange={(e) => {
-                const id = e.target.value;
-                setSelectedCycleId(id);
-                void loadAnalytics(id);
-              }}
-            >
-              {cycles.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.startDate} – {c.endDate}){c.status === 'active' ? ' · active' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="training-hub-text-btn"
-            disabled={!selectedCycleId}
-            onClick={openEditCycle}
-          >
-            Edit cycle
-          </button>
-          <button
-            type="button"
-            className="training-hub-text-btn"
-            onClick={() => {
-              setShowNewCycle((v) => !v);
-              setEditingCycle(false);
-              if (!showNewCycle) resetCycleForm();
-            }}
-          >
-            {showNewCycle ? 'Cancel' : 'New cycle'}
-          </button>
-          <button
-            type="button"
-            className="training-hub-text-btn field-test-delete-cycle-btn"
-            disabled={!selectedCycleId || savingCycle}
-            onClick={() => void handleDeleteCycle()}
-          >
-            Delete cycle
-          </button>
-        </div>
+          <div className="field-test-results-toolbar">
+            <label className="field-test-results-cycle-field">
+              <span className="unit-test-images-filter-label">Cycle</span>
+              <select
+                className="unit-test-images-filter-select field-test-results-cycle-select"
+                value={selectedCycleId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSelectedCycleId(id);
+                  void loadAnalytics(id);
+                }}
+              >
+                {cycles.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.startDate} – {c.endDate}){c.status === 'active' ? ' · active' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="field-test-results-actions" role="group" aria-label="Cycle actions">
+              <button
+                type="button"
+                className="training-hub-text-btn"
+                disabled={!selectedCycleId}
+                onClick={openEditCycle}
+              >
+                Edit cycle
+              </button>
+              <button
+                type="button"
+                className="training-hub-text-btn"
+                onClick={() => {
+                  setShowNewCycle((v) => !v);
+                  setEditingCycle(false);
+                  if (!showNewCycle) resetCycleForm();
+                }}
+              >
+                {showNewCycle ? 'Cancel' : 'New cycle'}
+              </button>
+              <button
+                type="button"
+                className="unit-test-run-download-btn field-test-results-download-btn"
+                disabled={!selectedCycleId || downloadingCsv || !rollup}
+                onClick={() => void handleDownloadCsv()}
+                title="Download cycle CSV (location, tilt, per-dial angles)"
+              >
+                <Download size={16} aria-hidden />
+                <span>{downloadingCsv ? 'Exporting…' : 'Download CSV'}</span>
+              </button>
+              <button
+                type="button"
+                className="training-hub-text-btn field-test-delete-cycle-btn"
+                disabled={!selectedCycleId || savingCycle}
+                onClick={() => void handleDeleteCycle()}
+              >
+                Delete cycle
+              </button>
+            </div>
+          </div>
 
-        {showNewCycle || editingCycle ? (
-          <div className="field-test-new-cycle-form">
+          {showNewCycle || editingCycle ? (
+            <div className="field-test-new-cycle-form">
             <h3 className="field-test-cycle-form-title">{editingCycle ? 'Edit cycle' : 'New cycle'}</h3>
             <label>
               Name
@@ -304,8 +331,9 @@ const FieldTestResultsPage: FC = () => {
             >
               {savingCycle ? 'Saving…' : editingCycle ? 'Save changes' : 'Create cycle'}
             </button>
-          </div>
-        ) : null}
+            </div>
+          ) : null}
+        </div>
       </header>
 
       {loading ? <ListViewLoading message="Loading field test cycles…" /> : null}

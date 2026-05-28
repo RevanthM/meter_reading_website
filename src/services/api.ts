@@ -107,6 +107,8 @@ export interface S3MeterReading extends MeterReading {
   imageSource?: string;
   uploadMode?: string;
   feedbackType?: string;
+  /** Field / unit test: user changed dials or final reading on device. */
+  hadUserCorrection?: boolean;
   /** @deprecated Use reviewerDatasetDestination — kept for list filters. */
   reviewerRecommendTraining?: boolean;
   reviewerDatasetDestination?: ReviewerDatasetDestination;
@@ -542,7 +544,30 @@ export interface FieldTestCapturesResponse {
   total: number;
   totalPages: number;
   captures: FieldTestCaptureRow[];
-  filterOptions: { users: string[] };
+  filterOptions: FieldTestCaptureFilterOptions;
+}
+
+export interface FieldTestCityFilterOption {
+  id: string;
+  label: string;
+  count: number;
+}
+
+export interface FieldTestCaptureFilterOptions {
+  users: string[];
+  cities: FieldTestCityFilterOption[];
+}
+
+export interface FieldTestReadingsListResponse {
+  workType: string;
+  cycle: FieldTestCycle | null;
+  format: 'readings';
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  readings: S3MeterReading[];
+  filterOptions: FieldTestCaptureFilterOptions;
 }
 
 export interface FieldTestRollup {
@@ -660,6 +685,29 @@ export async function createFieldTestCycle(payload: {
   }
 }
 
+/** Download field-test cycle CSV (summary + per-capture rows with location, tilt, dial angles). */
+export async function downloadFieldTestCycleCsv(workType: string, cycleId: string): Promise<void> {
+  const q = new URLSearchParams({ workType });
+  const url = `${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}/export.csv?${q}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const text = await response.text();
+    let message = `Export failed (${response.status})`;
+    try {
+      const err = JSON.parse(text) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      if (text.trim()) message = text.trim().slice(0, 200);
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const m = /filename="?([^";]+)"?/i.exec(disposition);
+  const fileName = m?.[1]?.trim() || `field_test_${cycleId}.csv`;
+  await downloadBlobAsFile(blob, fileName);
+}
+
 export async function fetchFieldTestCycleAnalytics(
   workType: string,
   cycleId: string,
@@ -690,9 +738,11 @@ export async function fetchFieldTestCaptures(
     difficulty?: string;
     user?: string;
     corrected?: string;
+    location?: string;
     presign?: boolean;
+    format?: 'captures' | 'readings';
   },
-): Promise<FieldTestCapturesResponse> {
+): Promise<FieldTestCapturesResponse | FieldTestReadingsListResponse> {
   const q = new URLSearchParams({ workType });
   if (options?.cycleId) q.set('cycleId', options.cycleId);
   if (options?.page) q.set('page', String(options.page));
@@ -701,6 +751,8 @@ export async function fetchFieldTestCaptures(
   if (options?.difficulty) q.set('difficulty', options.difficulty);
   if (options?.user) q.set('user', options.user);
   if (options?.corrected) q.set('corrected', options.corrected);
+  if (options?.location && options.location !== 'all') q.set('location', options.location);
+  if (options?.format === 'readings') q.set('format', 'readings');
   if (options?.presign) q.set('presign', '1');
   try {
     const response = await fetch(`${API_BASE_URL}/field-test/captures?${q}`);
@@ -709,7 +761,7 @@ export async function fetchFieldTestCaptures(
       const err = parseJsonBody<{ error?: string }>(text, response.status);
       throw new Error(err.error || `HTTP ${response.status}`);
     }
-    return parseJsonBody<FieldTestCapturesResponse>(text, response.status);
+    return parseJsonBody(text, response.status);
   } catch (e) {
     throw wrapFetchNetworkError(e, 'Listing field test captures failed.');
   }
@@ -1543,6 +1595,10 @@ export interface UnitTestManifestRow {
   expected_meter_value: string;
   s3_key: string;
   image_difficulty: ImageDifficulty;
+  /** Copied from source session metadata on test-data approve (optional). */
+  capture_location?: CaptureLocation | null;
+  /** Original Dynamo/S3 session id when promoted from a capture folder. */
+  source_session_id?: string;
 }
 
 export async function downloadBlobAsFile(blob: Blob, filename: string): Promise<void> {

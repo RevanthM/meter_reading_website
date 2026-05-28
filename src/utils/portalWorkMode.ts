@@ -132,7 +132,19 @@ export function canEditTestData(mode: PortalWorkMode): boolean {
   return mode === 'test_data_reviewer' || mode === 'admin';
 }
 
-/** Field test cycles, captures, and analytics (same roles as unit test library). */
+/** Field test image list (reviewer + test-data roles). */
+export function canViewFieldTestImages(mode: PortalWorkMode): boolean {
+  return (
+    mode === 'reviewer' || mode === 'test_data_reviewer' || mode === 'labeler' || mode === 'admin'
+  );
+}
+
+/** Field test cycles, grid browser, and analytics (not reviewer / test-data reviewer). */
+export function canViewFieldTestResults(mode: PortalWorkMode): boolean {
+  return mode === 'labeler' || mode === 'admin';
+}
+
+/** @deprecated Use canViewFieldTestImages or canViewFieldTestResults. */
 export function canViewFieldTest(mode: PortalWorkMode): boolean {
-  return canViewTestData(mode);
+  return canViewFieldTestImages(mode) || canViewFieldTestResults(mode);
 }

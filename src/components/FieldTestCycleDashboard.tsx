@@ -2,7 +2,6 @@ import { useMemo, type FC } from 'react';
 import type { FieldTestRollup, UnitTestRunDetailResponse } from '../services/api';
 import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
 import DialPctDonut from './DialPctDonut';
-import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
 import { resolveDialStats } from '../utils/unitTestCsvAnalytics';
 
 type Props = {
@@ -108,18 +107,6 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
       ) : null}
 
       <DashboardUnitTestCsvCharts detail={detail} reportCapture />
-
-      {rollup.perImageRows?.length ? (
-        <div className="analytics-details-block analytics-details-block--current-confusion">
-          <div className="analytics-details-block-head">
-            <h4>Digit confusion — all reads in cycle</h4>
-            <p className="analytics-details-block-lead">
-              Row-normalized matrix across every dial read in this cycle.
-            </p>
-          </div>
-          <UnitTestConfusionHeatmap perImageRows={rollup.perImageRows} reportCapture />
-        </div>
-      ) : null}
     </div>
   );
 };

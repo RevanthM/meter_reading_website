@@ -1941,6 +1941,9 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         return res.status(400).json({ error: 'is_correct must be boolean' });
       }
       meta.is_correct = patch.is_correct;
+      if (String(meta.upload_mode || '').trim().toLowerCase() === 'field') {
+        meta.feedback_type = patch.is_correct ? 'correct' : 'incorrect';
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, 'condition_code')) {

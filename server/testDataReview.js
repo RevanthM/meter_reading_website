@@ -181,12 +181,19 @@ export async function approveSessionForUnitTest(opts) {
     );
   }
 
-  const manifestKey = await upsertUnitTestManifestRow(opts.s3Client, opts.bucket, workType, {
+  const manifestRow = {
     image_file_name: fileName,
     expected_meter_value: expected,
     s3_key: destKey,
     image_difficulty: difficulty,
-  });
+  };
+  if (opts.meta?.capture_location && typeof opts.meta.capture_location === 'object') {
+    manifestRow.capture_location = opts.meta.capture_location;
+  }
+  const sessionId = String(opts.meta?.session_id || '').trim();
+  if (sessionId) manifestRow.source_session_id = sessionId;
+
+  const manifestKey = await upsertUnitTestManifestRow(opts.s3Client, opts.bucket, workType, manifestRow);
 
   const now = new Date().toISOString();
   opts.meta.test_data_review_status = 'approved';

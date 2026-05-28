@@ -7,10 +7,12 @@ import {
   fetchFieldTestCaptures,
   fetchFieldTestCycles,
   type FieldTestCaptureRow,
+  type FieldTestCapturesResponse,
+  type FieldTestCityFilterOption,
   type FieldTestCycle,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
-import { canViewFieldTest } from '../utils/portalWorkMode';
+import { canViewFieldTestResults } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import {
@@ -31,12 +33,14 @@ const FieldTestImagesPage: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
   const [captures, setCaptures] = useState<FieldTestCaptureRow[]>([]);
   const [users, setUsers] = useState<string[]>([]);
+  const [cities, setCities] = useState<FieldTestCityFilterOption[]>([]);
   const [total, setTotal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [filters, setFilters] = useState<FieldTestCaptureFilters>({
@@ -44,18 +48,30 @@ const FieldTestImagesPage: FC = () => {
     difficulty: 'all',
     user: 'all',
     corrected: 'all',
+    location: 'all',
   });
+  const [debouncedQuery, setDebouncedQuery] = useState('');
 
   const cycleId = searchParams.get('cycleId') || activeCycle?.id || '';
 
   useEffect(() => {
-    if (!outletCtx?.workMode || !canViewFieldTest(outletCtx.workMode)) {
+    if (!outletCtx?.workMode) return;
+    if (outletCtx.workMode === 'reviewer' || outletCtx.workMode === 'test_data_reviewer') {
+      navigate('/field-test', { replace: true });
+      return;
+    }
+    if (!canViewFieldTestResults(outletCtx.workMode)) {
       navigate('/', { replace: true });
     }
   }, [navigate, outletCtx?.workMode]);
 
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(filters.query), 350);
+    return () => window.clearTimeout(t);
+  }, [filters.query]);
+
   const load = useCallback(async () => {
-    setLoading(true);
+    setFetching(true);
     setErr(null);
     try {
       const cyclesRes = await fetchFieldTestCycles(workType);
@@ -63,25 +79,36 @@ const FieldTestImagesPage: FC = () => {
       const selected =
         cyclesRes.cycles.find((c) => c.id === cycleId) || cyclesRes.activeCycle || cyclesRes.cycles[0] || null;
       setActiveCycle(selected);
-      const capRes = await fetchFieldTestCaptures(workType, {
+      const capRes = (await fetchFieldTestCaptures(workType, {
         cycleId: selected?.id,
         page: 1,
         limit: 96,
-        q: filters.query,
+        q: debouncedQuery,
         difficulty: filters.difficulty,
         user: filters.user,
         corrected: filters.corrected,
+        location: filters.location,
         presign: true,
-      });
+      })) as FieldTestCapturesResponse;
       setCaptures(capRes.captures);
       setUsers(capRes.filterOptions.users);
+      setCities(capRes.filterOptions.cities ?? []);
       setTotal(capRes.total);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
     } finally {
-      setLoading(false);
+      setFetching(false);
+      setInitialLoading(false);
     }
-  }, [workType, cycleId, filters.query, filters.difficulty, filters.user, filters.corrected]);
+  }, [
+    workType,
+    cycleId,
+    debouncedQuery,
+    filters.difficulty,
+    filters.user,
+    filters.corrected,
+    filters.location,
+  ]);
 
   useEffect(() => {
     void load();
@@ -101,37 +128,48 @@ const FieldTestImagesPage: FC = () => {
   };
 
   const filtersActive = fieldTestFiltersActive(filters);
-  const clearFilters = () => setFilters({ query: '', difficulty: 'all', user: 'all', corrected: 'all' });
+  const clearFilters = () =>
+    setFilters({
+      query: '',
+      difficulty: 'all',
+      user: 'all',
+      corrected: 'all',
+      location: 'all',
+    });
 
   const countLabel = useMemo(() => {
-    if (loading) return null;
-    return `${total.toLocaleString()} capture${total === 1 ? '' : 's'}${activeCycle ? ` · ${activeCycle.name}` : ''}`;
-  }, [loading, total, activeCycle]);
+    if (initialLoading && captures.length === 0) return 'Loading…';
+    const base = `${(total || captures.length).toLocaleString()} capture${total === 1 ? '' : 's'}${activeCycle ? ` · ${activeCycle.name}` : ''}`;
+    return fetching ? `${base} · updating…` : base;
+  }, [initialLoading, fetching, total, captures.length, activeCycle]);
+
+  const toolbarBusy = fetching || refreshing;
 
   return (
     <div className="readings-list-page unit-test-images-page field-test-images-page">
-      <header className="page-header unit-test-images-page-header">
+      <header className="page-header unit-test-images-page-header field-test-readings-page-header">
+        <div className="field-test-readings-header-inner">
         <div className="header-content list-page-header-with-actions">
           <div className="list-page-header-lead">
             <div className="page-title">
               <ImageIcon size={32} strokeWidth={1.5} />
               <div>
                 <h1>Field test images</h1>
-                {countLabel ? <p aria-live="polite">{countLabel}</p> : null}
+                <p aria-live="polite">{countLabel}</p>
               </div>
             </div>
           </div>
           <ListPageRefreshButton
             variant="icon"
             onRefresh={() => void handleRefresh()}
-            busy={refreshing || loading}
-            disabled={loading}
+            busy={toolbarBusy}
+            disabled={initialLoading && captures.length === 0}
             title="Refresh field test captures"
           />
         </div>
 
-        {!loading && !err ? (
-          <div className="unit-test-images-filter-toolbar field-test-images-filter-toolbar">
+        {!err ? (
+          <div className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}>
             <label className="unit-test-images-filter-select-wrap">
               <span className="unit-test-images-filter-label">Cycle</span>
               <select
@@ -165,6 +203,22 @@ const FieldTestImagesPage: FC = () => {
                   <X size={16} aria-hidden />
                 </button>
               ) : null}
+            </label>
+            <label className="unit-test-images-filter-select-wrap field-test-location-filter">
+              <span className="unit-test-images-filter-label">Location</span>
+              <select
+                className="unit-test-images-filter-select field-test-location-select"
+                value={filters.location}
+                onChange={(e) => setFilters((p) => ({ ...p, location: e.target.value }))}
+                aria-label="Filter by city"
+              >
+                <option value="all">All cities</option>
+                {cities.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.count})
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="unit-test-images-filter-select-wrap">
               <span className="unit-test-images-filter-label">Difficulty</span>
@@ -224,12 +278,14 @@ const FieldTestImagesPage: FC = () => {
             ) : null}
           </div>
         ) : null}
+        </div>
       </header>
 
-      {loading && captures.length === 0 ? <ListViewLoading message="Loading field test captures…" /> : null}
+      {initialLoading && captures.length === 0 ? <ListViewLoading message="Loading field test captures…" /> : null}
+      {fetching && captures.length > 0 ? <ListViewLoading variant="inline" message="Updating…" /> : null}
       {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-      {!loading && !err && captures.length === 0 ? (
+      {!fetching && !initialLoading && !err && captures.length === 0 ? (
         <p className="unit-test-images-page-message pipeline-iterations-empty">
           No field captures in this cycle match your filters. New iOS field uploads with dial review appear here after
           Dynamo sync.

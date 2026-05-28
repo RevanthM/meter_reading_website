@@ -14,6 +14,8 @@ import {
   readFieldTestRollup,
   writeFieldTestRollup,
 } from './fieldTestAnalytics.js';
+import { buildFieldTestCycleCsv, enrichFieldTestItemsFromMetadata } from './fieldTestCsv.js';
+import { buildFieldTestCityOptions, matchesFieldTestCityFilter } from './fieldTestLocation.js';
 import { deriveFieldTestFromMetadata, fieldTestCaptureToListItem } from './fieldTestDerive.js';
 import { sessionItemToReading } from './sessionIndex/metadataMapping.js';
 import { resolvePrimaryListImageKey } from './sessionIndex/index.js';
@@ -74,6 +76,19 @@ function matchesCaptureFilters(capture, filters) {
     }
   }
   return true;
+}
+
+function matchesReadingFilters(reading, filters) {
+  const capture = {
+    sessionId: reading.id,
+    finalReading: reading.meterValue || reading.expectedValue,
+    predictedReading: reading.mlPrediction,
+    imageDifficulty: reading.imageDifficulty,
+    capturedBy: reading.userName,
+    hadUserCorrection: reading.hadUserCorrection,
+  };
+  if (!matchesCaptureFilters(capture, filters)) return false;
+  return matchesFieldTestCityFilter(reading, filters.location);
 }
 
 /**
@@ -195,17 +210,51 @@ export function registerFieldTestRoutes(app, deps) {
     }
   });
 
+  app.get('/api/field-test/cycles/:cycleId/export.csv', async (req, res) => {
+    try {
+      const workType = String(req.query.workType || '1000').trim() || '1000';
+      const cycleId = String(req.params.cycleId || '').trim();
+      const enrich = req.query.enrich !== '0' && req.query.enrich !== 'false';
+      const { cycles } = await readFieldTestCycles(s3Client, BUCKET_NAME, workType);
+      const cycle = cycles.find((c) => c.id === cycleId);
+      if (!cycle) return res.status(404).json({ error: 'Cycle not found' });
+
+      let items = filterSessionsForCycle(await loadFieldSessionItems(workType), cycle);
+      if (enrich && items.length > 0) {
+        items = await enrichFieldTestItemsFromMetadata(s3Client, BUCKET_NAME, items);
+      }
+      const rollup = buildFieldTestRollup(cycle, items);
+      const csv = buildFieldTestCycleCsv(cycle, rollup, items);
+      const safeName = String(cycle.name || cycleId)
+        .replace(/[^\w.-]+/g, '_')
+        .slice(0, 60);
+      const fileName = `field_test_${safeName}_${cycle.startDate}_${cycle.endDate}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('X-Field-Test-Capture-Count', String(items.length));
+      res.send(csv);
+    } catch (e) {
+      console.error('GET /api/field-test/cycles/:cycleId/export.csv:', e);
+      res.status(500).json({ error: e.message || 'Failed to export field test CSV' });
+    }
+  });
+
   app.get('/api/field-test/captures', async (req, res) => {
     try {
       const workType = String(req.query.workType || '1000').trim() || '1000';
       const cycleId = String(req.query.cycleId || '').trim();
+      const format = String(req.query.format || 'captures').trim().toLowerCase();
+      const isReadingsFormat = format === 'readings';
       const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
-      const limit = Math.min(96, Math.max(12, parseInt(String(req.query.limit || '48'), 10) || 48));
+      const limit = isReadingsFormat
+        ? Math.min(2000, Math.max(1, parseInt(String(req.query.limit || '500'), 10) || 500))
+        : Math.min(96, Math.max(12, parseInt(String(req.query.limit || '48'), 10) || 48));
       const filters = {
         q: String(req.query.q || ''),
         difficulty: String(req.query.difficulty || 'all'),
         user: String(req.query.user || 'all'),
         corrected: String(req.query.corrected || 'all'),
+        location: String(req.query.location || ''),
       };
 
       let cycle = null;
@@ -217,12 +266,34 @@ export function registerFieldTestRoutes(app, deps) {
 
       const items = filterSessionsForCycle(await loadFieldSessionItems(workType), cycle);
       const readings = items.map((item) => sessionItemToReading(item, { images: [] })).filter(Boolean);
-      let captures = readings.map(fieldTestCaptureToListItem);
-      captures = captures.filter((c) => matchesCaptureFilters(c, filters));
-      captures.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
+      const cities = buildFieldTestCityOptions(readings);
+      let filteredReadings = readings.filter((r) => matchesReadingFilters(r, filters));
+      filteredReadings.sort((a, b) =>
+        String(b.dateOfReading || b.date || '').localeCompare(String(a.dateOfReading || a.date || '')),
+      );
 
-      const total = captures.length;
+      const total = filteredReadings.length;
       const start = (page - 1) * limit;
+      const pageReadings = filteredReadings.slice(start, start + limit);
+
+      if (isReadingsFormat) {
+        const users = [
+          ...new Set(filteredReadings.map((r) => (r.userName || '').trim()).filter(Boolean)),
+        ].sort();
+        return res.json({
+          workType,
+          cycle,
+          format: 'readings',
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          readings: pageReadings,
+          filterOptions: { users, cities },
+        });
+      }
+
+      let captures = filteredReadings.map(fieldTestCaptureToListItem);
       const pageItems = captures.slice(start, start + limit);
 
       if (req.query.presign === '1' || req.query.presign === 'true') {
@@ -248,7 +319,9 @@ export function registerFieldTestRoutes(app, deps) {
         );
       }
 
-      const users = [...new Set(captures.map((c) => (c.capturedBy || '').trim()).filter(Boolean))].sort();
+      const users = [
+        ...new Set(captures.map((c) => (c.capturedBy || '').trim()).filter(Boolean)),
+      ].sort();
 
       res.json({
         workType,
@@ -258,7 +331,7 @@ export function registerFieldTestRoutes(app, deps) {
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
         captures: pageItems,
-        filterOptions: { users },
+        filterOptions: { users, cities },
       });
     } catch (e) {
       console.error('GET /api/field-test/captures:', e);
