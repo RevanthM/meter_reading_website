@@ -15,10 +15,9 @@ on:
         default: amrportal
         type: choice
         options:
-          - meter-reading-dev
           - amrportal
           - amrportal-prod
-          - meter-reading-prod
+          - amrportal-prod-0519
       platform_branch:
         description: "Platform branch (supported — not deprecated Node 20)"
         required: true
