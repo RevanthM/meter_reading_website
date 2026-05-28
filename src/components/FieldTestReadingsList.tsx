@@ -9,8 +9,10 @@ import { Calendar, ClipboardList, Eye, MapPin, Search, SlidersHorizontal, User, 
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import {
+  fetchFieldTestCaptures,
   fetchFieldTestCycles,
   type FieldTestCycle,
+  type FieldTestReadingsListResponse,
   type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -34,11 +36,7 @@ import {
   filterFieldTestReadings,
 } from '../utils/fieldTestImageFilters';
 import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
-import {
-  filterFieldTestReadingsForCycle,
-  isFieldTestReading,
-  readingMatchesDateRangeWindow,
-} from '../utils/fieldTestReadings';
+import { readingMatchesDateRangeWindow } from '../utils/fieldTestReadings';
 
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
@@ -98,16 +96,12 @@ const FieldTestReadingsList: FC = () => {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
-  const {
-    readings: contextReadings,
-    ensureReadingsLoaded,
-    readingsLoading,
-    refreshData,
-    workType,
-  } = useReadings();
+  const { workType } = useReadings();
+  const [initialLoading, setInitialLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
+  const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
     query: '',
@@ -130,10 +124,6 @@ const FieldTestReadingsList: FC = () => {
     const mode = outletCtx?.workMode;
     return Boolean(mode && mode !== 'reviewer' && mode !== 'test_data_reviewer');
   }, [outletCtx?.workMode]);
-
-  useEffect(() => {
-    void ensureReadingsLoaded();
-  }, [ensureReadingsLoaded]);
 
   useEffect(() => {
     if (!outletCtx?.workMode || !canViewFieldTestImages(outletCtx.workMode)) {
@@ -167,18 +157,42 @@ const FieldTestReadingsList: FC = () => {
     void loadCycles();
   }, [loadCycles]);
 
-  const allReadings = useMemo(() => {
-    let list = contextReadings.filter(isFieldTestReading);
-    if (showCyclePicker && activeCycle) {
-      list = filterFieldTestReadingsForCycle(list, activeCycle);
-    }
-    return list;
-  }, [contextReadings, showCyclePicker, activeCycle]);
+  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
+  const captureCycleKey = showCyclePicker ? effectiveCycleId : 'reviewer-all';
+
+  const loadCaptures = useCallback(
+    async (opts?: { refresh?: boolean }) => {
+      if (showCyclePicker && !effectiveCycleId) return;
+
+      setErr(null);
+      try {
+        const res = (await fetchFieldTestCaptures(workType, {
+          cycleId: showCyclePicker ? effectiveCycleId : undefined,
+          page: 1,
+          limit: 2000,
+          format: 'readings',
+          datePreset: 'all',
+          refresh: opts?.refresh,
+        })) as FieldTestReadingsListResponse;
+
+        setAllReadings(res.readings);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
+      } finally {
+        setInitialLoading(false);
+      }
+    },
+    [workType, showCyclePicker, captureCycleKey, effectiveCycleId],
+  );
+
+  useEffect(() => {
+    void loadCaptures();
+  }, [loadCaptures]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadCycles(), refreshData()]);
+      await Promise.all([loadCycles(), loadCaptures({ refresh: true })]);
     } finally {
       setRefreshing(false);
     }
@@ -291,10 +305,8 @@ const FieldTestReadingsList: FC = () => {
     }));
   };
 
-  const initialLoading = readingsLoading && allReadings.length === 0;
-
   const countLabel = useMemo(() => {
-    if (initialLoading) return 'Loading…';
+    if (initialLoading && allReadings.length === 0) return 'Loading…';
     const cyclePart = showCyclePicker && activeCycle ? ` · ${activeCycle.name}` : '';
     const visibleCount = filteredReadings.length;
     const loadedCount = allReadings.length;
@@ -319,7 +331,6 @@ const FieldTestReadingsList: FC = () => {
   ]);
 
   const toolbarBusy = refreshing;
-  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
 
   return (
     <div className="readings-list-page field-test-readings-list-page">

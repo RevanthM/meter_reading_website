@@ -131,21 +131,23 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          SETTINGS=(
-            "Namespace=aws:elasticbeanstalk:application:environment,OptionName=AWS_DYNAMODB_SESSIONS_TABLE,Value=${{ github.event.inputs.dynamo_sessions_table }}"
-            "Namespace=aws:elasticbeanstalk:application:environment,OptionName=DYNAMO_SESSIONS_FALLBACK_S3,Value=${{ github.event.inputs.dynamo_sessions_fallback_s3 }}"
-          )
-          if [ -n "${{ github.event.inputs.dynamo_aws_region }}" ]; then
-            SETTINGS+=("Namespace=aws:elasticbeanstalk:application:environment,OptionName=AWS_REGION,Value=${{ github.event.inputs.dynamo_aws_region }}")
-          fi
-          aws elasticbeanstalk update-environment \
-            --region "${AWS_REGION}" \
-            --environment-name "${{ steps.target.outputs.env_name }}" \
-            --option-settings "${SETTINGS[@]}"
-          aws elasticbeanstalk wait environment-updated \
-            --region "${AWS_REGION}" \
-            --environment-names "${{ steps.target.outputs.env_name }}"
-          echo "DynamoDB env synced: table=${{ github.event.inputs.dynamo_sessions_table }} region=${{ github.event.inputs.dynamo_aws_region }} fallback=${{ github.event.inputs.dynamo_sessions_fallback_s3 }}"
+          SETTINGS=/tmp/eb-dynamo-env.json
+          jq -n \
+            --arg table "${{ github.event.inputs.dynamo_sessions_table }}" \
+            --arg fallback "${{ github.event.inputs.dynamo_sessions_fallback_s3 }}" \
+            --arg region "${{ github.event.inputs.dynamo_aws_region }}" \
+            '[
+              {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "AWS_DYNAMODB_SESSIONS_TABLE", Value: $table},
+              {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "DYNAMO_SESSIONS_FALLBACK_S3", Value: $fallback}
+            ] + (if ($region | length) > 0 then
+              [{Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "AWS_REGION", Value: $region}]
+            else [] end)' > "${SETTINGS}"
+          chmod +x scripts/eb-sync-env-if-changed.sh
+          scripts/eb-sync-env-if-changed.sh \
+            "${{ steps.target.outputs.env_name }}" \
+            "${{ env.AWS_REGION }}" \
+            "${{ env.EB_APPLICATION }}" \
+            "${SETTINGS}"
 
       - name: Sync Roboflow environment variables
         if: steps.target.outputs.env_name == 'amrportal' || steps.target.outputs.env_name == 'amrportal-prod' || steps.target.outputs.env_name == 'amrportal-prod-0519'
@@ -160,15 +162,20 @@ jobs:
             exit 0
           fi
           WORKSPACE="${ROBOFLOW_WORKSPACE:-analoggasmeter}"
-          aws elasticbeanstalk update-environment \
-            --region "${AWS_REGION}" \
-            --environment-name "${{ steps.target.outputs.env_name }}" \
-            --option-settings \
-              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_API_KEY,Value=${ROBOFLOW_API_KEY}" \
-              "Namespace=aws:elasticbeanstalk:application:environment,OptionName=ROBOFLOW_WORKSPACE,Value=${WORKSPACE}"
-          aws elasticbeanstalk wait environment-updated \
-            --region "${AWS_REGION}" \
-            --environment-names "${{ steps.target.outputs.env_name }}"
+          SETTINGS=/tmp/eb-roboflow-env.json
+          jq -n \
+            --arg key "${ROBOFLOW_API_KEY}" \
+            --arg workspace "${WORKSPACE}" \
+            '[
+              {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "ROBOFLOW_API_KEY", Value: $key},
+              {Namespace: "aws:elasticbeanstalk:application:environment", OptionName: "ROBOFLOW_WORKSPACE", Value: $workspace}
+            ]' > "${SETTINGS}"
+          chmod +x scripts/eb-sync-env-if-changed.sh
+          scripts/eb-sync-env-if-changed.sh \
+            "${{ steps.target.outputs.env_name }}" \
+            "${{ env.AWS_REGION }}" \
+            "${{ env.EB_APPLICATION }}" \
+            "${SETTINGS}"
 
       - name: Summary
         run: |
