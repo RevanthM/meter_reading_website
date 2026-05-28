@@ -548,7 +548,6 @@ const ReadingDetail: React.FC = () => {
 
   const reading = directReading || contextReading;
   const isManualUploadQueue = reading?.status === 'manually_uploaded';
-  const isFieldTestCapture = (reading?.uploadMode || '').trim().toLowerCase() === 'field';
 
   const readingQueueIds = useMemo(() => {
     const st = location.state as ReadingDetailLocationState | null;
@@ -753,12 +752,11 @@ const ReadingDetail: React.FC = () => {
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
       selectedStatus !== r.status ||
-      (!isFieldTestCapture && datasetDestination !== baseDest) ||
+      datasetDestination !== baseDest ||
       imageDifficulty !== baseDifficulty
     );
   }, [
     isLabelerMode,
-    isFieldTestCapture,
     directReading,
     contextReading,
     userCorrection,
@@ -854,7 +852,7 @@ const ReadingDetail: React.FC = () => {
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
-      (!isFieldTestCapture && datasetDestination !== baseDest) ||
+      datasetDestination !== baseDest ||
       imageDifficulty !== baseDifficulty ||
       (isReviewerSaveMode && desiredIsCorrect !== baseIsCorrect);
 
@@ -913,7 +911,7 @@ const ReadingDetail: React.FC = () => {
           patch.user_correction = userCorrection;
           patch.portal_review_notes = comments;
           if (isReviewerSaveMode) {
-            if (!isFieldTestCapture && datasetDestination !== baseDest) {
+            if (datasetDestination !== baseDest) {
               patch.reviewer_dataset_destination = datasetDestination;
             }
             if (imageDifficulty !== baseDifficulty) {
@@ -1671,41 +1669,39 @@ const ReadingDetail: React.FC = () => {
                     </select>
                   </div>
 
-                  {!isFieldTestCapture ? (
-                    <fieldset className="reading-detail-radio-group">
-                      <legend>Dataset</legend>
-                      <label className="reading-detail-radio">
-                        <input
-                          type="radio"
-                          name="dataset-destination"
-                          checked={datasetDestination === 'training'}
-                          onChange={() => setDatasetDestination('training')}
-                        />
-                        Send to training dataset
-                      </label>
-                      <label className="reading-detail-radio">
-                        <input
-                          type="radio"
-                          name="dataset-destination"
-                          checked={datasetDestination === 'test'}
-                          onChange={() => setDatasetDestination('test')}
-                        />
-                        Send to test dataset
-                      </label>
-                      <label className="reading-detail-radio">
-                        <input
-                          type="radio"
-                          name="dataset-destination"
-                          checked={datasetDestination !== 'training' && datasetDestination !== 'test'}
-                          onChange={() => setDatasetDestination(null)}
-                        />
-                        Neither
-                      </label>
-                      <p className="reading-detail-field-hint">
-                        Test dataset rows are approved by the <strong>test data reviewer</strong> role.
-                      </p>
-                    </fieldset>
-                  ) : null}
+                  <fieldset className="reading-detail-radio-group">
+                    <legend>Dataset</legend>
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination === 'training'}
+                        onChange={() => setDatasetDestination('training')}
+                      />
+                      Send to training dataset
+                    </label>
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination === 'test'}
+                        onChange={() => setDatasetDestination('test')}
+                      />
+                      Send to test dataset
+                    </label>
+                    <label className="reading-detail-radio">
+                      <input
+                        type="radio"
+                        name="dataset-destination"
+                        checked={datasetDestination !== 'training' && datasetDestination !== 'test'}
+                        onChange={() => setDatasetDestination(null)}
+                      />
+                      Neither
+                    </label>
+                    <p className="reading-detail-field-hint">
+                      Test dataset rows are approved by the <strong>test data reviewer</strong> role.
+                    </p>
+                  </fieldset>
 
                   <fieldset className="reading-detail-radio-group">
                     <legend>Image classification</legend>

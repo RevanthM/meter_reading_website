@@ -5,7 +5,7 @@ import {
   useSearchParams,
   useLocation,
 } from 'react-router-dom';
-import { Calendar, ClipboardList, Eye, MapPin, Search, User, X, ArrowDown, ArrowUp } from 'lucide-react';
+import { Calendar, ClipboardList, Eye, MapPin, Search, SlidersHorizontal, User, X, ArrowDown, ArrowUp } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import {
@@ -23,7 +23,7 @@ import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
 import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
-import { getReadingListStatusDisplay } from '../types';
+import { getReadingListStatusDisplay, isAwaitingReviewerReview } from '../types';
 import {
   UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
   FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS,
@@ -45,6 +45,44 @@ const DEFAULT_FILTERS: FieldTestCaptureFilters = {
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
 const SEARCH_DEBOUNCE_MS = 350;
+
+const FIELD_TEST_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
+type FieldTestCohortId = (typeof FIELD_TEST_COHORT_IDS)[number];
+
+const FIELD_TEST_COHORT_LABELS: Record<FieldTestCohortId, string> = {
+  untrained: 'Awaiting review',
+  correct: 'Reviewed correct',
+  incorrect: 'Reviewed incorrect',
+  training: 'Send to training',
+  test_data: 'Send to test dataset',
+};
+
+function isFieldTestCohortId(s: string): s is FieldTestCohortId {
+  return (FIELD_TEST_COHORT_IDS as readonly string[]).includes(s);
+}
+
+function matchesFieldTestCohort(r: S3MeterReading, cohort: FieldTestCohortId): boolean {
+  switch (cohort) {
+    case 'untrained':
+      return isAwaitingReviewerReview(r);
+    case 'correct':
+      return r.status === 'correct';
+    case 'incorrect':
+      return (
+        r.status === 'incorrect_analyzed' ||
+        r.status === 'incorrect_labeled' ||
+        r.status === 'incorrect_training' ||
+        (r.status === 'incorrect_new' && r.isManuallyReviewed === true)
+      );
+    case 'training':
+      return (
+        r.status !== 'incorrect_training' &&
+        (r.reviewerDatasetDestination === 'training' || r.reviewerRecommendTraining === true)
+      );
+    case 'test_data':
+      return r.reviewerDatasetDestination === 'test';
+  }
+}
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -77,6 +115,8 @@ const FieldTestReadingsList: FC = () => {
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   const cycleId = searchParams.get('cycleId') || activeCycle?.id || '';
+  const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
+  const activeCohort: FieldTestCohortId | null = isFieldTestCohortId(cohortParamRaw) ? cohortParamRaw : null;
   const showCyclePicker =
     outletCtx?.workMode !== 'reviewer' && outletCtx?.workMode !== 'test_data_reviewer';
 
@@ -176,8 +216,30 @@ const FieldTestReadingsList: FC = () => {
   };
 
   const onCycleChange = (id: string) => {
-    setSearchParams(id ? { cycleId: id } : {});
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      if (id) n.set('cycleId', id);
+      else n.delete('cycleId');
+      return n;
+    });
   };
+
+  const setCohortParam = (next: FieldTestCohortId | null) => {
+    setSearchParams(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        if (!next) n.delete('cohort');
+        else n.set('cohort', next);
+        return n;
+      },
+      { replace: true },
+    );
+  };
+
+  const filteredReadings = useMemo(() => {
+    if (!activeCohort) return readings;
+    return readings.filter((r) => matchesFieldTestCohort(r, activeCohort));
+  }, [readings, activeCohort]);
 
   const filtersActive = fieldTestFiltersActive(filters);
   const clearFilters = () => setFilters({ ...DEFAULT_FILTERS });
@@ -199,10 +261,25 @@ const FieldTestReadingsList: FC = () => {
   const countLabel = useMemo(() => {
     if (initialLoading && readings.length === 0) return 'Loading…';
     const cyclePart = showCyclePicker && activeCycle ? ` · ${activeCycle.name}` : '';
-    const count = total || readings.length;
-    const base = `${count.toLocaleString()} capture${count === 1 ? '' : 's'}${cyclePart}`;
-    return fetching ? `${base} · updating…` : base;
-  }, [initialLoading, fetching, total, readings.length, activeCycle, showCyclePicker]);
+    const visibleCount = filteredReadings.length;
+    const loadedCount = readings.length;
+    const countText =
+      activeCohort && visibleCount !== loadedCount
+        ? `${visibleCount.toLocaleString()} of ${(total || loadedCount).toLocaleString()}`
+        : (total || visibleCount).toLocaleString();
+    const base = `${countText} capture${visibleCount === 1 && !activeCohort ? '' : 's'}${cyclePart}`;
+    const cohortPart = activeCohort ? ` · ${FIELD_TEST_COHORT_LABELS[activeCohort]}` : '';
+    return fetching ? `${base}${cohortPart} · updating…` : `${base}${cohortPart}`;
+  }, [
+    initialLoading,
+    fetching,
+    total,
+    readings.length,
+    filteredReadings.length,
+    activeCycle,
+    showCyclePicker,
+    activeCohort,
+  ]);
 
   const toolbarBusy = fetching || refreshing;
 
@@ -363,6 +440,31 @@ const FieldTestReadingsList: FC = () => {
                 </button>
               ) : null}
             </div>
+            <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort field-test-readings-cohort-row">
+              <SlidersHorizontal size={16} aria-hidden />
+              <span className="readings-list-filter-label">Show</span>
+              <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
+                <button
+                  type="button"
+                  className={`readings-list-filter-chip${!activeCohort ? ' active' : ''}`}
+                  onClick={() => setCohortParam(null)}
+                  aria-pressed={!activeCohort}
+                >
+                  All
+                </button>
+                {FIELD_TEST_COHORT_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`readings-list-filter-chip${activeCohort === id ? ' active' : ''}`}
+                    onClick={() => setCohortParam(activeCohort === id ? null : id)}
+                    aria-pressed={activeCohort === id}
+                  >
+                    {FIELD_TEST_COHORT_LABELS[id]}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="readings-list-filter-toolbar-row field-test-readings-date-row">
               <span className="readings-list-filter-label">When captured</span>
               <div className="readings-list-filter-chips">
@@ -402,13 +504,15 @@ const FieldTestReadingsList: FC = () => {
         ) : null}
         {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-        {!fetching && !initialLoading && !err && readings.length === 0 ? (
+        {!fetching && !initialLoading && !err && filteredReadings.length === 0 ? (
           <p className="unit-test-images-page-message pipeline-iterations-empty">
-            No field captures match your filters. Open a capture to set correct/incorrect and image difficulty.
+            {readings.length === 0
+              ? 'No field captures match your filters. Open a capture to set correct/incorrect and image difficulty.'
+              : 'No field captures match this review cohort. Try another filter or open All.'}
           </p>
         ) : null}
 
-        {readings.length > 0 ? (
+        {filteredReadings.length > 0 ? (
           <div className={`table-container${fetching ? ' table-container--refreshing' : ''}`}>
             <table className="readings-table">
               <thead>
@@ -442,7 +546,7 @@ const FieldTestReadingsList: FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {readings.map((reading) => {
+                {filteredReadings.map((reading) => {
                   const { label, color } = getReadingListStatusDisplay(reading);
                   return (
                     <tr key={reading.id}>
@@ -458,19 +562,35 @@ const FieldTestReadingsList: FC = () => {
                         </span>
                       </td>
                       <td data-label="Outcome">
-                        <span
-                          className="status-badge"
-                          style={{
-                            backgroundColor: `${color}20`,
-                            color,
-                            borderColor: color,
-                          }}
-                        >
-                          {label}
+                        <span className="readings-status-cell">
+                          <span
+                            className="status-badge"
+                            style={{
+                              backgroundColor: `${color}20`,
+                              color,
+                              borderColor: color,
+                            }}
+                          >
+                            {label}
+                          </span>
+                          {reading.reviewerRecommendTraining ||
+                          reading.reviewerDatasetDestination === 'training' ? (
+                            <span
+                              className="readings-training-pick-badge"
+                              title="Reviewer sent to training dataset"
+                            >
+                              Training
+                            </span>
+                          ) : null}
+                          {reading.reviewerDatasetDestination === 'test' ? (
+                            <span className="readings-training-pick-badge" title="Reviewer sent to test dataset">
+                              Test
+                            </span>
+                          ) : null}
+                          {reading.hadUserCorrection ? (
+                            <span className="field-test-corrected-pill">Corrected</span>
+                          ) : null}
                         </span>
-                        {reading.hadUserCorrection ? (
-                          <span className="field-test-corrected-pill">Corrected</span>
-                        ) : null}
                       </td>
                       <td data-label="Date">
                         <div className="cell-with-icon">
@@ -502,7 +622,7 @@ const FieldTestReadingsList: FC = () => {
                               },
                               {
                                 state: {
-                                  readingQueueIds: readings.map((r) => r.id),
+                                  readingQueueIds: filteredReadings.map((r) => r.id),
                                   listReturn: { pathname: location.pathname, search: location.search },
                                 },
                               },
