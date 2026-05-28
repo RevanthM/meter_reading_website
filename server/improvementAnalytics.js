@@ -60,7 +60,10 @@ const CHART_RANGE_DAY_COUNT = {
 function parseReadingInstant(dateString) {
   const s = (dateString || '').trim();
   if (!s) return null;
-  const t = Date.parse(s);
+  if (ISO_DAY.test(s)) return new Date(`${s}T12:00:00Z`);
+  const normalized =
+    /^\d{4}-\d{2}-\d{2}T/.test(s) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(s) ? `${s}Z` : s;
+  const t = Date.parse(normalized);
   if (!Number.isNaN(t)) return new Date(t);
   const day = s.split('T')[0] ?? '';
   if (ISO_DAY.test(day)) return new Date(`${day}T12:00:00Z`);

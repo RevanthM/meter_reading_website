@@ -1,4 +1,4 @@
-import { calendarDayKeyInPortalTz } from './improvementAnalytics.js';
+import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import { getDateRangeFromPreset, isDateRangePresetId } from './dateRangePresets.js';
 
 export function matchesFieldTestDatePreset(reading, datePreset) {
@@ -7,8 +7,8 @@ export function matchesFieldTestDatePreset(reading, datePreset) {
   if (!isDateRangePresetId(preset)) return true;
 
   const { from, to } = getDateRangeFromPreset(preset);
-  const day = calendarDayKeyInPortalTz(
-    reading?.dateOfReading || reading?.date || reading?.capturedAt || '',
+  const day = fieldTestCaptureDayKey(
+    reading?.dateOfReading || reading?.date || reading?.capturedAt || reading?.createdAt || '',
   );
   if (!day) return false;
   return day >= from && day <= to;

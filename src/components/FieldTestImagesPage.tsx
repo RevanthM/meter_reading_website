@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FC } from 'react';
+import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ImageIcon, Loader2, Search, X } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
@@ -59,12 +59,14 @@ const FieldTestImagesPage: FC = () => {
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
   const [captures, setCaptures] = useState<FieldTestCaptureRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [users, setUsers] = useState<string[]>([]);
   const [cities, setCities] = useState<FieldTestCityFilterOption[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const loadSeqRef = useRef(0);
   const [filters, setFilters] = useState<FieldTestCaptureFilters>({
     query: '',
     difficulty: 'all',
@@ -119,6 +121,7 @@ const FieldTestImagesPage: FC = () => {
 
   const loadCaptures = useCallback(
     async (opts?: { refresh?: boolean }) => {
+      const seq = ++loadSeqRef.current;
       setFetching(true);
       setErr(null);
       try {
@@ -137,14 +140,21 @@ const FieldTestImagesPage: FC = () => {
           presign: true,
           refresh: opts?.refresh,
         })) as FieldTestCapturesResponse;
+
+        if (seq !== loadSeqRef.current) return;
+
         setCaptures(capRes.captures);
+        setTotal(capRes.total);
         setUsers(capRes.filterOptions.users);
         setCities(capRes.filterOptions.cities ?? []);
       } catch (e) {
+        if (seq !== loadSeqRef.current) return;
         setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
       } finally {
-        setFetching(false);
-        setLoading(false);
+        if (seq === loadSeqRef.current) {
+          setFetching(false);
+          setLoading(false);
+        }
       }
     },
     [
@@ -166,10 +176,6 @@ const FieldTestImagesPage: FC = () => {
   }, [loadCaptures]);
 
   useEffect(() => {
-    setLightboxIndex(null);
-  }, [workType, effectiveCycleId]);
-
-  useEffect(() => {
     setLightboxIndex((lb) => {
       if (lb == null) return lb;
       if (captures.length === 0) return null;
@@ -188,7 +194,12 @@ const FieldTestImagesPage: FC = () => {
   }, [loadCycles, loadCaptures]);
 
   const onCycleChange = (id: string) => {
-    setSearchParams(id ? { cycleId: id } : {});
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      if (id) n.set('cycleId', id);
+      else n.delete('cycleId');
+      return n;
+    });
   };
 
   const filtersActive = fieldTestFiltersActive(filters);
@@ -205,10 +216,7 @@ const FieldTestImagesPage: FC = () => {
     });
 
   const setDatePreset = (preset: DateRangePresetId) => {
-    setFilters((prev) => ({
-      ...prev,
-      datePreset: prev.datePreset === preset ? 'all' : preset,
-    }));
+    setFilters((prev) => ({ ...prev, datePreset: preset }));
   };
 
   const captureCount = captures.length;
@@ -216,7 +224,13 @@ const FieldTestImagesPage: FC = () => {
   const imageCountLabel = (() => {
     if (loading || err) return null;
     const cycleSuffix = activeCycle ? ` · ${activeCycle.name}` : '';
-    return `${captureCount.toLocaleString()} ${captureCount === 1 ? 'image' : 'images'}${cycleSuffix}`;
+    const dateSuffix =
+      filters.datePreset !== 'all' ? ` · ${formatPresetLabel(filters.datePreset as DateRangePresetId)}` : '';
+    const countText =
+      filters.datePreset !== 'all' && total > captureCount
+        ? `${captureCount.toLocaleString()} of ${total.toLocaleString()}`
+        : (total || captureCount).toLocaleString();
+    return `${countText} ${captureCount === 1 ? 'image' : 'images'}${cycleSuffix}${dateSuffix}`;
   })();
 
   const openLightbox = (index: number) => {
@@ -450,13 +464,13 @@ const FieldTestImagesPage: FC = () => {
       ) : null}
       {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-      {!loading && !err && captureCount === 0 ? (
+      {!loading && !err && captures.length === 0 ? (
         <p className="unit-test-images-page-message pipeline-iterations-empty">
           No field test images match your filters. New iOS field uploads appear here after Dynamo sync.
         </p>
       ) : null}
 
-      {!loading && captureCount > 0 ? (
+      {!loading && captures.length > 0 ? (
         <div className="unit-test-images-grid unit-test-images-page-grid">
           {captures.map((cap, index) => {
             const downloading = downloadingKey === cap.sessionId;

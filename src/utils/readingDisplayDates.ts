@@ -6,7 +6,11 @@ export const PORTAL_DISPLAY_TIME_ZONE = 'America/Los_Angeles';
 function parseReadingInstant(dateString: string): Date | null {
   const s = (dateString || '').trim();
   if (!s) return null;
-  const t = Date.parse(s);
+  if (ISO_DAY.test(s)) return new Date(`${s}T12:00:00Z`);
+  // ISO datetimes without a timezone are stored as UTC (iOS / Dynamo convention).
+  const normalized =
+    /^\d{4}-\d{2}-\d{2}T/.test(s) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(s) ? `${s}Z` : s;
+  const t = Date.parse(normalized);
   if (!Number.isNaN(t)) return new Date(t);
   const day = s.split('T')[0] ?? '';
   if (ISO_DAY.test(day)) return new Date(`${day}T12:00:00Z`);

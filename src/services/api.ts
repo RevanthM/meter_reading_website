@@ -131,6 +131,8 @@ export interface S3MeterReading extends MeterReading {
   imageCount?: number;
   /** Portal bulk upload awaiting a 4-digit label. */
   manualLabelPending?: boolean;
+  /** Field test cycle capture (`field_test_capture` in metadata). */
+  fieldTestCapture?: boolean;
 }
 
 /** Pulled from portal readings for this row’s app version (work type + data source scope). */

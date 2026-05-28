@@ -3,6 +3,7 @@
  */
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
+import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import { countReadsCorrectedFromItem, sessionItemToPerImageRow } from './fieldTestDerive.js';
 
 const ROLLUP_VERSION = 1;
@@ -214,7 +215,7 @@ export function filterSessionsForCycle(sessions, cycle) {
 export function filterReadingsForCycle(readings, cycle) {
   if (!cycle) return readings;
   return readings.filter((r) => {
-    const day = captureDayFromIso(r.dateOfReading || r.date || r.createdAt);
+    const day = fieldTestCaptureDayKey(r.dateOfReading || r.date || r.createdAt);
     if (!day) return false;
     return day >= cycle.startDate && day <= cycle.endDate;
   });

@@ -9,11 +9,8 @@ import { Calendar, ClipboardList, Eye, MapPin, Search, SlidersHorizontal, User, 
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import {
-  fetchFieldTestCaptures,
   fetchFieldTestCycles,
-  type FieldTestCityFilterOption,
   type FieldTestCycle,
-  type FieldTestReadingsListResponse,
   type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
@@ -22,25 +19,26 @@ import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
-import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
+import {
+  formatPresetLabel,
+  getDateRangeFromPreset,
+  isDateRangePresetId,
+  type DateRangePresetId,
+} from '../utils/dateRangePresets';
 import { getReadingListStatusDisplay, isAwaitingReviewerReview } from '../types';
 import {
   UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
   FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS,
   type FieldTestCaptureFilters,
   fieldTestFiltersActive,
+  filterFieldTestReadings,
 } from '../utils/fieldTestImageFilters';
-
-const DEFAULT_FILTERS: FieldTestCaptureFilters = {
-  query: '',
-  difficulty: 'all',
-  user: 'all',
-  corrected: 'all',
-  location: 'all',
-  captureTrigger: 'all',
-  datePreset: 'all',
-  sortDir: 'desc',
-};
+import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
+import {
+  filterFieldTestReadingsForCycle,
+  isFieldTestReading,
+  readingMatchesDateRangeWindow,
+} from '../utils/fieldTestReadings';
 
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
@@ -100,25 +98,42 @@ const FieldTestReadingsList: FC = () => {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
-  const { workType } = useReadings();
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
+  const {
+    readings: contextReadings,
+    ensureReadingsLoaded,
+    readingsLoading,
+    refreshData,
+    workType,
+  } = useReadings();
   const [err, setErr] = useState<string | null>(null);
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
-  const [readings, setReadings] = useState<S3MeterReading[]>([]);
-  const [users, setUsers] = useState<string[]>([]);
-  const [cities, setCities] = useState<FieldTestCityFilterOption[]>([]);
-  const [total, setTotal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const [filters, setFilters] = useState<FieldTestCaptureFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
+    query: '',
+    difficulty: 'all',
+    user: 'all',
+    corrected: 'all',
+    location: 'all',
+    captureTrigger: 'all',
+    sortDir: 'desc',
+  });
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
-  const cycleId = searchParams.get('cycleId') || activeCycle?.id || '';
+  const cycleIdParam = searchParams.get('cycleId') || '';
   const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
   const activeCohort: FieldTestCohortId | null = isFieldTestCohortId(cohortParamRaw) ? cohortParamRaw : null;
-  const showCyclePicker =
-    outletCtx?.workMode !== 'reviewer' && outletCtx?.workMode !== 'test_data_reviewer';
+  const rangePresetRaw = (searchParams.get('range') || '').trim();
+  const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
+  const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
+  const showCyclePicker = useMemo(() => {
+    const mode = outletCtx?.workMode;
+    return Boolean(mode && mode !== 'reviewer' && mode !== 'test_data_reviewer');
+  }, [outletCtx?.workMode]);
+
+  useEffect(() => {
+    void ensureReadingsLoaded();
+  }, [ensureReadingsLoaded]);
 
   useEffect(() => {
     if (!outletCtx?.workMode || !canViewFieldTestImages(outletCtx.workMode)) {
@@ -136,7 +151,7 @@ const FieldTestReadingsList: FC = () => {
       const cyclesRes = await fetchFieldTestCycles(workType);
       setCycles(cyclesRes.cycles);
       const selected =
-        cyclesRes.cycles.find((c) => c.id === cycleId) ||
+        cyclesRes.cycles.find((c) => c.id === cycleIdParam) ||
         cyclesRes.activeCycle ||
         cyclesRes.cycles[0] ||
         null;
@@ -146,70 +161,24 @@ const FieldTestReadingsList: FC = () => {
       setErr(e instanceof Error ? e.message : 'Failed to load field test cycles');
       return null;
     }
-  }, [workType, cycleId]);
+  }, [workType, cycleIdParam]);
 
   useEffect(() => {
     void loadCycles();
   }, [loadCycles]);
 
-  const effectiveCycleId = cycleId || activeCycle?.id || '';
-
-  const loadCaptures = useCallback(
-    async (opts?: { refresh?: boolean }) => {
-      setFetching(true);
-      setErr(null);
-      try {
-        const res = (await fetchFieldTestCaptures(workType, {
-          cycleId: showCyclePicker ? effectiveCycleId || undefined : undefined,
-          page: 1,
-          limit: 2000,
-          format: 'readings',
-          q: debouncedQuery,
-          difficulty: filters.difficulty,
-          user: filters.user,
-          corrected: filters.corrected,
-          location: filters.location,
-          captureTrigger: filters.captureTrigger,
-          datePreset: filters.datePreset,
-          sortDir: filters.sortDir,
-          refresh: opts?.refresh,
-        })) as FieldTestReadingsListResponse;
-
-        setReadings(res.readings);
-        setUsers(res.filterOptions.users);
-        setCities(res.filterOptions.cities ?? []);
-        setTotal(res.total);
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
-      } finally {
-        setFetching(false);
-        setInitialLoading(false);
-      }
-    },
-    [
-      workType,
-      showCyclePicker,
-      effectiveCycleId,
-      debouncedQuery,
-      filters.difficulty,
-      filters.user,
-      filters.corrected,
-      filters.location,
-      filters.captureTrigger,
-      filters.datePreset,
-      filters.sortDir,
-    ],
-  );
-
-  useEffect(() => {
-    void loadCaptures();
-  }, [loadCaptures]);
+  const allReadings = useMemo(() => {
+    let list = contextReadings.filter(isFieldTestReading);
+    if (showCyclePicker && activeCycle) {
+      list = filterFieldTestReadingsForCycle(list, activeCycle);
+    }
+    return list;
+  }, [contextReadings, showCyclePicker, activeCycle]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await loadCycles();
-      await loadCaptures({ refresh: true });
+      await Promise.all([loadCycles(), refreshData()]);
     } finally {
       setRefreshing(false);
     }
@@ -236,13 +205,84 @@ const FieldTestReadingsList: FC = () => {
     );
   };
 
-  const filteredReadings = useMemo(() => {
-    if (!activeCohort) return readings;
-    return readings.filter((r) => matchesFieldTestCohort(r, activeCohort));
-  }, [readings, activeCohort]);
+  const clearDateRangeFilters = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        n.delete('date');
+        n.delete('from');
+        n.delete('to');
+        n.delete('range');
+        return n;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
 
-  const filtersActive = fieldTestFiltersActive(filters);
-  const clearFilters = () => setFilters({ ...DEFAULT_FILTERS });
+  const applyRangePreset = useCallback(
+    (preset: DateRangePresetId) => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.delete('date');
+          n.delete('from');
+          n.delete('to');
+          n.set('range', preset);
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const filterInput = useMemo(
+    (): FieldTestCaptureFilters => ({
+      ...filters,
+      query: debouncedQuery,
+      datePreset: 'all',
+    }),
+    [filters, debouncedQuery],
+  );
+
+  const users = useMemo(
+    () =>
+      [...new Set(allReadings.map((r) => (r.userName || '').trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [allReadings],
+  );
+
+  const cities = useMemo(() => buildFieldTestCityOptions(allReadings), [allReadings]);
+
+  const filteredReadings = useMemo(() => {
+    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, presetWindow));
+    list = filterFieldTestReadings(list, filterInput);
+    if (activeCohort) {
+      list = list.filter((r) => matchesFieldTestCohort(r, activeCohort));
+    }
+    list = [...list].sort((a, b) => {
+      const cmp = String(b.dateOfReading || b.createdAt || '').localeCompare(
+        String(a.dateOfReading || a.createdAt || ''),
+      );
+      return filters.sortDir === 'desc' ? cmp : -cmp;
+    });
+    return list;
+  }, [allReadings, presetWindow, filterInput, activeCohort, filters.sortDir]);
+
+  const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
+  const clearFilters = () => {
+    setFilters({
+      query: '',
+      difficulty: 'all',
+      user: 'all',
+      corrected: 'all',
+      location: 'all',
+      captureTrigger: 'all',
+      sortDir: 'desc',
+    });
+    clearDateRangeFilters();
+  };
 
   const toggleDateSort = () => {
     setFilters((prev) => ({
@@ -251,37 +291,35 @@ const FieldTestReadingsList: FC = () => {
     }));
   };
 
-  const setDatePreset = (preset: DateRangePresetId) => {
-    setFilters((prev) => ({
-      ...prev,
-      datePreset: prev.datePreset === preset ? 'all' : preset,
-    }));
-  };
+  const initialLoading = readingsLoading && allReadings.length === 0;
 
   const countLabel = useMemo(() => {
-    if (initialLoading && readings.length === 0) return 'Loading…';
+    if (initialLoading) return 'Loading…';
     const cyclePart = showCyclePicker && activeCycle ? ` · ${activeCycle.name}` : '';
     const visibleCount = filteredReadings.length;
-    const loadedCount = readings.length;
+    const loadedCount = allReadings.length;
     const countText =
-      activeCohort && visibleCount !== loadedCount
-        ? `${visibleCount.toLocaleString()} of ${(total || loadedCount).toLocaleString()}`
-        : (total || visibleCount).toLocaleString();
-    const base = `${countText} capture${visibleCount === 1 && !activeCohort ? '' : 's'}${cyclePart}`;
+      visibleCount !== loadedCount
+        ? `${visibleCount.toLocaleString()} of ${loadedCount.toLocaleString()}`
+        : visibleCount.toLocaleString();
+    const base = `${countText} capture${visibleCount === 1 ? '' : 's'}${cyclePart}`;
     const cohortPart = activeCohort ? ` · ${FIELD_TEST_COHORT_LABELS[activeCohort]}` : '';
-    return fetching ? `${base}${cohortPart} · updating…` : `${base}${cohortPart}`;
+    const datePart = rangePreset ? ` · ${formatPresetLabel(rangePreset)}` : '';
+    const busyPart = refreshing ? ' · updating…' : '';
+    return `${base}${cohortPart}${datePart}${busyPart}`;
   }, [
     initialLoading,
-    fetching,
-    total,
-    readings.length,
+    refreshing,
+    allReadings.length,
     filteredReadings.length,
     activeCycle,
     showCyclePicker,
     activeCohort,
+    rangePreset,
   ]);
 
-  const toolbarBusy = fetching || refreshing;
+  const toolbarBusy = refreshing;
+  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
 
   return (
     <div className="readings-list-page field-test-readings-list-page">
@@ -301,7 +339,7 @@ const FieldTestReadingsList: FC = () => {
               variant="icon"
               onRefresh={() => void handleRefresh()}
               busy={toolbarBusy}
-              disabled={initialLoading && readings.length === 0}
+              disabled={initialLoading && allReadings.length === 0}
               title="Refresh field test list"
             />
           </div>
@@ -316,7 +354,7 @@ const FieldTestReadingsList: FC = () => {
                   <span className="unit-test-images-filter-label">Cycle</span>
                   <select
                     className="unit-test-images-filter-select"
-                    value={cycleId}
+                    value={effectiveCycleId}
                     onChange={(e) => onCycleChange(e.target.value)}
                   >
                     {cycles.map((c) => (
@@ -472,18 +510,18 @@ const FieldTestReadingsList: FC = () => {
                   <button
                     key={id}
                     type="button"
-                    className={`readings-list-filter-chip${filters.datePreset === id ? ' active' : ''}`}
-                    onClick={() => setDatePreset(id)}
-                    aria-pressed={filters.datePreset === id}
+                    className={`readings-list-filter-chip${rangePreset === id ? ' active' : ''}`}
+                    onClick={() => applyRangePreset(id)}
+                    aria-pressed={rangePreset === id}
                   >
                     {formatPresetLabel(id)}
                   </button>
                 ))}
-                {filters.datePreset !== 'all' ? (
+                {rangePreset ? (
                   <button
                     type="button"
                     className="readings-list-filter-chip readings-list-filter-chip-muted"
-                    onClick={() => setFilters((p) => ({ ...p, datePreset: 'all' }))}
+                    onClick={clearDateRangeFilters}
                   >
                     Clear dates
                   </button>
@@ -496,24 +534,24 @@ const FieldTestReadingsList: FC = () => {
       </header>
 
       <main className="list-content field-test-readings-list-content">
-        {initialLoading && readings.length === 0 ? (
+        {initialLoading && allReadings.length === 0 ? (
           <ListViewLoading message="Loading field test captures…" />
         ) : null}
-        {fetching && readings.length > 0 ? (
+        {refreshing && allReadings.length > 0 ? (
           <ListViewLoading variant="inline" message="Updating list…" />
         ) : null}
         {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-        {!fetching && !initialLoading && !err && filteredReadings.length === 0 ? (
+        {!refreshing && !initialLoading && !err && filteredReadings.length === 0 ? (
           <p className="unit-test-images-page-message pipeline-iterations-empty">
-            {readings.length === 0
-              ? 'No field captures match your filters. Open a capture to set correct/incorrect and image difficulty.'
-              : 'No field captures match this review cohort. Try another filter or open All.'}
+            {allReadings.length === 0
+              ? 'No field captures yet. Open a capture to set correct/incorrect and image difficulty.'
+              : 'No captures match the current filters. Try another date, clear filters, or choose All.'}
           </p>
         ) : null}
 
         {filteredReadings.length > 0 ? (
-          <div className={`table-container${fetching ? ' table-container--refreshing' : ''}`}>
+          <div className={`table-container${refreshing ? ' table-container--refreshing' : ''}`}>
             <table className="readings-table">
               <thead>
                 <tr>

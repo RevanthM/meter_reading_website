@@ -1,5 +1,7 @@
 import type { FieldTestCaptureRow, ImageDifficulty, S3MeterReading } from '../services/api';
 import type { DateRangePresetId } from './dateRangePresets';
+import { getDateRangeFromPreset, isDateRangePresetId } from './dateRangePresets';
+import { calendarDayKeyInPortalTz } from './readingDisplayDates';
 import { matchesFieldTestCityFilter } from './fieldTestLocation';
 import {
   matchesFieldTestCaptureTriggerFilter,
@@ -33,6 +35,20 @@ export type FieldTestCaptureFilters = {
 
 export { UNIT_TEST_DIFFICULTY_FILTER_OPTIONS, FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS };
 
+export function matchesFieldTestDatePreset(
+  capturedAt: string | null | undefined,
+  datePreset: FieldTestDatePreset,
+): boolean {
+  const preset = String(datePreset || 'all').trim().toLowerCase();
+  if (!preset || preset === 'all') return true;
+  if (!isDateRangePresetId(preset)) return true;
+
+  const { from, to } = getDateRangeFromPreset(preset);
+  const day = calendarDayKeyInPortalTz(String(capturedAt || '').trim());
+  if (!day) return false;
+  return day >= from && day <= to;
+}
+
 export function filterFieldTestCaptures(
   captures: FieldTestCaptureRow[],
   filters: FieldTestCaptureFilters,
@@ -56,6 +72,7 @@ export function filterFieldTestCaptures(
     if (filters.corrected === 'yes' && !cap.hadUserCorrection) return false;
     if (filters.corrected === 'no' && cap.hadUserCorrection) return false;
     if (!matchesFieldTestCaptureTriggerFilter(cap, filters.captureTrigger)) return false;
+    if (!matchesFieldTestDatePreset(cap.capturedAt, filters.datePreset)) return false;
     return true;
   });
 }
@@ -86,6 +103,7 @@ export function filterFieldTestReadings(
     if (filters.corrected === 'no' && r.hadUserCorrection) return false;
     if (!matchesFieldTestCityFilter(r, filters.location)) return false;
     if (!matchesFieldTestCaptureTriggerFilter(r, filters.captureTrigger)) return false;
+    if (!matchesFieldTestDatePreset(r.dateOfReading || r.createdAt, filters.datePreset)) return false;
     return true;
   });
 }

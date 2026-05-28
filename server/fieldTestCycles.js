@@ -3,6 +3,7 @@
  */
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { fieldTestRollupKey } from './fieldTestAnalytics.js';
+import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import { randomUUID } from 'node:crypto';
 
 const REGISTRY_FILE = 'registry.json';
@@ -32,13 +33,8 @@ function dayInRange(day, startDate, endDate) {
 }
 
 export function captureDayFromIso(iso) {
-  const s = String(iso || '').trim();
-  if (!s) return null;
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
-  if (m) return m[1];
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10);
+  const day = fieldTestCaptureDayKey(iso);
+  return day || null;
 }
 
 export async function readFieldTestCycles(s3Client, bucket, workType) {
