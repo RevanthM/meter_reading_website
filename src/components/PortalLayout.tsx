@@ -336,9 +336,24 @@ const PortalLayout: FC = () => {
 
   const trainingNavActive = pathname.startsWith('/training');
 
+  const expandNavGroupsByDefault =
+    workMode === 'reviewer' || workMode === 'test_data_reviewer';
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
+    if (!expandNavGroupsByDefault) return;
+    setOpenGroups((prev) => {
+      const next = { ...prev };
+      for (const entry of navEntries) {
+        if (entry.kind === 'group') next[entry.group.id] = true;
+      }
+      return next;
+    });
+  }, [expandNavGroupsByDefault, navEntries]);
+
+  useEffect(() => {
+    if (expandNavGroupsByDefault) return;
     setOpenGroups((prev) => {
       const next = { ...prev };
       for (const entry of navEntries) {
@@ -348,7 +363,7 @@ const PortalLayout: FC = () => {
       }
       return next;
     });
-  }, [pathname, search, navEntries]);
+  }, [expandNavGroupsByDefault, pathname, search, navEntries]);
 
   useEffect(() => {
     try {
@@ -411,7 +426,7 @@ const PortalLayout: FC = () => {
 
   const renderGroup = (group: NavGroup) => {
     const childActive = navGroupActive(pathname, search, group);
-    const open = openGroups[group.id] ?? childActive;
+    const open = openGroups[group.id] ?? (expandNavGroupsByDefault ? true : childActive);
     const panelId = `portal-nav-group-${group.id}`;
 
     return (
