@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ImageIcon, Loader2, Search, X } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
@@ -8,10 +8,11 @@ import {
   downloadUrlAsFile,
   fetchFieldTestCaptures,
   fetchFieldTestCycles,
+  presignFieldTestCaptureUrls,
   type FieldTestCaptureRow,
-  type FieldTestCapturesResponse,
-  type FieldTestCityFilterOption,
   type FieldTestCycle,
+  type FieldTestReadingsListResponse,
+  type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { canViewFieldTestResults } from '../utils/portalWorkMode';
@@ -25,8 +26,19 @@ import {
   FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS,
   type FieldTestCaptureFilters,
   fieldTestFiltersActive,
+  filterFieldTestReadings,
 } from '../utils/fieldTestImageFilters';
-import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
+import {
+  formatPresetLabel,
+  getDateRangeFromPreset,
+  isDateRangePresetId,
+  type DateRangePresetId,
+} from '../utils/dateRangePresets';
+import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
+import {
+  fieldTestCaptureFromReading,
+  readingMatchesDateRangeWindow,
+} from '../utils/fieldTestReadings';
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -53,32 +65,35 @@ const FieldTestImagesPage: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
-  const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [presigning, setPresigning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
-  const [captures, setCaptures] = useState<FieldTestCaptureRow[]>([]);
-  const [total, setTotal] = useState(0);
-  const [users, setUsers] = useState<string[]>([]);
-  const [cities, setCities] = useState<FieldTestCityFilterOption[]>([]);
+  const [cyclesResolved, setCyclesResolved] = useState(false);
+  const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
+  const [presignedUrls, setPresignedUrls] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const loadSeqRef = useRef(0);
-  const [filters, setFilters] = useState<FieldTestCaptureFilters>({
+  const presignSeqRef = useRef(0);
+  const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
     query: '',
     difficulty: 'all',
     user: 'all',
     corrected: 'all',
     location: 'all',
     captureTrigger: 'all',
-    datePreset: 'all',
     sortDir: 'desc',
   });
 
-  const cycleId = searchParams.get('cycleId') || activeCycle?.id || '';
+  const cycleIdParam = searchParams.get('cycleId') || '';
+  const rangePresetRaw = (searchParams.get('range') || '').trim();
+  const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
+  const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
+  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
+  const captureReady = cyclesResolved && Boolean(effectiveCycleId || cycles.length === 0);
 
   useEffect(() => {
     if (!outletCtx?.workMode) return;
@@ -96,14 +111,12 @@ const FieldTestImagesPage: FC = () => {
     return () => window.clearTimeout(t);
   }, [filters.query]);
 
-  const effectiveCycleId = cycleId || activeCycle?.id || '';
-
   const loadCycles = useCallback(async () => {
     try {
       const cyclesRes = await fetchFieldTestCycles(workType);
       setCycles(cyclesRes.cycles);
       const selected =
-        cyclesRes.cycles.find((c) => c.id === cycleId) ||
+        cyclesRes.cycles.find((c) => c.id === cycleIdParam) ||
         cyclesRes.activeCycle ||
         cyclesRes.cycles[0] ||
         null;
@@ -112,86 +125,119 @@ const FieldTestImagesPage: FC = () => {
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load field test cycles');
       return null;
+    } finally {
+      setCyclesResolved(true);
     }
-  }, [workType, cycleId]);
+  }, [workType, cycleIdParam]);
 
   useEffect(() => {
     void loadCycles();
   }, [loadCycles]);
 
-  const loadCaptures = useCallback(
+  const loadReadings = useCallback(
     async (opts?: { refresh?: boolean }) => {
-      const seq = ++loadSeqRef.current;
-      setFetching(true);
+      if (!captureReady) return;
+
       setErr(null);
       try {
-        const capRes = (await fetchFieldTestCaptures(workType, {
+        const res = (await fetchFieldTestCaptures(workType, {
           cycleId: effectiveCycleId || undefined,
           page: 1,
-          limit: CAPTURES_PAGE_LIMIT,
-          q: debouncedQuery,
-          difficulty: filters.difficulty,
-          user: filters.user,
-          corrected: filters.corrected,
-          location: filters.location,
-          captureTrigger: filters.captureTrigger,
-          datePreset: filters.datePreset,
-          sortDir: filters.sortDir,
-          presign: true,
+          limit: 2000,
+          format: 'readings',
+          datePreset: 'all',
           refresh: opts?.refresh,
-        })) as FieldTestCapturesResponse;
+        })) as FieldTestReadingsListResponse;
 
-        if (seq !== loadSeqRef.current) return;
-
-        setCaptures(capRes.captures);
-        setTotal(capRes.total);
-        setUsers(capRes.filterOptions.users);
-        setCities(capRes.filterOptions.cities ?? []);
+        setAllReadings(res.readings);
+        setPresignedUrls({});
       } catch (e) {
-        if (seq !== loadSeqRef.current) return;
         setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
       } finally {
-        if (seq === loadSeqRef.current) {
-          setFetching(false);
-          setLoading(false);
-        }
+        setInitialLoading(false);
       }
     },
-    [
-      workType,
-      effectiveCycleId,
-      debouncedQuery,
-      filters.difficulty,
-      filters.user,
-      filters.corrected,
-      filters.location,
-      filters.captureTrigger,
-      filters.datePreset,
-      filters.sortDir,
-    ],
+    [workType, effectiveCycleId, captureReady],
   );
 
   useEffect(() => {
-    void loadCaptures();
-  }, [loadCaptures]);
+    void loadReadings();
+  }, [loadReadings]);
+
+  const filterInput = useMemo(
+    (): FieldTestCaptureFilters => ({
+      ...filters,
+      query: debouncedQuery,
+      datePreset: 'all',
+    }),
+    [filters, debouncedQuery],
+  );
+
+  const users = useMemo(
+    () =>
+      [...new Set(allReadings.map((r) => (r.userName || '').trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [allReadings],
+  );
+
+  const cities = useMemo(() => buildFieldTestCityOptions(allReadings), [allReadings]);
+
+  const filteredCaptures = useMemo(() => {
+    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, presetWindow));
+    list = filterFieldTestReadings(list, filterInput);
+    list = [...list].sort((a, b) => {
+      const cmp = String(b.dateOfReading || b.createdAt || '').localeCompare(
+        String(a.dateOfReading || a.createdAt || ''),
+      );
+      return filters.sortDir === 'desc' ? cmp : -cmp;
+    });
+    return list.map(fieldTestCaptureFromReading);
+  }, [allReadings, presetWindow, filterInput, filters.sortDir]);
+
+  const visibleCaptures = useMemo(
+    () => filteredCaptures.slice(0, CAPTURES_PAGE_LIMIT),
+    [filteredCaptures],
+  );
+
+  useEffect(() => {
+    if (visibleCaptures.length === 0) {
+      setPresignedUrls({});
+      return;
+    }
+
+    const seq = ++presignSeqRef.current;
+    setPresigning(true);
+    void presignFieldTestCaptureUrls(visibleCaptures)
+      .then((urls) => {
+        if (seq !== presignSeqRef.current) return;
+        setPresignedUrls(urls);
+      })
+      .catch(() => {
+        if (seq !== presignSeqRef.current) return;
+      })
+      .finally(() => {
+        if (seq === presignSeqRef.current) setPresigning(false);
+      });
+  }, [visibleCaptures]);
 
   useEffect(() => {
     setLightboxIndex((lb) => {
       if (lb == null) return lb;
-      if (captures.length === 0) return null;
-      if (lb >= captures.length) return captures.length - 1;
+      if (visibleCaptures.length === 0) return null;
+      if (lb >= visibleCaptures.length) return visibleCaptures.length - 1;
       return lb;
     });
-  }, [captures.length]);
+  }, [visibleCaptures.length]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadCycles(), loadCaptures({ refresh: true })]);
+      await Promise.all([loadCycles(), loadReadings({ refresh: true })]);
     } finally {
       setRefreshing(false);
     }
-  }, [loadCycles, loadCaptures]);
+  }, [loadCycles, loadReadings]);
 
   const onCycleChange = (id: string) => {
     setSearchParams((prev) => {
@@ -202,8 +248,33 @@ const FieldTestImagesPage: FC = () => {
     });
   };
 
-  const filtersActive = fieldTestFiltersActive(filters);
-  const clearFilters = () =>
+  const clearDateRangeFilters = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        n.delete('range');
+        return n;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+
+  const applyRangePreset = useCallback(
+    (preset: DateRangePresetId) => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.set('range', preset);
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
+  const clearFilters = () => {
     setFilters({
       query: '',
       difficulty: 'all',
@@ -211,30 +282,46 @@ const FieldTestImagesPage: FC = () => {
       corrected: 'all',
       location: 'all',
       captureTrigger: 'all',
-      datePreset: 'all',
       sortDir: 'desc',
     });
-
-  const setDatePreset = (preset: DateRangePresetId) => {
-    setFilters((prev) => ({ ...prev, datePreset: preset }));
+    clearDateRangeFilters();
   };
 
-  const captureCount = captures.length;
+  const capturesWithUrls = useMemo(
+    () =>
+      visibleCaptures.map((cap) => ({
+        ...cap,
+        url: presignedUrls[cap.sessionId] || cap.url,
+      })),
+    [visibleCaptures, presignedUrls],
+  );
 
-  const imageCountLabel = (() => {
-    if (loading || err) return null;
+  const imageCountLabel = useMemo(() => {
+    if (initialLoading && allReadings.length === 0) return 'Loading…';
     const cycleSuffix = activeCycle ? ` · ${activeCycle.name}` : '';
-    const dateSuffix =
-      filters.datePreset !== 'all' ? ` · ${formatPresetLabel(filters.datePreset as DateRangePresetId)}` : '';
+    const visibleCount = visibleCaptures.length;
+    const filteredCount = filteredCaptures.length;
+    const loadedCount = allReadings.length;
     const countText =
-      filters.datePreset !== 'all' && total > captureCount
-        ? `${captureCount.toLocaleString()} of ${total.toLocaleString()}`
-        : (total || captureCount).toLocaleString();
-    return `${countText} ${captureCount === 1 ? 'image' : 'images'}${cycleSuffix}${dateSuffix}`;
-  })();
+      filteredCount !== loadedCount || visibleCount < filteredCount
+        ? `${visibleCount.toLocaleString()} of ${filteredCount.toLocaleString()}`
+        : filteredCount.toLocaleString();
+    const datePart = rangePreset ? ` · ${formatPresetLabel(rangePreset)}` : '';
+    const busyPart = presigning ? ' · loading previews…' : refreshing ? ' · updating…' : '';
+    return `${countText} ${filteredCount === 1 ? 'image' : 'images'}${cycleSuffix}${datePart}${busyPart}`;
+  }, [
+    initialLoading,
+    allReadings.length,
+    visibleCaptures.length,
+    filteredCaptures.length,
+    activeCycle,
+    rangePreset,
+    presigning,
+    refreshing,
+  ]);
 
   const openLightbox = (index: number) => {
-    const cap = captures[index];
+    const cap = capturesWithUrls[index];
     if (!cap?.url && !cap?.fullMeterUrl) return;
     setLightboxIndex(index);
   };
@@ -252,7 +339,7 @@ const FieldTestImagesPage: FC = () => {
     }
   };
 
-  const toolbarBusy = fetching || refreshing;
+  const toolbarBusy = refreshing;
 
   return (
     <div className="readings-list-page unit-test-images-page field-test-images-page">
@@ -264,9 +351,7 @@ const FieldTestImagesPage: FC = () => {
                 <ImageIcon size={32} strokeWidth={1.5} />
                 <div>
                   <h1>Field test images</h1>
-                  {!loading && !err && imageCountLabel ? (
-                    <p aria-live="polite">{imageCountLabel}</p>
-                  ) : null}
+                  <p aria-live="polite">{imageCountLabel}</p>
                 </div>
               </div>
             </div>
@@ -274,7 +359,7 @@ const FieldTestImagesPage: FC = () => {
               variant="icon"
               onRefresh={() => void handleRefresh()}
               busy={toolbarBusy}
-              disabled={loading && captures.length === 0}
+              disabled={initialLoading && allReadings.length === 0}
               title="Refresh field test images"
             />
           </div>
@@ -289,7 +374,7 @@ const FieldTestImagesPage: FC = () => {
                     <span className="unit-test-images-filter-label">Cycle</span>
                     <select
                       className="unit-test-images-filter-select"
-                      value={cycleId}
+                      value={effectiveCycleId}
                       onChange={(e) => onCycleChange(e.target.value)}
                     >
                       {cycles.map((c) => (
@@ -435,18 +520,18 @@ const FieldTestImagesPage: FC = () => {
                     <button
                       key={id}
                       type="button"
-                      className={`readings-list-filter-chip${filters.datePreset === id ? ' active' : ''}`}
-                      onClick={() => setDatePreset(id)}
-                      aria-pressed={filters.datePreset === id}
+                      className={`readings-list-filter-chip${rangePreset === id ? ' active' : ''}`}
+                      onClick={() => applyRangePreset(id)}
+                      aria-pressed={rangePreset === id}
                     >
                       {formatPresetLabel(id)}
                     </button>
                   ))}
-                  {filters.datePreset !== 'all' ? (
+                  {rangePreset ? (
                     <button
                       type="button"
                       className="readings-list-filter-chip readings-list-filter-chip-muted"
-                      onClick={() => setFilters((p) => ({ ...p, datePreset: 'all' }))}
+                      onClick={clearDateRangeFilters}
                     >
                       Clear dates
                     </button>
@@ -458,21 +543,22 @@ const FieldTestImagesPage: FC = () => {
         </div>
       </header>
 
-      {loading && captures.length === 0 ? <ListViewLoading message="Loading field test images…" /> : null}
-      {fetching && captures.length > 0 ? (
-        <ListViewLoading variant="inline" message="Refreshing images…" />
+      {initialLoading && allReadings.length === 0 ? (
+        <ListViewLoading message="Loading field test images…" />
       ) : null}
       {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-      {!loading && !err && captures.length === 0 ? (
+      {!initialLoading && !err && filteredCaptures.length === 0 ? (
         <p className="unit-test-images-page-message pipeline-iterations-empty">
-          No field test images match your filters. New iOS field uploads appear here after Dynamo sync.
+          {allReadings.length === 0
+            ? 'No field test images yet. New iOS field uploads appear here after Dynamo sync.'
+            : 'No field test images match your filters. Try another date or clear filters.'}
         </p>
       ) : null}
 
-      {!loading && captures.length > 0 ? (
+      {!initialLoading && capturesWithUrls.length > 0 ? (
         <div className="unit-test-images-grid unit-test-images-page-grid">
-          {captures.map((cap, index) => {
+          {capturesWithUrls.map((cap, index) => {
             const downloading = downloadingKey === cap.sessionId;
             const fileName = fieldTestCaptureDisplayFileName(cap);
             const difficulty = cap.imageDifficulty || 'normal';
@@ -493,7 +579,9 @@ const FieldTestImagesPage: FC = () => {
                     />
                   </button>
                 ) : (
-                  <div className="unit-test-images-thumb unit-test-images-thumb--empty">No preview</div>
+                  <div className="unit-test-images-thumb unit-test-images-thumb--empty">
+                    {presigning ? 'Loading…' : 'No preview'}
+                  </div>
                 )}
                 <div className="unit-test-images-card-head">
                   <span className={difficultyBadgeClass(difficulty)}>
@@ -529,9 +617,9 @@ const FieldTestImagesPage: FC = () => {
       ) : null}
 
       {lightboxIndex != null &&
-      (captures[lightboxIndex]?.url || captures[lightboxIndex]?.fullMeterUrl) ? (
+      (capturesWithUrls[lightboxIndex]?.url || capturesWithUrls[lightboxIndex]?.fullMeterUrl) ? (
         <FieldTestCaptureLightbox
-          captures={captures}
+          captures={capturesWithUrls}
           index={lightboxIndex}
           workType={workType}
           onClose={() => setLightboxIndex(null)}

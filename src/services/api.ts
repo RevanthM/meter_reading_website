@@ -788,6 +788,23 @@ export async function fetchFieldTestCaptures(
   }
 }
 
+export async function presignFieldTestCaptureUrls(
+  sessions: Pick<FieldTestCaptureRow, 'sessionId' | 's3SessionPrefix' | 's3Bucket' | 'primaryImageKey'>[],
+): Promise<Record<string, string>> {
+  const response = await fetch(`${API_BASE_URL}/field-test/captures/presign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessions }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const err = parseJsonBody<{ error?: string }>(text, response.status);
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  const data = parseJsonBody<{ urls?: Record<string, string> }>(text, response.status);
+  return data.urls || {};
+}
+
 export type PipelineIterationWeightRole = 'dial_detection' | 'keypoint';
 
 export interface UploadPipelineIterationWeightsResponse {

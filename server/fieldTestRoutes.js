@@ -394,4 +394,44 @@ export function registerFieldTestRoutes(app, deps) {
       res.status(500).json({ error: e.message || 'Failed to list field test captures' });
     }
   });
+
+  /** Presign thumbnails for a client-filtered page (avoids full Dynamo reload on date chips). */
+  app.post('/api/field-test/captures/presign', async (req, res) => {
+    try {
+      const sessions = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
+      const capped = sessions.slice(0, 96);
+      const keyCache = new Map();
+      const urls = {};
+      const presignConcurrency = 24;
+      for (let i = 0; i < capped.length; i += presignConcurrency) {
+        const batch = capped.slice(i, i + presignConcurrency);
+        await Promise.all(
+          batch.map(async (item) => {
+            const sessionId = String(item?.sessionId || '').trim();
+            if (!sessionId) return;
+            try {
+              const reading = {
+                s3SessionPrefix: item.s3SessionPrefix,
+                primaryImageKey: item.primaryImageKey,
+                status: 'correct',
+              };
+              const bucket = item.s3Bucket || BUCKET_NAME;
+              const key = await resolvePrimaryListImageKey(reading, {
+                s3Client,
+                bucketName: bucket,
+                keyCache,
+              });
+              if (key) urls[sessionId] = await getPresignedUrl(key);
+            } catch {
+              /* skip broken row */
+            }
+          }),
+        );
+      }
+      res.json({ urls });
+    } catch (e) {
+      console.error('POST /api/field-test/captures/presign:', e);
+      res.status(500).json({ error: e.message || 'Failed to presign field test captures' });
+    }
+  });
 }

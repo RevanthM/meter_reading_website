@@ -1,5 +1,39 @@
-import type { FieldTestCycle, S3MeterReading } from '../services/api';
+import type { FieldTestCaptureRow, FieldTestCycle, ImageDifficulty, S3MeterReading } from '../services/api';
 import { calendarDayKeyInPortalTz } from './readingDisplayDates';
+
+/** Portal reading row → field test image grid row (no presigned URLs). */
+export function fieldTestCaptureFromReading(r: S3MeterReading): FieldTestCaptureRow {
+  const extended = r as S3MeterReading & {
+    primaryImageKey?: string;
+    onTickDialCount?: number | null;
+    readsCorrectedCount?: number;
+  };
+  const difficulty = String(r.imageDifficulty || 'normal').toLowerCase() as ImageDifficulty;
+  const finalReading =
+    String(r.expectedValue || r.meterValue || '')
+      .replace(/\D/g, '')
+      .padStart(4, '0')
+      .slice(-4) || null;
+  return {
+    sessionId: r.id,
+    s3SessionPrefix: r.s3SessionPrefix,
+    s3Bucket: r.bucket,
+    primaryImageKey: extended.primaryImageKey,
+    capturedAt: r.dateOfReading || r.createdAt || '',
+    capturedBy: r.userName || '',
+    finalReading,
+    predictedReading: r.meterValue || null,
+    imageDifficulty: difficulty,
+    onTickDialCount: extended.onTickDialCount ?? null,
+    readsCorrectedCount: extended.readsCorrectedCount ?? 0,
+    hadUserCorrection: r.hadUserCorrection === true,
+    dialCount: r.dialCount ?? 4,
+    confidence: r.confidence ?? null,
+    appVersion: r.appVersion || null,
+    captureTrigger: r.captureTrigger || null,
+    imageSource: r.imageSource || null,
+  };
+}
 
 /** Same rules as server `isFieldTestReading` in fieldTestRoutes.js */
 export function isFieldTestReading(r: S3MeterReading): boolean {

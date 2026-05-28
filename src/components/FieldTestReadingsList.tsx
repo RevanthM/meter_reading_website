@@ -103,6 +103,7 @@ const FieldTestReadingsList: FC = () => {
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [cyclesResolved, setCyclesResolved] = useState(false);
   const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
     query: '',
     difficulty: 'all',
@@ -150,6 +151,8 @@ const FieldTestReadingsList: FC = () => {
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load field test cycles');
       return null;
+    } finally {
+      setCyclesResolved(true);
     }
   }, [workType, cycleIdParam]);
 
@@ -159,10 +162,12 @@ const FieldTestReadingsList: FC = () => {
 
   const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
   const captureCycleKey = showCyclePicker ? effectiveCycleId : 'reviewer-all';
+  const captureReady = !showCyclePicker || cyclesResolved;
 
   const loadCaptures = useCallback(
     async (opts?: { refresh?: boolean }) => {
-      if (showCyclePicker && !effectiveCycleId) return;
+      if (!captureReady) return;
+      if (showCyclePicker && !effectiveCycleId && cycles.length > 0) return;
 
       setErr(null);
       try {
@@ -182,7 +187,7 @@ const FieldTestReadingsList: FC = () => {
         setInitialLoading(false);
       }
     },
-    [workType, showCyclePicker, captureCycleKey, effectiveCycleId],
+    [workType, showCyclePicker, captureCycleKey, effectiveCycleId, captureReady, cycles.length],
   );
 
   useEffect(() => {
