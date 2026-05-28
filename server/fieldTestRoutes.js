@@ -17,6 +17,11 @@ import {
 } from './fieldTestAnalytics.js';
 import { buildFieldTestCycleCsv, enrichFieldTestItemsFromMetadata } from './fieldTestCsv.js';
 import { buildFieldTestCityOptions, matchesFieldTestCityFilter } from './fieldTestLocation.js';
+import {
+  matchesFieldTestCaptureTriggerFilter,
+  normalizeFieldTestCaptureTrigger,
+} from './fieldTestCaptureTrigger.js';
+import { matchesFieldTestDatePreset } from './fieldTestDateFilter.js';
 import { deriveFieldTestFromMetadata, fieldTestCaptureToListItem } from './fieldTestDerive.js';
 import { sessionItemToReading } from './sessionIndex/metadataMapping.js';
 import { resolvePrimaryListImageKey } from './sessionIndex/index.js';
@@ -89,7 +94,9 @@ function matchesReadingFilters(reading, filters) {
     hadUserCorrection: reading.hadUserCorrection,
   };
   if (!matchesCaptureFilters(capture, filters)) return false;
-  return matchesFieldTestCityFilter(reading, filters.location);
+  if (!matchesFieldTestCityFilter(reading, filters.location)) return false;
+  if (!matchesFieldTestDatePreset(reading, filters.datePreset)) return false;
+  return matchesFieldTestCaptureTriggerFilter(reading, filters.captureTrigger);
 }
 
 /**
@@ -284,7 +291,10 @@ export function registerFieldTestRoutes(app, deps) {
         user: String(req.query.user || 'all'),
         corrected: String(req.query.corrected || 'all'),
         location: String(req.query.location || ''),
+        captureTrigger: String(req.query.captureTrigger || 'all'),
+        datePreset: String(req.query.datePreset || 'all'),
       };
+      const sortDir = String(req.query.sortDir || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
       let cycle = null;
       if (cycleId) {
@@ -296,23 +306,21 @@ export function registerFieldTestRoutes(app, deps) {
       const refreshList = req.query.refresh === '1' || req.query.refresh === 'true';
       let readings;
       let listCacheStatus = 'miss';
-      if (isReadingsFormat) {
-        const cached = await listReadingsCache.get(
-          workType,
-          async () => loadFieldReadingsForList(workType),
-          { force: refreshList },
-        );
-        readings = filterReadingsForCycle(cached.data, cycle);
-        listCacheStatus = cached.cacheStatus;
-      } else {
-        const items = filterSessionsForCycle(await loadFieldSessionItems(workType), cycle);
-        readings = items.map((item) => sessionItemToReading(item, { images: [] })).filter(Boolean);
-      }
+      const cached = await listReadingsCache.get(
+        workType,
+        async () => loadFieldReadingsForList(workType),
+        { force: refreshList },
+      );
+      readings = filterReadingsForCycle(cached.data, cycle);
+      listCacheStatus = cached.cacheStatus;
       const cities = buildFieldTestCityOptions(readings);
       let filteredReadings = readings.filter((r) => matchesReadingFilters(r, filters));
-      filteredReadings.sort((a, b) =>
-        String(b.dateOfReading || b.date || '').localeCompare(String(a.dateOfReading || a.date || '')),
-      );
+      filteredReadings.sort((a, b) => {
+        const cmp = String(b.dateOfReading || b.date || '').localeCompare(
+          String(a.dateOfReading || a.date || ''),
+        );
+        return sortDir === 'desc' ? cmp : -cmp;
+      });
 
       const total = filteredReadings.length;
       const start = (page - 1) * limit;
@@ -336,36 +344,41 @@ export function registerFieldTestRoutes(app, deps) {
         });
       }
 
-      let captures = filteredReadings.map(fieldTestCaptureToListItem);
-      const pageItems = captures.slice(start, start + limit);
+      let pageItems = pageReadings.map(fieldTestCaptureToListItem);
 
       if (req.query.presign === '1' || req.query.presign === 'true') {
         const keyCache = new Map();
-        await Promise.all(
-          pageItems.map(async (cap) => {
-            try {
-              const reading = {
-                s3SessionPrefix: cap.s3SessionPrefix,
-                primaryImageKey: cap.primaryImageKey,
-                status: 'correct',
-              };
-              const key = await resolvePrimaryListImageKey(reading, {
-                s3Client,
-                bucketName: BUCKET_NAME,
-                keyCache,
-              });
-              if (key) cap.url = await getPresignedUrl(key);
-            } catch {
-              cap.url = undefined;
-            }
-          }),
-        );
+        const presignConcurrency = 24;
+        for (let i = 0; i < pageItems.length; i += presignConcurrency) {
+          const batch = pageItems.slice(i, i + presignConcurrency);
+          await Promise.all(
+            batch.map(async (cap) => {
+              try {
+                const reading = {
+                  s3SessionPrefix: cap.s3SessionPrefix,
+                  primaryImageKey: cap.primaryImageKey,
+                  status: 'correct',
+                };
+                const bucket = cap.s3Bucket || BUCKET_NAME;
+                const key = await resolvePrimaryListImageKey(reading, {
+                  s3Client,
+                  bucketName: bucket,
+                  keyCache,
+                });
+                if (key) cap.url = await getPresignedUrl(key);
+              } catch {
+                cap.url = undefined;
+              }
+            }),
+          );
+        }
       }
 
       const users = [
-        ...new Set(captures.map((c) => (c.capturedBy || '').trim()).filter(Boolean)),
+        ...new Set(readings.map((r) => (r.userName || '').trim()).filter(Boolean)),
       ].sort();
 
+      setApiCacheHeaders(res, listCacheStatus, FIELD_TEST_CACHE_FRESH_MS);
       res.json({
         workType,
         cycle,

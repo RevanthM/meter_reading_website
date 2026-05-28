@@ -34,12 +34,12 @@ import {
   Clock,
   RotateCw,
   Loader2,
-  Maximize2,
   ChevronLeft,
   ChevronRight,
   UserCheck,
   Pencil,
   XCircle,
+  Maximize2,
 } from 'lucide-react';
 import {
   approveSessionForUnitTest,
@@ -50,6 +50,7 @@ import {
   type ReviewerDatasetDestination,
   type SessionMetadataPatch,
 } from '../services/api';
+import MeterPhotosLightbox, { type MeterPhotoSlide } from './MeterPhotosLightbox';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
 import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
@@ -74,16 +75,24 @@ function isDialCropImage(image: MeterImage): boolean {
   return typeof image.metadata.dialIndex === 'number';
 }
 
-function isFullMeterImage(image: MeterImage): boolean {
+function isGuidedCropImage(image: MeterImage): boolean {
   if (isDialCropImage(image)) return false;
   const fn = (image.fileName || '').toLowerCase();
-  if (fn.endsWith('original.jpg') || fn === 'original.jpg') return true;
-  if (/full\s*meter/i.test(image.label)) return true;
-  if (/^original/i.test(image.label.trim()) && !/dial/i.test(image.label)) return true;
+  if (fn === 'original.jpg') return true;
+  if (/guided/i.test(image.label)) return true;
+  return false;
+}
+
+function isFullMeterFrameImage(image: MeterImage): boolean {
+  if (isDialCropImage(image)) return false;
+  const fn = (image.fileName || '').toLowerCase();
+  if (fn === 'full_meter.jpg') return true;
+  if (/full\s*meter/i.test(image.label) && !/guided/i.test(image.label)) return true;
   return false;
 }
 
 function partitionMeterImages(images: MeterImage[]): {
+  guidedCrop: MeterImage | undefined;
   fullMeter: MeterImage | undefined;
   dialImages: MeterImage[];
   otherImages: MeterImage[];
@@ -92,16 +101,17 @@ function partitionMeterImages(images: MeterImage[]): {
     .filter(isDialCropImage)
     .sort((a, b) => (a.metadata.dialIndex ?? 0) - (b.metadata.dialIndex ?? 0));
 
-  const fullMeter =
-    images.find(isFullMeterImage) ?? images.find((img) => !isDialCropImage(img));
+  const guidedCrop = images.find(isGuidedCropImage);
+  const fullMeter = images.find(isFullMeterFrameImage);
 
   const claimed = new Set<string>([
+    ...(guidedCrop ? [guidedCrop.id] : []),
     ...(fullMeter ? [fullMeter.id] : []),
     ...dialImages.map((d) => d.id),
   ]);
   const otherImages = images.filter((img) => !claimed.has(img.id));
 
-  return { fullMeter, dialImages, otherImages };
+  return { guidedCrop, fullMeter, dialImages, otherImages };
 }
 
 type DialDetailRow = DialDetailFromMetadata;
@@ -569,6 +579,13 @@ const ReadingDetail: React.FC = () => {
 
   /** When true, dial edits do not overwrite "Correct reading" (user typed a different whole-meter value). */
   const [readingDetachedFromDials, setReadingDetachedFromDials] = useState(false);
+  const [meterPhotosOpen, setMeterPhotosOpen] = useState(false);
+  const [meterPhotoIndex, setMeterPhotoIndex] = useState(0);
+
+  useEffect(() => {
+    setMeterPhotosOpen(false);
+    setMeterPhotoIndex(0);
+  }, [reading?.id]);
 
   const [mlPrediction, setMlPrediction] = useState('');
   const [userCorrection, setUserCorrection] = useState('');
@@ -591,9 +608,37 @@ const ReadingDetail: React.FC = () => {
     () =>
       effectiveReading
         ? partitionMeterImages(effectiveReading.images)
-        : { fullMeter: undefined as MeterImage | undefined, dialImages: [] as MeterImage[], otherImages: [] as MeterImage[] },
+        : {
+            guidedCrop: undefined as MeterImage | undefined,
+            fullMeter: undefined as MeterImage | undefined,
+            dialImages: [] as MeterImage[],
+            otherImages: [] as MeterImage[],
+          },
     [effectiveReading],
   );
+
+  const { guidedCrop, fullMeter, dialImages, otherImages } = imagePartition;
+  const meterPhotoSlides = useMemo((): MeterPhotoSlide[] => {
+    const slides: MeterPhotoSlide[] = [];
+    if (guidedCrop) {
+      slides.push({ image: guidedCrop, kind: 'guided', label: 'Guided crop' });
+    }
+    if (fullMeter) {
+      slides.push({ image: fullMeter, kind: 'full', label: 'Full meter' });
+    }
+    return slides;
+  }, [guidedCrop, fullMeter]);
+  const hasMeterPhotos = meterPhotoSlides.length > 0;
+
+  const openMeterPhotos = useCallback(() => {
+    if (!meterPhotoSlides.length) return;
+    const guidedIndex = Math.max(
+      0,
+      meterPhotoSlides.findIndex((slide) => slide.kind === 'guided'),
+    );
+    setMeterPhotoIndex(guidedIndex);
+    setMeterPhotosOpen(true);
+  }, [meterPhotoSlides]);
 
   const handleImageActivate = useCallback((imageId: string) => {
     setSelectedImage((prev) => (prev === imageId ? null : imageId));
@@ -1160,7 +1205,6 @@ const ReadingDetail: React.FC = () => {
   // Check if we have extended S3 metadata
   const hasS3Metadata = reading.confidence !== undefined || reading.dialDetails !== undefined;
 
-  const { fullMeter, dialImages, otherImages } = imagePartition;
   const useDialStripLayout = dialImages.length > 0;
 
   return (
@@ -1257,26 +1301,28 @@ const ReadingDetail: React.FC = () => {
               <div className="images-section-head">
                 <h2>
                   <ImageIcon size={20} aria-hidden />
-                  {useDialStripLayout ? 'Dial crops' : 'Captured images'}{' '}
+                  {useDialStripLayout ? 'Dial crops' : 'Other images'}{' '}
                   <span className="images-section-count">
-                    ({useDialStripLayout ? dialImages.length : reading.images.length})
+                    ({useDialStripLayout ? dialImages.length : otherImages.length})
                   </span>
                 </h2>
-                {fullMeter ? (
+                {hasMeterPhotos ? (
                   <button
                     type="button"
                     className="full-meter-view-btn"
-                    onClick={() => handleImageActivate(fullMeter.id)}
-                    title="Open uncropped full-meter photo in the viewer"
+                    onClick={() => openMeterPhotos()}
+                    title="Open guided and full meter photos"
                   >
-                    <Maximize2 size={18} aria-hidden />
-                    <span>Full meter view</span>
+                    <Maximize2 size={16} aria-hidden />
+                    Full meter view
                   </button>
                 ) : null}
               </div>
-              {fullMeter ? (
+              {useDialStripLayout ? (
                 <p className="images-section-lead">
-                  Use <strong>Full meter view</strong> for the uncropped photo; the row below is per-dial model crops.
+                  {hasMeterPhotos
+                    ? 'Use Full meter view for the uncropped photo; the row below is per-dial model crops.'
+                    : 'Per-dial model crops from the guided capture frame.'}
                 </p>
               ) : null}
 
@@ -1304,9 +1350,9 @@ const ReadingDetail: React.FC = () => {
                     />
                   ))}
                 </div>
-              ) : (
+              ) : otherImages.length > 0 ? (
                 <div className="images-grid">
-                  {reading.images.map((image) => (
+                  {otherImages.map((image) => (
                     <ReadingDetailImageCard
                       key={image.id}
                       image={image}
@@ -1316,7 +1362,7 @@ const ReadingDetail: React.FC = () => {
                     />
                   ))}
                 </div>
-              )}
+              ) : null}
 
               {useDialStripLayout && otherImages.length > 0 ? (
                 <>
@@ -1993,6 +2039,16 @@ const ReadingDetail: React.FC = () => {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {meterPhotosOpen && hasMeterPhotos ? (
+        <MeterPhotosLightbox
+          slides={meterPhotoSlides}
+          index={meterPhotoIndex}
+          sessionId={reading.id}
+          onClose={() => setMeterPhotosOpen(false)}
+          onIndexChange={setMeterPhotoIndex}
+        />
       ) : null}
 
       {/* Lightbox */}

@@ -29,6 +29,7 @@ const LIST_READING_PROJECTION = [
   'work_type_name',
   'upload_mode',
   'image_source',
+  'capture_trigger',
   'user_name',
   'user_email',
   'feedback_type',

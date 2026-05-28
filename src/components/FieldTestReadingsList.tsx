@@ -5,7 +5,7 @@ import {
   useSearchParams,
   useLocation,
 } from 'react-router-dom';
-import { Calendar, ClipboardList, Eye, MapPin, Search, User, X } from 'lucide-react';
+import { Calendar, ClipboardList, Eye, MapPin, Search, User, X, ArrowDown, ArrowUp } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import {
@@ -22,9 +22,11 @@ import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
 import { getReadingListStatusDisplay } from '../types';
 import {
   UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
+  FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS,
   type FieldTestCaptureFilters,
   fieldTestFiltersActive,
 } from '../utils/fieldTestImageFilters';
@@ -35,7 +37,12 @@ const DEFAULT_FILTERS: FieldTestCaptureFilters = {
   user: 'all',
   corrected: 'all',
   location: 'all',
+  captureTrigger: 'all',
+  datePreset: 'all',
+  sortDir: 'desc',
 };
+
+const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
 const SEARCH_DEBOUNCE_MS = 350;
 
@@ -122,6 +129,9 @@ const FieldTestReadingsList: FC = () => {
           user: filters.user,
           corrected: filters.corrected,
           location: filters.location,
+          captureTrigger: filters.captureTrigger,
+          datePreset: filters.datePreset,
+          sortDir: filters.sortDir,
           refresh: opts?.refresh,
         })) as FieldTestReadingsListResponse;
 
@@ -145,6 +155,9 @@ const FieldTestReadingsList: FC = () => {
       filters.user,
       filters.corrected,
       filters.location,
+      filters.captureTrigger,
+      filters.datePreset,
+      filters.sortDir,
     ],
   );
 
@@ -168,6 +181,20 @@ const FieldTestReadingsList: FC = () => {
 
   const filtersActive = fieldTestFiltersActive(filters);
   const clearFilters = () => setFilters({ ...DEFAULT_FILTERS });
+
+  const toggleDateSort = () => {
+    setFilters((prev) => ({
+      ...prev,
+      sortDir: prev.sortDir === 'desc' ? 'asc' : 'desc',
+    }));
+  };
+
+  const setDatePreset = (preset: DateRangePresetId) => {
+    setFilters((prev) => ({
+      ...prev,
+      datePreset: prev.datePreset === preset ? 'all' : preset,
+    }));
+  };
 
   const countLabel = useMemo(() => {
     if (initialLoading && readings.length === 0) return 'Loading…';
@@ -203,6 +230,7 @@ const FieldTestReadingsList: FC = () => {
           </div>
 
           {!err ? (
+            <>
             <div
               className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
             >
@@ -254,6 +282,26 @@ const FieldTestReadingsList: FC = () => {
                   {cities.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.label} ({c.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="unit-test-images-filter-select-wrap">
+                <span className="unit-test-images-filter-label">Capture</span>
+                <select
+                  className="unit-test-images-filter-select"
+                  value={filters.captureTrigger}
+                  onChange={(e) =>
+                    setFilters((p) => ({
+                      ...p,
+                      captureTrigger: e.target.value as FieldTestCaptureFilters['captureTrigger'],
+                    }))
+                  }
+                  aria-label="Filter by capture type"
+                >
+                  {FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -315,6 +363,32 @@ const FieldTestReadingsList: FC = () => {
                 </button>
               ) : null}
             </div>
+            <div className="readings-list-filter-toolbar-row field-test-readings-date-row">
+              <span className="readings-list-filter-label">When captured</span>
+              <div className="readings-list-filter-chips">
+                {DATE_PRESET_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`readings-list-filter-chip${filters.datePreset === id ? ' active' : ''}`}
+                    onClick={() => setDatePreset(id)}
+                    aria-pressed={filters.datePreset === id}
+                  >
+                    {formatPresetLabel(id)}
+                  </button>
+                ))}
+                {filters.datePreset !== 'all' ? (
+                  <button
+                    type="button"
+                    className="readings-list-filter-chip readings-list-filter-chip-muted"
+                    onClick={() => setFilters((p) => ({ ...p, datePreset: 'all' }))}
+                  >
+                    Clear dates
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            </>
           ) : null}
         </div>
       </header>
@@ -342,7 +416,26 @@ const FieldTestReadingsList: FC = () => {
                   <th>Location</th>
                   <th>Difficulty</th>
                   <th>Outcome</th>
-                  <th>Date</th>
+                  <th scope="col" className="readings-th-sortable">
+                    <button
+                      type="button"
+                      className="readings-table-sort-th readings-table-sort-th--active"
+                      onClick={toggleDateSort}
+                      aria-pressed
+                      title={
+                        filters.sortDir === 'desc'
+                          ? 'Sorted by date (newest first); click for oldest first'
+                          : 'Sorted by date (oldest first); click for newest first'
+                      }
+                    >
+                      <span>Date</span>
+                      {filters.sortDir === 'desc' ? (
+                        <ArrowDown size={14} className="readings-table-sort-icon" aria-hidden />
+                      ) : (
+                        <ArrowUp size={14} className="readings-table-sort-icon" aria-hidden />
+                      )}
+                    </button>
+                  </th>
                   <th>Captured by</th>
                   <th className="readings-th-meter-value">Meter value</th>
                   <th>Actions</th>

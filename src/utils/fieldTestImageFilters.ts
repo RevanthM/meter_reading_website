@@ -1,11 +1,20 @@
 import type { FieldTestCaptureRow, ImageDifficulty, S3MeterReading } from '../services/api';
+import type { DateRangePresetId } from './dateRangePresets';
 import { matchesFieldTestCityFilter } from './fieldTestLocation';
+import {
+  matchesFieldTestCaptureTriggerFilter,
+  type FieldTestCaptureTriggerFilter,
+  FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS,
+} from './fieldTestCaptureTrigger';
 import {
   UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
   type UnitTestImageDifficultyFilter,
   matchesUnitTestImageDifficulty,
   matchesUnitTestImageQuery,
 } from './unitTestImageFilters';
+
+export type FieldTestDatePreset = 'all' | DateRangePresetId;
+export type FieldTestSortDir = 'asc' | 'desc';
 
 export type FieldTestCaptureFilters = {
   query: string;
@@ -14,9 +23,15 @@ export type FieldTestCaptureFilters = {
   corrected: 'all' | 'yes' | 'no';
   /** City group id from filterOptions.cities, or `all`. */
   location: string;
+  /** Auto / manual shutter / gallery (`capture_trigger` in metadata). */
+  captureTrigger: FieldTestCaptureTriggerFilter;
+  /** Pacific calendar preset for captured_at / dateOfReading. */
+  datePreset: FieldTestDatePreset;
+  /** Capture date sort order (default newest first). */
+  sortDir: FieldTestSortDir;
 };
 
-export { UNIT_TEST_DIFFICULTY_FILTER_OPTIONS };
+export { UNIT_TEST_DIFFICULTY_FILTER_OPTIONS, FIELD_TEST_CAPTURE_TRIGGER_FILTER_OPTIONS };
 
 export function filterFieldTestCaptures(
   captures: FieldTestCaptureRow[],
@@ -40,6 +55,7 @@ export function filterFieldTestCaptures(
     if (filters.user !== 'all' && (cap.capturedBy || '').trim() !== filters.user) return false;
     if (filters.corrected === 'yes' && !cap.hadUserCorrection) return false;
     if (filters.corrected === 'no' && cap.hadUserCorrection) return false;
+    if (!matchesFieldTestCaptureTriggerFilter(cap, filters.captureTrigger)) return false;
     return true;
   });
 }
@@ -69,6 +85,7 @@ export function filterFieldTestReadings(
     if (filters.corrected === 'yes' && !r.hadUserCorrection) return false;
     if (filters.corrected === 'no' && r.hadUserCorrection) return false;
     if (!matchesFieldTestCityFilter(r, filters.location)) return false;
+    if (!matchesFieldTestCaptureTriggerFilter(r, filters.captureTrigger)) return false;
     return true;
   });
 }
@@ -79,6 +96,9 @@ export function fieldTestFiltersActive(filters: FieldTestCaptureFilters): boolea
     filters.difficulty !== 'all' ||
     filters.user !== 'all' ||
     filters.corrected !== 'all' ||
+    filters.captureTrigger !== 'all' ||
+    filters.datePreset !== 'all' ||
+    filters.sortDir !== 'desc' ||
     (filters.location !== 'all' && filters.location.trim().length > 0)
   );
 }

@@ -1,6 +1,7 @@
 /**
  * Derive field-test analytics fields from iOS metadata.json (no separate manifest).
  */
+import { normalizeFieldTestCaptureTrigger } from './fieldTestCaptureTrigger.js';
 
 const ON_TICK_EPSILON = 0.2;
 
@@ -322,6 +323,7 @@ export function fieldTestCaptureToListItem(reading) {
   return {
     sessionId: reading.id,
     s3SessionPrefix: reading.s3SessionPrefix,
+    s3Bucket: reading.bucket,
     primaryImageKey: reading.primaryImageKey,
     capturedAt: reading.dateOfReading,
     capturedBy: reading.userName || '',
@@ -338,5 +340,7 @@ export function fieldTestCaptureToListItem(reading) {
     dialCount: reading.dialCount ?? 4,
     confidence: reading.confidence ?? null,
     appVersion: reading.appVersion || null,
+    captureTrigger: normalizeFieldTestCaptureTrigger(reading) || null,
+    imageSource: reading.imageSource || null,
   };
 }

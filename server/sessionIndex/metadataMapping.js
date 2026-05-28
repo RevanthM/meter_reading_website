@@ -49,6 +49,8 @@ export function metadataToSessionItem(metadata, ctx) {
     work_type_name: metadata.work_type_name != null ? String(metadata.work_type_name) : null,
     upload_mode: metadata.upload_mode != null ? String(metadata.upload_mode) : null,
     image_source: metadata.image_source != null ? String(metadata.image_source) : null,
+    capture_trigger:
+      metadata.capture_trigger != null ? String(metadata.capture_trigger).trim().toLowerCase() : null,
     user_name: metadata.user_name != null ? String(metadata.user_name) : null,
     user_email: metadata.user_email != null ? String(metadata.user_email) : null,
     feedback_type: metadata.feedback_type != null ? String(metadata.feedback_type) : null,
@@ -169,6 +171,7 @@ export function sessionItemToReading(item, { images = [] } = {}) {
   return {
     id: item.session_id,
     s3SessionPrefix: item.s3_session_prefix,
+    bucket: item.s3_bucket ?? undefined,
     dateOfReading: item.captured_at,
     location: formatCaptureLocationFromMetadata(metadata) || 'Location unavailable',
     captureLocation: normalizeCaptureLocation(metadata),
@@ -186,6 +189,7 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     conditionCode: item.condition_code ?? undefined,
     userName: item.user_name || item.user_email || '',
     imageSource: item.image_source || '',
+    captureTrigger: item.capture_trigger || '',
     uploadMode: item.upload_mode || '',
     feedbackType: item.feedback_type || '',
     appVersion: item.app_version != null ? String(item.app_version) : '',

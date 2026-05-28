@@ -57,6 +57,50 @@ export async function resolvePrimaryListImageKey(reading, { s3Client, bucketName
 }
 
 /**
+ * List guided + full-meter keys under a session prefix (cached per prefix).
+ * @returns {{ guidedKey: string|null, fullMeterKey: string|null }}
+ */
+export async function listSessionMeterImageKeys(reading, { s3Client, bucketName, sessionImagesCache } = {}) {
+  if (!reading?.s3SessionPrefix) return { guidedKey: null, fullMeterKey: null };
+
+  const prefix = reading.s3SessionPrefix.endsWith('/')
+    ? reading.s3SessionPrefix
+    : `${reading.s3SessionPrefix}/`;
+
+  if (sessionImagesCache?.has(prefix)) return sessionImagesCache.get(prefix);
+
+  let guidedKey = `${prefix}original.jpg`;
+  let fullMeterKey = null;
+
+  if (reading.primaryImageKey) {
+    const stored = String(reading.primaryImageKey);
+    guidedKey = stored.includes('/') ? stored : `${prefix}${stored}`;
+  }
+
+  if (s3Client && bucketName) {
+    try {
+      const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
+      const listed = await s3Client.send(
+        new ListObjectsV2Command({ Bucket: bucketName, Prefix: prefix, MaxKeys: 100 }),
+      );
+      for (const obj of listed.Contents || []) {
+        const key = obj.Key;
+        if (!key || !LIST_IMAGE_EXT.test(key.split('/').pop() || '')) continue;
+        const fn = (key.split('/').pop() || '').toLowerCase();
+        if (fn === 'original.jpg') guidedKey = key;
+        if (fn === 'full_meter.jpg') fullMeterKey = key;
+      }
+    } catch {
+      /* keep defaults */
+    }
+  }
+
+  const result = { guidedKey, fullMeterKey };
+  sessionImagesCache?.set(prefix, result);
+  return result;
+}
+
+/**
  * Attach presigned URL for list thumbnail (original.jpg or manual-upload file).
  * @param {object} reading
  * @param {(key: string) => Promise<string>} signKey

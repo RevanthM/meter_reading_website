@@ -105,6 +105,7 @@ export interface S3MeterReading extends MeterReading {
   conditionCode?: string;
   userName?: string;
   imageSource?: string;
+  captureTrigger?: string;
   uploadMode?: string;
   feedbackType?: string;
   /** Field / unit test: user changed dials or final reading on device. */
@@ -521,6 +522,7 @@ export interface FieldTestCyclesResponse {
 export interface FieldTestCaptureRow {
   sessionId: string;
   s3SessionPrefix?: string;
+  s3Bucket?: string;
   primaryImageKey?: string;
   capturedAt: string;
   capturedBy: string;
@@ -533,7 +535,12 @@ export interface FieldTestCaptureRow {
   dialCount: number;
   confidence: number | null;
   appVersion: string | null;
+  captureTrigger?: string | null;
+  imageSource?: string | null;
+  /** Presigned guided crop (original.jpg). */
   url?: string;
+  /** Presigned full-frame photo when available. */
+  fullMeterUrl?: string;
 }
 
 export interface FieldTestCapturesResponse {
@@ -739,6 +746,9 @@ export async function fetchFieldTestCaptures(
     user?: string;
     corrected?: string;
     location?: string;
+    captureTrigger?: string;
+    datePreset?: string;
+    sortDir?: 'asc' | 'desc';
     presign?: boolean;
     format?: 'captures' | 'readings';
     refresh?: boolean;
@@ -754,6 +764,13 @@ export async function fetchFieldTestCaptures(
   if (options?.user) q.set('user', options.user);
   if (options?.corrected) q.set('corrected', options.corrected);
   if (options?.location && options.location !== 'all') q.set('location', options.location);
+  if (options?.captureTrigger && options.captureTrigger !== 'all') {
+    q.set('captureTrigger', options.captureTrigger);
+  }
+  if (options?.datePreset && options.datePreset !== 'all') {
+    q.set('datePreset', options.datePreset);
+  }
+  if (options?.sortDir) q.set('sortDir', options.sortDir);
   if (options?.format === 'readings') q.set('format', 'readings');
   if (options?.presign) q.set('presign', '1');
   try {

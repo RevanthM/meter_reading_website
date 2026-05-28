@@ -952,7 +952,9 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       const fileName = file.Key.split('/').pop();
       let label = 'Image';
       if (fileName === 'original.jpg') {
-        label = 'Full Meter View';
+        label = 'Guided crop';
+      } else if (fileName === 'full_meter.jpg') {
+        label = 'Full meter';
       } else if (fileName.startsWith('dial_')) {
         const dialNum = fileName.match(/dial_(\d+)/)?.[1] || '?';
         label = `Dial ${dialNum}`;
@@ -973,8 +975,13 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
     });
     
     images.sort((a, b) => {
-      if (a.fileName === 'original.jpg') return -1;
-      if (b.fileName === 'original.jpg') return 1;
+      const rank = (fileName) => {
+        if (fileName === 'original.jpg') return 0;
+        if (fileName === 'full_meter.jpg') return 1;
+        return 2;
+      };
+      const diff = rank(a.fileName) - rank(b.fileName);
+      if (diff !== 0) return diff;
       return a.fileName.localeCompare(b.fileName);
     });
     
