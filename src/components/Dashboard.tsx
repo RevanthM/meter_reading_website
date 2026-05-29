@@ -30,6 +30,7 @@ import {
 } from '../utils/iterationMetricsEnrichment';
 import DashboardTrainingAnalyticsSection from './DashboardTrainingAnalyticsSection';
 import type { ChartPipelineFilter } from '../constants/pipelineChartTheme';
+import { PRODUCT_NAME } from '../constants/productBrand';
 
 const Dashboard: FC = () => {
   const {
@@ -156,7 +157,7 @@ const Dashboard: FC = () => {
             <div className="logo">
               <Gauge size={36} strokeWidth={1.5} />
               <div>
-                <h1>Meter Reading</h1>
+                <h1>{PRODUCT_NAME}</h1>
                 <p>{dashboardSubtitle}</p>
               </div>
             </div>

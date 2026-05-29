@@ -99,7 +99,7 @@ const DashboardTrainingAnalyticsSection: FC<Props> = ({
         .map((r) => `${r.pipeline.trim()} #${r.iterationNumber}`)
         .join(', ');
       await generateDashboardReportPdf({
-        title: 'AMR Model Training Report',
+        title: 'UtilityVision AI · Model Training Report',
         subtitle: labels ? `Iterations: ${labels}` : undefined,
         captureRoot: reportRootRef.current,
         filename: 'amr-model-training-report',

@@ -22,7 +22,7 @@ export function registerApiDocs(app) {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>AMR Portal API</title>
+  <title>UtilityVision AI API</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
 </head>
 <body>

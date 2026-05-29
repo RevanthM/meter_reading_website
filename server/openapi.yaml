@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: AMR Meter Reading Portal API
+  title: UtilityVision AI API
   description: |
-    REST API for the meter reading web portal and mobile app integrations.
+    REST API for UtilityVision AI and mobile app integrations.
 
     **Data store:** Amazon S3 bucket `meter-reader-training-feedback` (configurable via `AWS_S3_BUCKET`).
 

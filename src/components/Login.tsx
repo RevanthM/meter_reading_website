@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import LoginSplitArt from './LoginSplitArt';
+import { PRODUCT_TAGLINE } from '../constants/productBrand';
 import {
   anicaLogin,
   anicaRegister,
@@ -57,10 +58,10 @@ function LoginBrandMark() {
       </div>
       <div className="login-brand__text">
         <div className="login-brand__wordmark">
-          <span className="login-brand__meter">Analog Meter </span>
-          <span className="login-brand__reading">Reading</span>
+          <span className="login-brand__meter">UtilityVision </span>
+          <span className="login-brand__reading">AI</span>
         </div>
-        <p className="login-brand__tagline">Smart meter reading portal</p>
+        <p className="login-brand__tagline">{PRODUCT_TAGLINE}</p>
       </div>
     </div>
   );

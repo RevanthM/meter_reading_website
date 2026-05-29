@@ -279,7 +279,7 @@ export async function generateDashboardReportPdf(options: DashboardReportPdfOpti
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(9);
   pdf.setTextColor(100, 116, 139);
-  pdf.text('AMR Model Training · Unit-test eval metrics', margin, margin + 12);
+  pdf.text('UtilityVision AI · Unit-test eval metrics', margin, margin + 12);
   pdf.setTextColor(0, 0, 0);
 
   let headerY = margin + 18;

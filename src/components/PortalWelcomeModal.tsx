@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, Gauge, X } from 'lucide-react';
 import { statusLabels, type ReadingStatus } from '../types';
+import { PRODUCT_NAME } from '../constants/productBrand';
 
 const WELCOME_SESSION_KEY = 'meter_portal_welcome_dismissed_session';
 const WELCOME_NEVER_KEY = 'meter_portal_welcome_never_v1';
@@ -63,7 +64,7 @@ const PortalWelcomeModal: React.FC = () => {
           <div>
             <h1 id="portal-welcome-title">Welcome</h1>
             <p className="login-header-subtitle portal-welcome-subtitle">
-              Meter reading operations portal — quick orientation and status meanings.
+              {PRODUCT_NAME} — quick orientation and status meanings.
             </p>
           </div>
           <button

@@ -30,6 +30,7 @@ import {
   isPortalWorkMode,
   setStoredPortalWorkMode,
 } from '../utils/portalWorkMode';
+import { PRODUCT_NAME, PRODUCT_SIDEBAR_SUBTITLE } from '../constants/productBrand';
 import { statusLabels } from '../types';
 
 type NavLeaf = {
@@ -498,8 +499,8 @@ const PortalLayout: FC = () => {
               <Gauge size={21} strokeWidth={1.85} />
             </div>
             <div className="portal-sidebar-titles">
-              <span className="portal-sidebar-title">AMR Portal</span>
-              <span className="portal-sidebar-subtitle">Meter photos</span>
+              <span className="portal-sidebar-title">{PRODUCT_NAME}</span>
+              <span className="portal-sidebar-subtitle">{PRODUCT_SIDEBAR_SUBTITLE}</span>
             </div>
           </button>
         </div>
