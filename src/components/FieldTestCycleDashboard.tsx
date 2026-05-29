@@ -2,6 +2,7 @@ import { useMemo, type FC } from 'react';
 import type { FieldTestRollup, UnitTestRunDetailResponse } from '../services/api';
 import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
 import DialPctDonut from './DialPctDonut';
+import { useReadings } from '../context/ReadingsContext';
 import { resolveDialStats } from '../utils/unitTestCsvAnalytics';
 
 type Props = {
@@ -12,6 +13,7 @@ const ACCURACY_FILL = '#0d9488';
 const CONFIDENCE_FILL = '#3b82f6';
 
 const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
+  const { workType } = useReadings();
   const detail = useMemo((): UnitTestRunDetailResponse => {
     const summary = {
       ...rollup.summary,
@@ -106,7 +108,12 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
         </div>
       ) : null}
 
-      <DashboardUnitTestCsvCharts detail={detail} reportCapture />
+      <DashboardUnitTestCsvCharts
+        detail={detail}
+        reportCapture
+        confusionImageSource="field_test"
+        workType={workType}
+      />
     </div>
   );
 };

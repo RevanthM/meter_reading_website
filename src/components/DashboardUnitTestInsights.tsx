@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'reac
 import { Loader2 } from 'lucide-react';
 import type { PipelineIterationRecord, UnitTestRunDetailResponse } from '../services/api';
 import { fetchUnitTestRunDetail } from '../services/api';
+import { useReadings } from '../context/ReadingsContext';
 import { filterEvalChartRows } from '../constants/pipelineChartTheme';
 import { pickNewestLink } from '../utils/unitTestIterationLink';
 import { formatUnitTestSourceLabel } from '../utils/unitTestDisplayLabels';
@@ -27,6 +28,7 @@ const DashboardUnitTestInsights: FC<Props> = ({
   selectedIterationIds,
   confusionOnly = false,
 }) => {
+  const { workType } = useReadings();
   const evalRows = useMemo(() => filterEvalChartRows(rows), [rows]);
 
   const linkOptions = useMemo((): LinkOption[] => {
@@ -173,6 +175,8 @@ const DashboardUnitTestInsights: FC<Props> = ({
             perImageRows={detail.perImageRows}
             reportCapture
             reportSection="Current"
+            imageSource="unit_test"
+            workType={workType}
           />
         ) : null}
       </div>
@@ -220,7 +224,12 @@ const DashboardUnitTestInsights: FC<Props> = ({
       ) : error ? (
         <p className="pipeline-iterations-chart-card-placeholder">{error}</p>
       ) : detail ? (
-        <DashboardUnitTestCsvCharts detail={detail} reportCapture />
+        <DashboardUnitTestCsvCharts
+          detail={detail}
+          reportCapture
+          confusionImageSource="unit_test"
+          workType={workType}
+        />
       ) : null}
     </div>
   );

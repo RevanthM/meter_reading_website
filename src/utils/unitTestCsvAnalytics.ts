@@ -302,19 +302,21 @@ export function formatConfusionPct(share: number): string {
   return `${(share * 100).toFixed(0)}%`;
 }
 
-/** Ticks for the dual legend (0–100% of row). */
-export const CONFUSION_LEGEND_TICKS = [0, 20, 40, 60, 80, 100] as const;
+/** Ticks for the accuracy legend (95–100% recall on diagonal). */
+export const CONFUSION_LEGEND_TICKS = [95, 96, 97, 98, 99, 100] as const;
 
-/** Green: stronger = more of the row predicted correctly (diagonal). */
-const CORRECT_STOPS: Array<[number, [number, number, number]]> = [
-  [0, [248, 250, 252]],
-  [0.25, [220, 252, 231]],
-  [0.5, [134, 239, 172]],
-  [0.75, [34, 197, 94]],
+/** Misread legend ticks (share of row that landed in this off-diagonal cell). */
+export const CONFUSION_MISREAD_LEGEND_TICKS = [0, 20, 40, 60, 80, 100] as const;
+
+/** Diagonal recall scale: 95% = red, 100% = green (matches training analytics). */
+const RECALL_ACCURACY_STOPS: Array<[number, [number, number, number]]> = [
+  [0, [220, 38, 38]],
+  [0.35, [253, 230, 138]],
+  [0.65, [134, 239, 172]],
   [1, [21, 128, 61]],
 ];
 
-/** Amber → red: stronger = more of the row misread to this digit (off-diagonal). */
+/** Off-diagonal: light → deep red as misread share of row grows. */
 const MISREAD_STOPS: Array<[number, [number, number, number]]> = [
   [0, [248, 250, 252]],
   [0.2, [254, 243, 199]],
@@ -323,6 +325,8 @@ const MISREAD_STOPS: Array<[number, [number, number, number]]> = [
   [0.8, [234, 88, 12]],
   [1, [220, 38, 38]],
 ];
+
+const CONFUSION_RECALL_FLOOR_PCT = 95;
 
 function interpolateStops(
   t: number,
@@ -345,10 +349,16 @@ function interpolateStops(
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+/** Map row recall (0–1) to 95–100% accuracy color scale. */
+export function confusionRecallAccuracyFill(recallShare: number): string {
+  const pct = recallShare * 100;
+  const t = Math.max(0, Math.min(1, (pct - CONFUSION_RECALL_FLOOR_PCT) / (100 - CONFUSION_RECALL_FLOOR_PCT)));
+  return interpolateStops(t, RECALL_ACCURACY_STOPS, [21, 128, 61]);
+}
+
 /**
- * Standard row-normalized confusion matrix coloring:
- * diagonal = green (correct), off-diagonal = amber/red (misread).
- * Intensity = share of that ground-truth row (0–1).
+ * Row-normalized confusion matrix coloring:
+ * diagonal = 95% (red) → 100% (green) by recall; off-diagonal = amber/red by misread share.
  */
 export function confusionMatrixCellFill(
   count: number,
@@ -356,9 +366,8 @@ export function confusionMatrixCellFill(
   isCorrect: boolean,
 ): string {
   if (count <= 0) return '#f8fafc';
-  const stops = isCorrect ? CORRECT_STOPS : MISREAD_STOPS;
-  const fallback = isCorrect ? ([21, 128, 61] as const) : ([220, 38, 38] as const);
-  return interpolateStops(rowShare, stops, [...fallback]);
+  if (isCorrect) return confusionRecallAccuracyFill(rowShare);
+  return interpolateStops(rowShare, MISREAD_STOPS, [220, 38, 38]);
 }
 
 export function confusionMatrixCellText(
@@ -368,13 +377,46 @@ export function confusionMatrixCellText(
 ): string {
   if (count <= 0) return '#94a3b8';
   if (isCorrect) {
-    if (rowShare >= 0.75) return '#ffffff';
-    if (rowShare >= 0.4) return '#064e3b';
-    return '#0f172a';
+    const pct = rowShare * 100;
+    if (pct >= 99) return '#ffffff';
+    if (pct >= 97) return '#064e3b';
+    if (pct >= 95) return '#0f172a';
+    return '#ffffff';
   }
   if (rowShare >= 0.6) return '#ffffff';
   if (rowShare >= 0.35) return '#78350f';
   return '#0f172a';
+}
+
+export function perImageRowFileName(row: Record<string, string>): string {
+  const fromKey = (row.s3_key || '').split('/').pop() || '';
+  return (row.filename || row.image_file_name || fromKey).trim();
+}
+
+export function perImageRowSessionId(row: Record<string, string>): string {
+  return (row.session_id || '').trim();
+}
+
+/** Per-image rows that contributed to an off-diagonal confusion cell. */
+export function filterConfusionMisreadRows(
+  rows: Record<string, string>[],
+  expectedDigit: number,
+  predictedDigit: number,
+  dial: number | 'all',
+): Record<string, string>[] {
+  if (expectedDigit === predictedDigit) return [];
+  const dials = dial === 'all' ? ([1, 2, 3, 4] as const) : ([dial] as const);
+  return rows.filter((row) => {
+    for (const d of dials) {
+      const exp = parseDigit(row[`dial${d}_expected_digit`]);
+      if (exp !== expectedDigit) continue;
+      const pred = resolvePredictedDigit(row, d);
+      const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
+      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch);
+      if (col === predictedDigit) return true;
+    }
+    return false;
+  });
 }
 
 /** @deprecated Use confusionMatrixCellFill */

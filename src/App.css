@@ -13240,6 +13240,42 @@ label.training-hub-filter-card-title--input {
   font-weight: 400;
 }
 
+.dashboard-confusion-cell--clickable {
+  cursor: pointer;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.dashboard-confusion-cell--clickable:hover {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-amber, #2563eb) 55%, transparent);
+  transform: scale(1.02);
+}
+
+.dashboard-confusion-cell--clickable:focus-visible {
+  outline: 2px solid var(--accent-amber, #2563eb);
+  outline-offset: -2px;
+}
+
+.confusion-misread-lightbox-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.confusion-misread-lightbox-dismiss {
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
 .dashboard-confusion-legend {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));

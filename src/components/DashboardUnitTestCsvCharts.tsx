@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import type { TooltipProps } from 'recharts';
 import type { UnitTestRunDetailResponse } from '../services/api';
+import type { WorkType } from '../types';
 import {
   confidenceHistogramFromPerImageRows,
   resolveDialStats,
@@ -24,6 +25,7 @@ import {
   resolveRunPerformance,
 } from '../utils/unitTestCsvAnalytics';
 import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
+import type { ConfusionImageSource } from './ConfusionMisreadLightbox';
 
 const tooltipStyle = {
   backgroundColor: 'var(--bg-elevated, #fff)',
@@ -103,6 +105,8 @@ type Props = {
   detail: UnitTestRunDetailResponse;
   /** Per-chart PDF capture (confusion is captured on the Current tab). */
   reportCapture?: boolean;
+  confusionImageSource?: ConfusionImageSource;
+  workType?: WorkType;
 };
 
 const cardCapture = (enabled: boolean | undefined, label: string) =>
@@ -113,7 +117,12 @@ const cardCapture = (enabled: boolean | undefined, label: string) =>
       }
     : {};
 
-const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }) => {
+const DashboardUnitTestCsvCharts: FC<Props> = ({
+  detail,
+  reportCapture = false,
+  confusionImageSource,
+  workType,
+}) => {
   const runPerf = useMemo(() => resolveRunPerformance(detail), [detail]);
   const dialStats = useMemo(() => resolveDialStats(detail), [detail]);
   const difficultyTiers = useMemo(() => resolveDifficultyTiers(detail), [detail]);
@@ -442,7 +451,11 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({ detail, reportCapture = false }
       <section className="dashboard-unit-test-analytics-section">
         <h4 className="dashboard-unit-test-analytics-section-title">Detailed analysis</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--1">
-          <UnitTestConfusionHeatmap perImageRows={detail.perImageRows} />
+          <UnitTestConfusionHeatmap
+            perImageRows={detail.perImageRows}
+            imageSource={confusionImageSource}
+            workType={workType}
+          />
 
           <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Confidence distribution')}>
             <h5>Confidence distribution</h5>
