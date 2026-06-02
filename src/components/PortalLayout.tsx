@@ -22,7 +22,7 @@ import {
   ImageIcon,
   MapPin,
   ChevronDown,
-  Smartphone,
+  ScrollText,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import type { PortalOutletWorkContext, PortalWorkMode } from '../utils/portalWorkMode';
@@ -291,11 +291,11 @@ const PortalLayout: FC = () => {
           {
             kind: 'leaf',
             item: {
-              path: '/admin/sync-health',
-              label: 'Sync health',
-              description: 'Device upload audit',
-              hint: 'Reconcile iOS capture/upload events vs portal',
-              icon: <Smartphone size={17} strokeWidth={2} />,
+              path: '/admin/audit-logs',
+              label: 'Audit logs',
+              description: 'Device & admin events',
+              hint: 'Capture, upload, and portal audit trail',
+              icon: <ScrollText size={17} strokeWidth={2} />,
             },
           },
         ],

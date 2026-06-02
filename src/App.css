@@ -7431,15 +7431,15 @@ label.training-hub-filter-card-title--input {
 .mfa-page,
 .activity-page,
 .uploads-page,
-.sync-health-page {
+.audit-logs-page {
   min-height: 100vh;
 }
 
-.sync-health-content {
+.audit-logs-content {
   max-width: 1100px;
 }
 
-.sync-health-filters {
+.audit-logs-filters {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-md);
@@ -7447,7 +7447,7 @@ label.training-hub-filter-card-title--input {
   margin-bottom: var(--spacing-lg);
 }
 
-.sync-health-filters label {
+.audit-logs-filters label {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
@@ -7455,8 +7455,8 @@ label.training-hub-filter-card-title--input {
   color: var(--text-muted);
 }
 
-.sync-health-filters input[type='text'],
-.sync-health-filters input[type='date'] {
+.audit-logs-filters input[type='text'],
+.audit-logs-filters input[type='date'] {
   padding: var(--spacing-sm) var(--spacing-md);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -7465,7 +7465,7 @@ label.training-hub-filter-card-title--input {
   min-width: 10rem;
 }
 
-.sync-health-load-btn {
+.audit-logs-load-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-sm);
@@ -7477,12 +7477,12 @@ label.training-hub-filter-card-title--input {
   cursor: pointer;
 }
 
-.sync-health-load-btn:disabled {
+.audit-logs-load-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.sync-health-error {
+.audit-logs-error {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
@@ -7490,74 +7490,47 @@ label.training-hub-filter-card-title--input {
   margin-bottom: var(--spacing-md);
 }
 
-.sync-health-kpis {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--spacing-md);
+.audit-logs-stats {
+  font-size: 0.9rem;
+  color: var(--text-muted);
   margin-bottom: var(--spacing-lg);
 }
 
-.sync-health-kpi {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-  color: var(--text-muted);
-}
-
-.sync-health-kpi-value {
-  font-size: 1.5rem;
-  font-weight: 600;
+.audit-logs-stats strong {
   color: var(--text-primary);
+  font-weight: 600;
 }
 
-.sync-health-kpi-label {
-  font-size: 0.75rem;
-}
-
-.sync-health-kpi-gap .sync-health-kpi-value {
-  color: var(--accent-amber);
-}
-
-.sync-health-meta {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin-bottom: var(--spacing-lg);
-}
-
-.sync-health-section-title {
+.audit-logs-section-title {
   font-size: 0.95rem;
   margin: var(--spacing-lg) 0 var(--spacing-md);
   color: var(--text-primary);
 }
 
-.sync-health-table-wrap {
+.audit-logs-table-wrap {
   overflow-x: auto;
   margin-bottom: var(--spacing-xl);
 }
 
-.sync-health-table {
+.audit-logs-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
 
-.sync-health-table th,
-.sync-health-table td {
+.audit-logs-table th,
+.audit-logs-table td {
   padding: var(--spacing-sm) var(--spacing-md);
   border-bottom: 1px solid var(--border-color);
   text-align: left;
 }
 
-.sync-health-table th {
+.audit-logs-table th {
   color: var(--text-muted);
   font-weight: 500;
 }
 
-.sync-health-mono {
+.audit-logs-mono {
   font-family: ui-monospace, monospace;
   font-size: 0.75rem;
   max-width: 12rem;
@@ -7565,15 +7538,256 @@ label.training-hub-filter-card-title--input {
   text-overflow: ellipsis;
 }
 
-.sync-health-row-error {
+.audit-logs-row-error {
   color: #ef4444;
 }
 
-.sync-health-loading {
+.audit-logs-loading {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
   color: var(--text-muted);
+}
+
+.audit-logs-table--clickable tbody tr.audit-logs-row-clickable {
+  cursor: pointer;
+}
+
+.audit-logs-table--clickable tbody tr.audit-logs-row-clickable:hover {
+  background: var(--bg-elevated);
+}
+
+.audit-logs-status {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.audit-logs-status--ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.audit-logs-status--fail {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.audit-logs-status--pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+}
+
+/* Audit event timeline (Audit logs + Reading Detail) */
+.audit-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.audit-timeline-empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.audit-timeline-item {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.audit-timeline-item:last-child {
+  border-bottom: none;
+}
+
+.audit-timeline-summary {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto auto;
+  gap: var(--spacing-sm) var(--spacing-md);
+  align-items: center;
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-tertiary);
+  border: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.audit-timeline-summary:hover {
+  background: var(--bg-elevated);
+}
+
+.audit-timeline-chevron {
+  color: var(--text-muted);
+  display: flex;
+}
+
+.audit-timeline-time {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.audit-timeline-action {
+  font-weight: 500;
+}
+
+.audit-timeline-actor {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.audit-timeline-session,
+.audit-timeline-session-link {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.audit-timeline-session-link {
+  color: var(--accent-amber);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.audit-timeline-outcome {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.audit-timeline-outcome--ok {
+  color: #22c55e;
+}
+
+.audit-timeline-outcome--fail {
+  color: #ef4444;
+}
+
+.audit-timeline-outcome--neutral {
+  color: var(--text-muted);
+}
+
+.audit-timeline-details {
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.audit-timeline-dl {
+  margin: 0;
+  display: grid;
+  gap: var(--spacing-xs);
+}
+
+.audit-timeline-dl-row {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: var(--spacing-md);
+  font-size: 0.8rem;
+}
+
+.audit-timeline-dl-row dt {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.audit-timeline-dl-row dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  word-break: break-word;
+}
+
+.session-activity-section {
+  margin-top: var(--spacing-xl);
+  padding: var(--spacing-lg);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+
+.session-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+}
+
+.session-activity-head h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.session-activity-count {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.session-activity-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.session-activity-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.session-activity-lead {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--spacing-md);
+}
+
+.session-activity-error {
+  color: #ef4444;
+  font-size: 0.9rem;
+}
+
+.session-activity-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 720px) {
+  .audit-timeline-summary {
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+  }
+
+  .audit-timeline-action {
+    grid-column: 2 / -1;
+  }
+
+  .audit-timeline-actor {
+    grid-column: 2;
+  }
 }
 
 .mfa-content,

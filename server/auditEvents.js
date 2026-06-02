@@ -112,7 +112,41 @@ function actorMatches(event, userName) {
   const a = event?.actor || {};
   const name = String(a.userName || '').trim().toLowerCase();
   const email = String(a.email || '').trim().toLowerCase();
-  return name === needle || email === needle;
+  return name.includes(needle) || email.includes(needle) || name === needle || email === needle;
+}
+
+/** Parse YYYYMMDD from session ids like `1000_s_20260519_131647_E62A01A9`. */
+function sessionIdDayHint(sessionId) {
+  const m = String(sessionId || '').match(/_(\d{8})_/);
+  if (!m) return null;
+  const d = m[1];
+  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+}
+
+function defaultFromDay(toDay, lookbackDays = 60) {
+  const end = new Date(`${toDay}T12:00:00Z`);
+  if (Number.isNaN(end.getTime())) return toDay;
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - Math.max(0, lookbackDays - 1));
+  return start.toISOString().slice(0, 10);
+}
+
+function resolveAuditDayRange(opts = {}) {
+  const to = opts.to || calendarDayKeyInPortalTz(new Date().toISOString());
+  let from = opts.from || to;
+
+  if (opts.sessionId) {
+    const hint = sessionIdDayHint(opts.sessionId);
+    if (hint) {
+      from = hint;
+      return { from: hint, to: hint };
+    }
+    if (!opts.from && !opts.to) {
+      from = defaultFromDay(to, 90);
+    }
+  }
+
+  return { from, to };
 }
 
 /**
@@ -121,8 +155,7 @@ function actorMatches(event, userName) {
  * @param {{ from?: string, to?: string, userName?: string, sessionId?: string, action?: string, limit?: number }} opts
  */
 export async function listAuditEvents(s3Client, bucket, opts = {}) {
-  const to = opts.to || calendarDayKeyInPortalTz(new Date().toISOString());
-  const from = opts.from || to;
+  const { from, to } = resolveAuditDayRange(opts);
   const limit = Math.min(Math.max(parseInt(String(opts.limit || '500'), 10) || 500, 1), 2000);
   const days = daysBetween(from, to);
   const events = [];
@@ -179,17 +212,20 @@ export async function buildSyncSummary(s3Client, bucket, opts) {
   const events = await listAuditEvents(s3Client, bucket, {
     from,
     to,
-    userName,
+    userName: userName || undefined,
     limit: 5000,
   });
 
   const sessions = new Map();
+  const collectors = new Set();
 
   const touch = (sessionId, patch) => {
     const sid = sessionId || '_unknown_';
     const row = sessions.get(sid) || {
       sessionId: sessionId || null,
       imageSignature: null,
+      workType: null,
+      collector: null,
       queued: false,
       uploadStarted: false,
       uploadSucceeded: false,
@@ -205,8 +241,17 @@ export async function buildSyncSummary(s3Client, bucket, opts) {
   for (const e of events) {
     const sid = e?.target?.sessionId || null;
     const sig = e?.target?.imageSignature || null;
+    const wt = e?.target?.workType || null;
+    const collector = e?.actor?.userName || e?.actor?.email || null;
+    if (collector) collectors.add(collector);
     const action = String(e?.action || '');
-    const base = { lastAction: action, lastTs: e.ts, imageSignature: sig || undefined };
+    const base = {
+      lastAction: action,
+      lastTs: e.ts,
+      imageSignature: sig || undefined,
+      workType: wt || undefined,
+      collector: collector || undefined,
+    };
     if (action === 'capture.queued') {
       touch(sid, { ...base, queued: true, feedbackType: e.detail?.feedbackType ?? null });
     } else if (action === 'upload.started') {
@@ -244,7 +289,8 @@ export async function buildSyncSummary(s3Client, bucket, opts) {
   const lastBatch = batchEvents[0] || null;
 
   return {
-    userName,
+    userName: userName || null,
+    collectorCount: collectors.size,
     from,
     to,
     eventCount: events.length,
@@ -308,30 +354,30 @@ export function registerAuditEventRoutes(app, deps) {
     }
   });
 
-  app.get('/api/audit-events/sync-summary', async (req, res) => {
+  const auditSummaryHandler = async (req, res) => {
     try {
       if (requireAdmin && !requireAdmin(req)) {
         return res.status(403).json({ error: 'Admin access required' });
       }
       const userName = String(req.query.userName || '').trim();
-      if (!userName) {
-        return res.status(400).json({ error: 'userName query is required' });
-      }
       const from =
         String(req.query.from || '').trim() ||
         calendarDayKeyInPortalTz(new Date().toISOString());
       const to = String(req.query.to || '').trim() || from;
 
       const summary = await buildSyncSummary(s3Client, bucket, {
-        userName,
+        userName: userName || undefined,
         from,
         to,
         getPortalSessions: getPortalSessionsForUser,
       });
       res.json(summary);
     } catch (e) {
-      console.error('GET /api/audit-events/sync-summary:', e);
-      res.status(500).json({ error: e.message || 'Failed to build sync summary' });
+      console.error('GET /api/audit-events/summary:', e);
+      res.status(500).json({ error: e.message || 'Failed to build audit summary' });
     }
-  });
+  };
+
+  app.get('/api/audit-events/summary', auditSummaryHandler);
+  app.get('/api/audit-events/sync-summary', auditSummaryHandler);
 }

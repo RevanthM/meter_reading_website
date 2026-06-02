@@ -2029,11 +2029,14 @@ export type AuditEventRecord = {
   detail: Record<string, unknown>;
   outcome: string;
   error: string | null;
+  client?: { platform?: string; appVersion?: string };
 };
 
-export type AuditSyncSessionRow = {
+export type AuditSessionRow = {
   sessionId: string | null;
   imageSignature: string | null;
+  workType: string | null;
+  collector: string | null;
   queued: boolean;
   uploadStarted: boolean;
   uploadSucceeded: boolean;
@@ -2044,8 +2047,9 @@ export type AuditSyncSessionRow = {
   feedbackType: string | null;
 };
 
-export type AuditSyncSummary = {
-  userName: string;
+export type AuditLogSummary = {
+  userName: string | null;
+  collectorCount: number;
   from: string;
   to: string;
   eventCount: number;
@@ -2058,8 +2062,13 @@ export type AuditSyncSummary = {
   portalSessionsInRange: number;
   gapVsPortal: number;
   lastBatch: { ts: string; uploaded: string | number | null; failed: string | number | null } | null;
-  sessions: AuditSyncSessionRow[];
+  sessions: AuditSessionRow[];
 };
+
+/** @deprecated Use AuditSessionRow */
+export type AuditSyncSessionRow = AuditSessionRow;
+/** @deprecated Use AuditLogSummary */
+export type AuditSyncSummary = AuditLogSummary;
 
 export async function fetchAuditEvents(
   params: {
@@ -2089,14 +2098,16 @@ export async function fetchAuditEvents(
   return parseJsonBody(text, response.status);
 }
 
-export async function fetchAuditSyncSummary(
-  userName: string,
+export async function fetchAuditLogSummary(
   from: string,
   to: string,
   portalWorkMode: PortalWorkMode = 'admin',
-): Promise<AuditSyncSummary> {
-  const q = new URLSearchParams({ userName, from, to });
-  const response = await fetch(`${API_BASE_URL}/audit-events/sync-summary?${q}`, {
+  userName?: string,
+): Promise<AuditLogSummary> {
+  const q = new URLSearchParams({ from, to });
+  const trimmed = userName?.trim();
+  if (trimmed) q.set('userName', trimmed);
+  const response = await fetch(`${API_BASE_URL}/audit-events/summary?${q}`, {
     headers: { 'x-portal-work-mode': portalWorkMode },
   });
   const text = await response.text();
@@ -2105,6 +2116,9 @@ export async function fetchAuditSyncSummary(
   }
   return parseJsonBody(text, response.status);
 }
+
+/** @deprecated Use fetchAuditLogSummary */
+export const fetchAuditSyncSummary = fetchAuditLogSummary;
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {
   try {

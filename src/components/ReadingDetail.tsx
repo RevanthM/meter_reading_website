@@ -52,6 +52,7 @@ import {
   type SessionMetadataPatch,
 } from '../services/api';
 import MeterPhotosLightbox, { type MeterPhotoSlide } from './MeterPhotosLightbox';
+import SessionActivitySection from './SessionActivitySection';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { formatReadingShortDate } from '../utils/readingDisplayDates';
 import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
@@ -530,6 +531,7 @@ const ReadingDetail: React.FC = () => {
   const { userEmail } = useAuth();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
+  const isAdminMode = portalWorkMode === 'admin';
   const isLabelerMode = portalWorkMode === 'labeler';
   const isReviewerSaveMode = portalWorkMode === 'reviewer' || portalWorkMode === 'admin';
   const isTestDataReviewerMode = portalWorkMode === 'test_data_reviewer';
@@ -1449,6 +1451,10 @@ const ReadingDetail: React.FC = () => {
                 ) : null}
               </section>
             )}
+
+            {isAdminMode ? (
+              <SessionActivitySection sessionId={reading.id} portalWorkMode={portalWorkMode} />
+            ) : null}
           </div>
 
           <aside className="reading-detail-sidebar" aria-label="Labeling and session details">
