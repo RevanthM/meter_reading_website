@@ -2,6 +2,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import type { ReportSummaryRow } from './pipelineAnalyticsStory';
 import { prepareHtml2CanvasClone } from './html2canvasExportFix';
+import { formatPortalAccuracyConfidencePct } from './portalMetricFormat';
 
 export type DashboardReportPdfOptions = {
   title: string;
@@ -41,7 +42,7 @@ export async function waitForReportDomReady(root?: HTMLElement | null): Promise<
 
 function fmtCell(v: number | null | undefined, pct = false): string {
   if (v == null || !Number.isFinite(v)) return '—';
-  return pct ? `${v.toFixed(1)}%` : String(v);
+  return pct ? formatPortalAccuracyConfidencePct(v) : String(v);
 }
 
 /** Leaf capture nodes only — skip elements nested inside another capture target. */

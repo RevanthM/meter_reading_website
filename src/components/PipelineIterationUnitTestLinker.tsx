@@ -11,6 +11,7 @@ import {
   unitTestSummaryToLinkMeta,
 } from '../utils/unitTestIterationLink';
 import { formatUnitTestResultsSummary } from '../utils/unitTestDisplayLabels';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 type Props = {
   workType: WorkType;
@@ -31,8 +32,7 @@ function fmtWhen(iso: string | null | undefined): string {
 }
 
 function fmtPct(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return '—';
-  return `${n.toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePct(n);
 }
 
 const PipelineIterationUnitTestLinker: FC<Props> = ({

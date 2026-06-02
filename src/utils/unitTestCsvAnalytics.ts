@@ -4,6 +4,9 @@ import type {
   UnitTestRunDetailResponse,
 } from '../services/api';
 import { difficultyToCode } from './unitTestImageNaming';
+import { roundPortalAccuracyConfidencePct, confidencePctFromRaw, normalizeConfidencePct } from './portalMetricFormat';
+
+export { normalizeConfidencePct } from './portalMetricFormat';
 
 export type RunPerformance = {
   accuracyPct: number | null;
@@ -95,10 +98,12 @@ export function difficultyStatsFromPerImageRows(
       withGroundTruth: b.withGroundTruth,
       correct: b.correct,
       accuracyPct:
-        b.withGroundTruth > 0 ? Math.round((1000 * b.correct) / b.withGroundTruth) / 10 : null,
+        b.withGroundTruth > 0
+          ? roundPortalAccuracyConfidencePct((100 * b.correct) / b.withGroundTruth)
+          : null,
       confidencePct:
         b.confs.length > 0
-          ? Math.round((b.confs.reduce((a, c) => a + c, 0) / b.confs.length) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(b.confs.reduce((a, c) => a + c, 0) / b.confs.length)
           : null,
     };
   }).filter((t) => t.imageCount > 0);
@@ -153,16 +158,29 @@ export function resolvePredictedDigit(row: Record<string, string>, dial: number)
   return null;
 }
 
+export type ConfusionMatrixOptions = {
+  /**
+   * Field test: always use the model’s predicted digit (strict equality vs true digit).
+   * No dial-4 bill-lower forgiveness and no forcing non-flagged dials onto the diagonal.
+   */
+  strictModelPrediction?: boolean;
+};
+
 /**
  * Column index for confusion matrix.
- * Trust iOS digit_match when present; correct reads always land on the diagonal.
+ * Unit test: trust iOS digit_match when present; dial 4 may use bill-lower tolerance.
+ * Field test (`strictModelPrediction`): raw ML prediction only.
  */
 export function confusionMatrixPredictedCol(
   expected: number,
   predicted: number | null,
   dialNumber: number,
   digitMatch: boolean | null,
+  options?: ConfusionMatrixOptions,
 ): number | null {
+  if (options?.strictModelPrediction) {
+    return predicted != null ? predicted : null;
+  }
   if (digitMatch === true) return expected;
   if (digitMatch === false) {
     if (predicted != null) return predicted;
@@ -174,14 +192,6 @@ export function confusionMatrixPredictedCol(
   return null;
 }
 
-export function normalizeConfidencePct(raw: string | number | null | undefined): number | null {
-  if (raw == null || raw === '') return null;
-  const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-  if (!Number.isFinite(n)) return null;
-  const pct = n <= 1 && n >= 0 ? n * 100 : n;
-  return Math.round(pct * 10) / 10;
-}
-
 /** Per-dial accuracy & confidence from CSV summary block (PER_DIAL_BREAKDOWN). */
 export function dialStatsFromCsvSummary(summary: UnitTestCsvSummary): UnitTestDialStats[] {
   const out: UnitTestDialStats[] = [];
@@ -190,11 +200,11 @@ export function dialStatsFromCsvSummary(summary: UnitTestCsvSummary): UnitTestDi
     const correct = parseInt(String(summary[`dial${d}_correct`] ?? ''), 10) || 0;
     const accRaw = summary[`dial${d}_accuracy_percent`];
     let accuracyPct: number | null = null;
-    if (accRaw != null && accRaw !== '') {
+    if (withGroundTruth > 0) {
+      accuracyPct = roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth);
+    } else if (accRaw != null && accRaw !== '') {
       const v = parseFloat(String(accRaw));
-      if (Number.isFinite(v)) accuracyPct = Math.round(v * 10) / 10;
-    } else if (withGroundTruth > 0) {
-      accuracyPct = Math.round((1000 * correct) / withGroundTruth) / 10;
+      if (Number.isFinite(v)) accuracyPct = roundPortalAccuracyConfidencePct(v);
     }
     out.push({
       dial: d,
@@ -203,6 +213,17 @@ export function dialStatsFromCsvSummary(summary: UnitTestCsvSummary): UnitTestDi
       accuracyPct,
       confidencePct: normalizeConfidencePct(summary[`dial${d}_average_confidence`]),
     });
+  }
+  return out;
+}
+
+export function incorrectDialSetFromRow(row: Record<string, string>): Set<number> {
+  const raw = String(row.incorrect_dial_numbers ?? '').trim();
+  if (!raw) return new Set();
+  const out = new Set<number>();
+  for (const part of raw.split(/[,;]+/)) {
+    const n = parseInt(part.trim(), 10);
+    if (Number.isInteger(n) && n >= 1 && n <= 4) out.add(n);
   }
   return out;
 }
@@ -217,19 +238,26 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
     for (const row of rows) {
       const exp = parseDigit(row[`dial${d}_expected_digit`]);
       if (exp == null) continue;
-      const pred = resolvePredictedDigit(row, d);
-      const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
       withGroundTruth += 1;
-      if (digitMatch === true) {
-        correct += 1;
-      } else if (
-        digitMatch !== false &&
-        pred != null &&
-        dialDigitMatches(exp, pred, d)
-      ) {
-        correct += 1;
+      const incorrectDials = incorrectDialSetFromRow(row);
+      if (incorrectDials.has(d)) {
+        /* reviewer-flagged model miss */
+      } else {
+        const pred = resolvePredictedDigit(row, d);
+        const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
+        if (digitMatch === true) {
+          correct += 1;
+        } else if (
+          digitMatch !== false &&
+          pred != null &&
+          dialDigitMatches(exp, pred, d)
+        ) {
+          correct += 1;
+        } else if (parseReadingMatch(row.overall_reading_match) === true) {
+          correct += 1;
+        }
       }
-      const conf = normalizeConfidencePct(
+      const conf = confidencePctFromRaw(
         row[`dial${d}_composite_confidence`] ??
           row[`dial${d}_stage2_kp_model_confidence`] ??
           row[`dial${d}_confidence`] ??
@@ -242,10 +270,12 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
       withGroundTruth,
       correct,
       accuracyPct:
-        withGroundTruth > 0 ? Math.round((1000 * correct) / withGroundTruth) / 10 : null,
+        withGroundTruth > 0
+          ? roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth)
+          : null,
       confidencePct:
         confs.length > 0
-          ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(confs.reduce((a, b) => a + b, 0) / confs.length)
           : null,
     });
   }
@@ -256,6 +286,7 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
 export function buildDigitConfusionMatrix(
   rows: Record<string, string>[],
   dial: number | 'all',
+  options?: ConfusionMatrixOptions,
 ): DigitConfusionMatrix {
   const matrix = Array.from({ length: 10 }, () => Array(10).fill(0));
   let total = 0;
@@ -267,7 +298,7 @@ export function buildDigitConfusionMatrix(
       if (exp == null) continue;
       const pred = resolvePredictedDigit(row, d);
       const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
-      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch);
+      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch, options);
       if (col == null) continue;
       matrix[exp][col] += 1;
       total += 1;
@@ -403,6 +434,7 @@ export function filterConfusionMisreadRows(
   expectedDigit: number,
   predictedDigit: number,
   dial: number | 'all',
+  options?: ConfusionMatrixOptions,
 ): Record<string, string>[] {
   if (expectedDigit === predictedDigit) return [];
   const dials = dial === 'all' ? ([1, 2, 3, 4] as const) : ([dial] as const);
@@ -412,7 +444,7 @@ export function filterConfusionMisreadRows(
       if (exp !== expectedDigit) continue;
       const pred = resolvePredictedDigit(row, d);
       const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
-      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch);
+      const col = confusionMatrixPredictedCol(exp, pred, d, digitMatch, options);
       if (col === predictedDigit) return true;
     }
     return false;
@@ -489,10 +521,10 @@ export function runPerformanceFromSummary(summary: UnitTestCsvSummary): RunPerfo
       : null;
   if (accuracyPct == null && summary.accuracy_percent != null && summary.accuracy_percent !== '') {
     const v = parseFloat(String(summary.accuracy_percent));
-    if (Number.isFinite(v)) accuracyPct = Math.round(v * 100) / 100;
+    if (Number.isFinite(v)) accuracyPct = roundPortalAccuracyConfidencePct(v);
   }
   if (accuracyPct == null && withGroundTruth > 0) {
-    accuracyPct = Math.round((10000 * correct) / withGroundTruth) / 100;
+    accuracyPct = roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth);
   }
   const incorrect = Math.max(0, withGroundTruth - correct);
   return { accuracyPct, withGroundTruth, correct, incorrect };
@@ -513,7 +545,9 @@ export function runPerformanceFromPerImageRows(rows: Record<string, string>[]): 
   }
   const incorrect = Math.max(0, withGroundTruth - correct);
   const accuracyPct =
-    withGroundTruth > 0 ? Math.round((10000 * correct) / withGroundTruth) / 100 : null;
+    withGroundTruth > 0
+      ? roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth)
+      : null;
   return { accuracyPct, withGroundTruth, correct, incorrect };
 }
 
@@ -525,10 +559,11 @@ export function resolveRunPerformance(detail: UnitTestRunDetailResponse): RunPer
 }
 
 export function resolveDialStats(detail: UnitTestRunDetailResponse): UnitTestDialStats[] {
-  const fromSummary = dialStatsFromCsvSummary(detail.summary);
-  if (fromSummary.some((d) => d.withGroundTruth > 0)) return fromSummary;
-  if (detail.perImageRows?.length) return dialStatsFromPerImageRows(detail.perImageRows);
-  return fromSummary;
+  if (detail.perImageRows?.length) {
+    const fromRows = dialStatsFromPerImageRows(detail.perImageRows);
+    if (fromRows.some((d) => d.withGroundTruth > 0)) return fromRows;
+  }
+  return dialStatsFromCsvSummary(detail.summary);
 }
 
 export function resolveDifficultyTiers(detail: UnitTestRunDetailResponse): UnitTestImageDifficultyTierStats[] {

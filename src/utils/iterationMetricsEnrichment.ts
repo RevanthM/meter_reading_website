@@ -8,6 +8,7 @@ import {
   simReadGapPct,
 } from '../constants/pipelineChartTheme';
 import { normalizeManualMetricPct } from './metricNumbers';
+import { roundPortalAccuracyConfidencePct } from './portalMetricFormat';
 
 function mean(nums: number[]): number | null {
   if (!nums.length) return null;
@@ -98,7 +99,7 @@ function scaleDialPatch(
   kind: 'ut' | 'ft',
 ): Partial<PipelineIterationManualMetrics> {
   const scale = (v: number | null | undefined) =>
-    v != null && Number.isFinite(v) ? Math.round(v * factor * 100) / 100 : null;
+    v != null && Number.isFinite(v) ? roundPortalAccuracyConfidencePct(v * factor) : null;
   if (kind === 'ut') {
     return {
       readAccuracyUt: scale(source.readAccuracyUt),
@@ -143,7 +144,7 @@ export function enrichIterationManualMetrics(
     Object.assign(base, scaleDialPatch(refUt.manualMetrics, utFactor, 'ut'));
     if (base.readAccuracyUt == null) {
       const avg = avgUtDialAccuracyPct(base);
-      if (avg != null) base.readAccuracyUt = Math.round(avg * 100) / 100;
+      if (avg != null) base.readAccuracyUt = roundPortalAccuracyConfidencePct(avg);
     }
   }
 
@@ -151,15 +152,15 @@ export function enrichIterationManualMetrics(
     Object.assign(base, scaleDialPatch(refFt.manualMetrics, ftFactor, 'ft'));
     if (base.readAccuracyFtRow == null) {
       const avg = avgFtDialAccuracyPct(base);
-      if (avg != null) base.readAccuracyFtRow = Math.round(avg * 100) / 100;
+      if (avg != null) base.readAccuracyFtRow = roundPortalAccuracyConfidencePct(avg);
     }
   }
 
   if (base.exactReadingAccuracyPct == null || !Number.isFinite(base.exactReadingAccuracyPct)) {
     const ut = base.readAccuracyUt ?? avgUtDialAccuracyPct(base);
     const sim = avgSimDialConfidencePct(base);
-    if (ut != null) base.exactReadingAccuracyPct = Math.round(ut * 0.98 * 100) / 100;
-    else if (sim != null) base.exactReadingAccuracyPct = Math.round(sim * 0.9 * 100) / 100;
+    if (ut != null) base.exactReadingAccuracyPct = roundPortalAccuracyConfidencePct(ut * 0.98);
+    else if (sim != null) base.exactReadingAccuracyPct = roundPortalAccuracyConfidencePct(sim * 0.9);
   }
 
   return base;

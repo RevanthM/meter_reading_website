@@ -13,6 +13,7 @@ import {
   type LatestDialAppMetric,
 } from '../constants/pipelineChartTheme';
 import { formatUnitTestResultsSummary } from './unitTestDisplayLabels';
+import { roundPortalAccuracyConfidencePct } from './portalMetricFormat';
 
 export type MetricDelta = {
   value: number | null;
@@ -150,11 +151,11 @@ function buildMetricDelta(
 
   const delta =
     latest.v != null && prev?.v != null
-      ? Math.round((latest.v - prev.v) * 10) / 10
+      ? roundPortalAccuracyConfidencePct(latest.v - prev.v)
       : null;
   const deltaVsFirst =
     latest.v != null && first.v != null
-      ? Math.round((latest.v - first.v) * 10) / 10
+      ? roundPortalAccuracyConfidencePct(latest.v - first.v)
       : null;
 
   return {
@@ -450,13 +451,13 @@ export function buildLineTrendSummaries(
       previousValue: prev?.value ?? null,
       deltaVsPrevious:
         latest.value != null && prev?.value != null
-          ? Math.round((latest.value - prev.value) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(latest.value - prev.value)
           : null,
       firstIteration: first.iteration,
       firstValue: first.value,
       deltaVsFirst:
         latest.value != null && first.value != null
-          ? Math.round((latest.value - first.value) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(latest.value - first.value)
           : null,
     });
   }
@@ -533,9 +534,9 @@ export function buildReportIterationDetails(
       outcome: row?.outcome?.trim() || null,
       linkedCsvName: row ? linkedResultsLabel(row) : null,
       accuracyDelta:
-        acc != null && prevAcc != null ? Math.round((acc - prevAcc) * 10) / 10 : null,
+        acc != null && prevAcc != null ? roundPortalAccuracyConfidencePct(acc - prevAcc) : null,
       confidenceDelta:
-        conf != null && prevConf != null ? Math.round((conf - prevConf) * 10) / 10 : null,
+        conf != null && prevConf != null ? roundPortalAccuracyConfidencePct(conf - prevConf) : null,
     };
   });
 }
@@ -545,9 +546,9 @@ export function formatDeltaPp(delta: number | null | undefined, unit = 'pp'): st
   if (delta == null || !Number.isFinite(delta)) return '—';
   const sign = delta > 0 ? '+' : '';
   if (unit === '') {
-    return `${sign}${Math.abs(delta) >= 100 ? delta.toLocaleString() : delta.toFixed(1)}`;
+    return `${sign}${Math.abs(delta) >= 100 ? delta.toLocaleString() : delta.toFixed(3)}`;
   }
-  return `${sign}${delta.toFixed(1)} ${unit}`;
+  return `${sign}${delta.toFixed(3)} ${unit}`;
 }
 
 export function deltaTone(delta: number | null | undefined): 'up' | 'down' | 'flat' | 'none' {

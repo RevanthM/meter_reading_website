@@ -17,6 +17,7 @@ import {
 } from '../types';
 import { buildTargetSessionPrefixFromSource } from '../utils/s3SessionPrefix';
 import { concatDialDigitsFromRows, reconcileDialRowsForReading } from '../utils/dialDetails';
+import { formatPortalAccuracyConfidencePctFromFraction } from '../utils/portalMetricFormat';
 import type { DialDetailFromMetadata, DialPoint, S3MeterReading } from '../services/api';
 import {
   ArrowLeft,
@@ -139,9 +140,7 @@ function fmtDialPt(p: DialPoint | undefined): string {
 
 /** Confidence shown as %; values in metadata are usually 0–1. */
 function fmtConf01(n: number | undefined): string {
-  if (n == null || !Number.isFinite(n)) return '—';
-  const pct = n > 1 ? n : n * 100;
-  return `${Math.round(pct * 10) / 10}%`;
+  return formatPortalAccuracyConfidencePctFromFraction(n);
 }
 
 function fmtDeg(n: number | undefined): string {
@@ -416,7 +415,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
             )}
           {dialDetail.confidence != null && Number.isFinite(dialDetail.confidence) ? (
             <div className="prediction-confidence">
-              {(dialDetail.confidence * 100).toFixed(0)}% confidence
+              {formatPortalAccuracyConfidencePctFromFraction(dialDetail.confidence)} confidence
             </div>
           ) : null}
           <button
@@ -1391,7 +1390,7 @@ const ReadingDetail: React.FC = () => {
                     {reading.confidence !== undefined && (
                       <div className="metric-card">
                         <Target size={24} />
-                        <div className="metric-value">{(reading.confidence * 100).toFixed(1)}%</div>
+                        <div className="metric-value">{formatPortalAccuracyConfidencePctFromFraction(reading.confidence)}</div>
                         <div className="metric-label">Confidence</div>
                       </div>
                     )}
@@ -1441,7 +1440,7 @@ const ReadingDetail: React.FC = () => {
                                 {dial.direction === 'clockwise' ? 'CW' : 'CCW'}
                               </span>
                             </td>
-                            <td>{(dial.confidence * 100).toFixed(1)}%</td>
+                            <td>{formatPortalAccuracyConfidencePctFromFraction(dial.confidence)}</td>
                           </tr>
                         ))}
                       </tbody>

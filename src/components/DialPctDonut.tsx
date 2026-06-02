@@ -1,5 +1,6 @@
 import { useMemo, type FC } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 const REMAINDER_FILL = '#e2e8f0';
 
@@ -61,13 +62,13 @@ const DialPctDonut: FC<Props> = ({ dial, pct, metricLabel, fill, compact = false
               <Tooltip
                 contentStyle={tooltipStyle}
                 formatter={(v: number, name: string) =>
-                  name === 'Score' ? [`${v.toFixed(1)}%`, metricLabel] : null
+                  name === 'Score' ? [formatPortalAccuracyConfidencePct(v), metricLabel] : null
                 }
               />
             </PieChart>
           </ResponsiveContainer>
           <div className="analytics-donut__center" aria-hidden>
-            <span className="analytics-donut__pct">{pct.toFixed(1)}%</span>
+            <span className="analytics-donut__pct">{formatPortalAccuracyConfidencePct(pct)}</span>
           </div>
         </div>
       ) : (

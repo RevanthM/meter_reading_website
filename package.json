@@ -22,6 +22,12 @@
     "migrate:unit-test-manifest": "node scripts/migrate-unit-test-manifest-to-json.mjs",
     "backfill:iteration-csv-metrics": "node scripts/backfill-iteration-metrics-from-unit-test-csv.mjs",
     "backfill:dynamo-sessions": "node scripts/backfill-dynamo-sessions.mjs",
+    "reclassify:field-sessions": "node scripts/reclassify-field-sessions.mjs --dry-run",
+    "reclassify:field-sessions:execute": "node scripts/reclassify-field-sessions.mjs --execute",
+    "reclassify:field-sessions:bulk": "python3 scripts/reclassify_field_sessions_bulk.py --dry-run",
+    "reclassify:field-sessions:bulk:execute": "python3 scripts/reclassify_field_sessions_bulk.py --execute --workers 32",
+    "relabel:capture-locations": "python3 scripts/relabel_capture_locations.py --dry-run",
+    "relabel:capture-locations:execute": "python3 scripts/relabel_capture_locations.py --execute",
     "sync:lambda-session-index": "sh scripts/sync-lambda-session-index.sh",
     "deploy:session-index": "npm run sync:lambda-session-index && cd infra/session-sync && sam build && sam deploy --stack-name amr-session-index --resolve-s3 --capabilities CAPABILITY_IAM --region us-east-1 --parameter-overrides SessionsTableName=amr-sessions S3BucketName=meter-reader-training-feedback --no-confirm-changeset --no-fail-on-empty-changeset"
   },

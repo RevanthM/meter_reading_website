@@ -1,6 +1,7 @@
 import { useMemo, type FC } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { ImprovementStoryBin } from '../utils/dashboardImprovementStats';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 type Props = {
   bins: ImprovementStoryBin[];
@@ -104,13 +105,13 @@ const DashboardImprovementChart: FC<Props> = ({
         <div title="Pinned summary value (not computed from latest session in range).">
           <span className="dashboard-improvement-summary-k">Current confidence</span>
           <span className="dashboard-improvement-summary-v">
-            {currentConfidencePct != null ? `${currentConfidencePct.toFixed(1)}%` : '—'}
+            {formatPortalAccuracyConfidencePct(currentConfidencePct)}
           </span>
         </div>
         <div title="Pinned summary value (not computed from latest session in range).">
           <span className="dashboard-improvement-summary-k">Current accuracy</span>
           <span className="dashboard-improvement-summary-v">
-            {currentAccuracyPct != null ? `${currentAccuracyPct.toFixed(1)}%` : '—'}
+            {formatPortalAccuracyConfidencePct(currentAccuracyPct)}
           </span>
         </div>
       </div>
@@ -184,7 +185,7 @@ const DashboardImprovementChart: FC<Props> = ({
           if (b.totalSessions === 0) return null;
           const cx = xAt(i, bins.length);
           const x0 = cx - wHit / 2;
-          const tip = `${b.barLabel ?? b.date}: confidence ${b.avgConfidencePct?.toFixed(1) ?? '—'}% · accuracy ${b.modelVsCorrectionPct?.toFixed(1) ?? '—'}%`;
+          const tip = `${b.barLabel ?? b.date}: confidence ${formatPortalAccuracyConfidencePct(b.avgConfidencePct)} · accuracy ${formatPortalAccuracyConfidencePct(b.modelVsCorrectionPct)}`;
           return (
             <rect
               key={`hit-${b.date}`}

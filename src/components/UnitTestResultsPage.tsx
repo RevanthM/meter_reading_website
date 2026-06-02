@@ -42,6 +42,7 @@ import {
   runTimestampIso,
   type EnrichedUnitTestRun,
 } from '../utils/unitTestRunEnrichment';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 type ProductLineFilter = 'all' | Exclude<FactoryProductLine, 'unknown'>;
 type DatePresetFilter = 'all' | DateRangePresetId;
@@ -62,8 +63,7 @@ function formatRunTimestamp(iso: string | null | undefined): string {
 }
 
 function formatPct(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—';
-  return `${value.toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePct(value);
 }
 
 function accuracyStatClass(value: number | null | undefined): string {

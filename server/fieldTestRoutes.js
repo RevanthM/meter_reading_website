@@ -14,6 +14,7 @@ import {
   filterSessionsForCycle,
   readFieldTestRollup,
   writeFieldTestRollup,
+  FIELD_TEST_ROLLUP_VERSION,
 } from './fieldTestAnalytics.js';
 import { buildFieldTestCycleCsv, enrichFieldTestItemsFromMetadata } from './fieldTestCsv.js';
 import { buildFieldTestCityOptions, matchesFieldTestCityFilter } from './fieldTestLocation.js';
@@ -211,6 +212,7 @@ export function registerFieldTestRoutes(app, deps) {
       const cycleId = String(req.params.cycleId || '').trim();
       const force = req.query.refresh === '1' || req.query.refresh === 'true';
       const cacheKey = `${workType}:${cycleId}`;
+      if (force) analyticsCache.invalidate(cacheKey);
 
       const { data: payload, cacheStatus } = await analyticsCache.get(
         cacheKey,
@@ -221,7 +223,10 @@ export function registerFieldTestRoutes(app, deps) {
 
           if (!force) {
             const cached = await readFieldTestRollup(s3Client, BUCKET_NAME, workType, cycleId);
-            if (cached.rollup?.builtAt) {
+            if (
+              cached.rollup?.builtAt &&
+              Number(cached.rollup.version) >= FIELD_TEST_ROLLUP_VERSION
+            ) {
               return { source: 'rollup', cycle, rollup: cached.rollup, rollupKey: cached.key };
             }
           }

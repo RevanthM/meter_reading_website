@@ -4,6 +4,10 @@ import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
 import DialPctDonut from './DialPctDonut';
 import { useReadings } from '../context/ReadingsContext';
 import { resolveDialStats } from '../utils/unitTestCsvAnalytics';
+import {
+  formatPortalAccuracyConfidencePct,
+  roundPortalAccuracyConfidencePct,
+} from '../utils/portalMetricFormat';
 
 type Props = {
   rollup: FieldTestRollup;
@@ -34,16 +38,23 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
   const hasDialDonuts = dialStats.some((d) => d.accuracyPct != null || d.confidencePct != null);
 
   const readAccuracyPct =
-    rollup.readsWithGroundTruth > 0
-      ? Math.round((1000 * rollup.readsCorrect) / rollup.readsWithGroundTruth) / 10
-      : null;
+    rollup.summary.accuracyPercent != null && Number.isFinite(rollup.summary.accuracyPercent)
+      ? rollup.summary.accuracyPercent
+      : rollup.readsWithGroundTruth > 0
+        ? roundPortalAccuracyConfidencePct((100 * rollup.readsCorrect) / rollup.readsWithGroundTruth)
+        : null;
 
   return (
     <div className="field-test-cycle-dashboard">
       <div className="field-test-kpi-strip" aria-label="Field test summary">
         <div className="field-test-kpi-card">
-          <span className="field-test-kpi-label">Captures</span>
+          <span className="field-test-kpi-label">Captures scored</span>
           <strong className="field-test-kpi-value">{rollup.captureCount.toLocaleString()}</strong>
+          {rollup.excludedFromResultsCount != null && rollup.excludedFromResultsCount > 0 ? (
+            <span className="field-test-kpi-sublabel">
+              {rollup.excludedFromResultsCount} excluded (not correct/incorrect)
+            </span>
+          ) : null}
         </div>
         <div className="field-test-kpi-card">
           <span className="field-test-kpi-label">Reads</span>
@@ -52,7 +63,7 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
         <div className="field-test-kpi-card">
           <span className="field-test-kpi-label">Read accuracy</span>
           <strong className="field-test-kpi-value">
-            {readAccuracyPct != null ? `${readAccuracyPct}%` : '—'}
+            {formatPortalAccuracyConfidencePct(readAccuracyPct)}
           </strong>
         </div>
         <div className="field-test-kpi-card">

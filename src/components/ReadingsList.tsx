@@ -177,14 +177,26 @@ function effectiveConfidenceForDisplay(r: S3MeterReading): number | undefined {
 type ListSortColumn = 'date' | 'confidence';
 type ListSortDir = 'asc' | 'desc';
 
+function readingDateSortKey(r: S3MeterReading): string {
+  return (
+    calendarDayKeyInPortalTz(r.dateOfReading || '') ||
+    calendarDayKeyInPortalTz(r.createdAt || '') ||
+    ''
+  );
+}
+
 function sortReadingsForList(
   readings: S3MeterReading[],
   listStatus: string | undefined,
   listSort: ListSortColumn,
   listSortDir: ListSortDir,
 ): S3MeterReading[] {
-  const dateCmp = (a: S3MeterReading, b: S3MeterReading) =>
-    new Date(a.dateOfReading).getTime() - new Date(b.dateOfReading).getTime();
+  const dateCmp = (a: S3MeterReading, b: S3MeterReading) => {
+    const da = readingDateSortKey(a);
+    const db = readingDateSortKey(b);
+    if (da !== db) return da.localeCompare(db);
+    return (a.id || '').localeCompare(b.id || '');
+  };
   const confCmp = (a: S3MeterReading, b: S3MeterReading) => {
     const ca = effectiveConfidenceForSort(a);
     const cb = effectiveConfidenceForSort(b);
@@ -364,8 +376,7 @@ const ReadingsList: FC = () => {
     if (activeCohort) {
       filtered = filtered.filter((r) => matchesReadingsCohort(r, activeCohort));
     }
-    const sortKey = filterKey === 'incorrect-queues' ? 'all' : filterKey;
-    return sortReadingsForList(filtered, sortKey, effectiveListSort, effectiveListSortDir);
+    return sortReadingsForList(filtered, filterKey, effectiveListSort, effectiveListSortDir);
   }, [
     getReadingsByStatus,
     listStatusKey,

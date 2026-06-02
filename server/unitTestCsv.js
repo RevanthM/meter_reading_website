@@ -4,7 +4,7 @@
  */
 
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { normalizeConfidencePct } from './unitTestMetricsApply.js';
+import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
 /** iOS export: d1/d2/d3 = normal / difficult / very_difficult (not meter dials). */
 const IMAGE_DIFFICULTY_TIERS = [
@@ -25,18 +25,14 @@ function buildImageDifficultyBreakdown(raw) {
     let accuracyPct = null;
     if (accRaw != null && accRaw !== '') {
       const v = parseFloat(accRaw);
-      if (Number.isFinite(v)) accuracyPct = Math.round(v * 10) / 10;
+      if (Number.isFinite(v)) accuracyPct = roundPortalAccuracyConfidencePct(v);
     } else if (withGroundTruth > 0) {
-      accuracyPct = Math.round((1000 * correct) / withGroundTruth) / 10;
+      accuracyPct = roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth);
     }
     let confidencePct = null;
     const confRaw = raw[`${code}_average_confidence`];
     if (confRaw != null && confRaw !== '') {
-      const n = parseFloat(confRaw);
-      if (Number.isFinite(n)) {
-        const pct = n <= 1 && n >= 0 ? n * 100 : n;
-        confidencePct = Math.round(pct * 10) / 10;
-      }
+      confidencePct = normalizeConfidencePct(confRaw);
     }
     return { code, label, imageCount, withGroundTruth, correct, accuracyPct, confidencePct };
   });
@@ -117,9 +113,9 @@ export function parseUnitTestCsvSummary(csvText) {
   const correct = parseInt(summary.correct_readings || '0', 10) || 0;
   const accuracyPercent =
     summary.accuracy_percent != null && summary.accuracy_percent !== ''
-      ? parseFloat(summary.accuracy_percent)
+      ? roundPortalAccuracyConfidencePct(parseFloat(summary.accuracy_percent))
       : withGroundTruth > 0
-        ? (100 * correct) / withGroundTruth
+        ? roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth)
         : null;
 
   const imageDifficultyBreakdown =
@@ -241,7 +237,7 @@ export function buildUnitTestRunListItem(run, summary) {
       : null;
   const accuracyPercent =
     summary.accuracyPercent != null && Number.isFinite(summary.accuracyPercent)
-      ? Math.round(summary.accuracyPercent * 10) / 10
+      ? roundPortalAccuracyConfidencePct(summary.accuracyPercent)
       : null;
   const averageConfidencePct = normalizeConfidencePct(summary.average_confidence);
   const appVersion =

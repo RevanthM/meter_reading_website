@@ -24,6 +24,7 @@ import {
   resolveDifficultyTiers,
   resolveRunPerformance,
 } from '../utils/unitTestCsvAnalytics';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 import UnitTestConfusionHeatmap from './UnitTestConfusionHeatmap';
 import type { ConfusionImageSource } from './ConfusionMisreadLightbox';
 
@@ -48,8 +49,10 @@ type DifficultyChartRow = {
   withGroundTruth: number;
 };
 
-function pctOneDecimal(v: unknown): string {
-  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
+function pctDisplay(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v)
+    ? formatPortalAccuracyConfidencePct(v)
+    : '—';
 }
 
 function DifficultyPerformanceTooltip({
@@ -69,7 +72,8 @@ function DifficultyPerformanceTooltip({
       </p>
       {payload.map((entry) => (
         <p key={String(entry.dataKey)}>
-          {entry.name}: {typeof entry.value === 'number' ? `${entry.value.toFixed(1)}%` : '—'}
+          {entry.name}:{' '}
+          {typeof entry.value === 'number' ? formatPortalAccuracyConfidencePct(entry.value) : '—'}
         </p>
       ))}
     </div>
@@ -221,7 +225,9 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
     <div className="dashboard-unit-test-analytics">
       <p className="dashboard-unit-test-run-summary" role="note">
         {summary?.imagesProcessed ?? detail.perImageCount ?? '—'} images
-        {accPct != null && Number.isFinite(accPct) ? ` · ${accPct.toFixed(2)}% full-reading accuracy` : ''}
+        {accPct != null && Number.isFinite(accPct)
+          ? ` · ${formatPortalAccuracyConfidencePct(accPct)} full-reading accuracy`
+          : ''}
         {summary?.generated_utc ? ` · ${summary.generated_utc}` : ''}
       </p>
 
@@ -254,7 +260,9 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="dashboard-unit-test-donut-center" aria-hidden>
-                  <span className="dashboard-unit-test-donut-pct">{accPct.toFixed(2)}%</span>
+                  <span className="dashboard-unit-test-donut-pct">
+                    {formatPortalAccuracyConfidencePct(accPct)}
+                  </span>
                   <span className="dashboard-unit-test-donut-label">overall accuracy</span>
                 </div>
               </div>
@@ -304,7 +312,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
                   <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v) => `${v}%`} width={40} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    formatter={(v: number) => [`${v.toFixed(1)}%`, 'Accuracy']}
+                    formatter={(v: number) => [formatPortalAccuracyConfidencePct(v), 'Accuracy']}
                   />
                   <Bar dataKey="accuracy" fill={ACCURACY_FILL} radius={[4, 4, 0, 0]} maxBarSize={48} isAnimationActive={false} />
                 </BarChart>
@@ -432,8 +440,8 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
                       {difficultyPerformanceData.map((row) => (
                         <tr key={row.tier}>
                           <th scope="row">{row.tier}</th>
-                          <td>{pctOneDecimal(row.accuracy)}</td>
-                          <td>{pctOneDecimal(row.confidence)}</td>
+                          <td>{pctDisplay(row.accuracy)}</td>
+                          <td>{pctDisplay(row.confidence)}</td>
                           <td>{row.imageCount}</td>
                         </tr>
                       ))}

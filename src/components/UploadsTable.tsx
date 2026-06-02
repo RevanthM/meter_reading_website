@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { roundPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 import { useReadings } from '../context/ReadingsContext';
 import {
   ArrowLeft,
@@ -173,7 +174,10 @@ const UploadsTable: React.FC = () => {
       : uploads;
     const correct = base.filter(u => u.status === 'correct').length;
     const incorrect = base.filter(u => u.status.startsWith('incorrect')).length;
-    const accuracy = base.length > 0 ? ((correct / base.length) * 100).toFixed(1) : '0';
+    const accuracy =
+      base.length > 0
+        ? String(roundPortalAccuracyConfidencePct((100 * correct) / base.length))
+        : '0.000';
     return { total: base.length, correct, incorrect, accuracy };
   }, [uploads, ownerFilter, userEmail]);
 

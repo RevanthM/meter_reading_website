@@ -31,6 +31,7 @@ import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './imp
 import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import { registerFieldTestRoutes } from './fieldTestRoutes.js';
+import { registerAuditEventRoutes, appendAuditEvents } from './auditEvents.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
@@ -2657,10 +2658,13 @@ app.post('/api/readings/bulk-move', async (req, res) => {
     }
     
     await loadActivityLog();
-    for (const reading of readings) {
+    const auditTs = new Date().toISOString();
+    const auditBatch = [];
+    for (let i = 0; i < readings.length; i += 1) {
+      const reading = readings[i];
       activityLog.unshift({
         id: `${Date.now()}-${reading.sessionId}`,
-        timestamp: new Date().toISOString(),
+        timestamp: auditTs,
         userEmail: req.headers['x-user-email'] || 'unknown',
         action: 'status_change',
         sessionId: reading.sessionId,
@@ -2668,8 +2672,29 @@ app.post('/api/readings/bulk-move', async (req, res) => {
         toStatus: reading.targetStatus,
         sourceType: reading.sourceType,
       });
+      auditBatch.push({
+        ts: auditTs,
+        source: 'portal',
+        action: 'session.status_change',
+        intent: `Bulk move ${reading.currentStatus} → ${reading.targetStatus}`,
+        actor: { email: req.headers['x-user-email'] },
+        target: { sessionId: reading.sessionId, workType: reading.workType },
+        detail: {
+          fromStatus: reading.currentStatus,
+          toStatus: reading.targetStatus,
+          sourceType: reading.sourceType,
+        },
+        outcome: moveResults[i] ? 'success' : 'failure',
+      });
     }
     await saveActivityLog();
+    if (auditBatch.length > 0) {
+      try {
+        await appendAuditEvents(s3Client, BUCKET_NAME, auditBatch, req.headers);
+      } catch (e) {
+        console.warn('audit-events (bulk-move):', e.message);
+      }
+    }
     
     res.json({ success: true, moved: movedCount, total: readings.length });
   } catch (error) {
@@ -3222,6 +3247,27 @@ registerFieldTestRoutes(app, {
   BUCKET_NAME,
   sessionIndex,
   getPresignedUrl: getSignedImageUrl,
+});
+
+function isAdminPortalRequest(req) {
+  const mode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
+  return mode === 'admin';
+}
+
+registerAuditEventRoutes(app, {
+  s3Client,
+  bucket: BUCKET_NAME,
+  requireAdmin: isAdminPortalRequest,
+  getPortalSessionsForUser: async (userName, fromDay, toDay) => {
+    const needle = userName.toLowerCase();
+    const all = await getAllReadings('all', '1000');
+    return all.filter((r) => {
+      const name = (r.userName || '').trim().toLowerCase();
+      if (name !== needle) return false;
+      const day = calendarDayKeyInPortalTz(r.dateOfReading || '');
+      return day && day >= fromDay && day <= toDay;
+    });
+  },
 });
 
 const MANUAL_UPLOAD_MAX_BYTES = Math.max(

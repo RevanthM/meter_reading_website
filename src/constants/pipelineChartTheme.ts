@@ -13,6 +13,7 @@ import {
   avgUtDialAccuracyPct,
 } from '../utils/iterationMetricsEnrichment';
 import { normalizeManualMetricPct } from '../utils/metricNumbers';
+import { roundPortalAccuracyConfidencePct, PORTAL_ACCURACY_CONFIDENCE_PCT_DECIMALS } from '../utils/portalMetricFormat';
 
 /** Matches Model factory product-line chips (p1 sky · p2 violet · p3 emerald). */
 export const FACTORY_PRODUCT_LINE_CHART: Record<
@@ -71,7 +72,7 @@ function meanFinite(nums: number[]): number | null {
 function portalPct(raw: number | null | undefined): number | null {
   if (raw == null || !Number.isFinite(raw)) return null;
   const v = raw <= 1 && raw >= 0 ? raw * 100 : raw;
-  return Math.round(v * 100) / 100;
+  return roundPortalAccuracyConfidencePct(v);
 }
 
 function chartRowRichness(row: PipelineIterationRecord): number {
@@ -145,12 +146,12 @@ export function filterEvalChartRows(rows: PipelineIterationRecord[]): PipelineIt
 /** read − sim when both sides exist (positive = read ahead). */
 export function simReadGapPct(read: number | null, sim: number | null): number | null {
   if (read == null || sim == null || !Number.isFinite(read) || !Number.isFinite(sim)) return null;
-  return Math.round((read - sim) * 100) / 100;
+  return roundPortalAccuracyConfidencePct(read - sim);
 }
 
 export function simConfidencePct(row: PipelineIterationRecord): number | null {
   const v = avgSimDialConfidencePct(row.manualMetrics);
-  if (v != null && Number.isFinite(v)) return Math.round(v * 100) / 100;
+  if (v != null && Number.isFinite(v)) return roundPortalAccuracyConfidencePct(v);
   const p = row.portalStats;
   if (p?.avgSessionConfidence != null && Number.isFinite(p.avgSessionConfidence)) {
     return portalPct(p.avgSessionConfidence);
@@ -162,13 +163,13 @@ export function simConfidencePct(row: PipelineIterationRecord): number | null {
 export function readConfidencePct(row: PipelineIterationRecord): number | null {
   const m = row.manualMetrics;
   const dial = avgAppDialConfidencePct(m);
-  if (dial != null) return Math.round(dial * 100) / 100;
+  if (dial != null) return roundPortalAccuracyConfidencePct(dial);
   const appConf = meanFinite(
     [m?.appAvgBboxConfidence, m?.appAvgKeypointConfidence].filter(
       (v): v is number => v != null && Number.isFinite(v),
     ),
   );
-  if (appConf != null) return Math.round(appConf * 100) / 100;
+  if (appConf != null) return roundPortalAccuracyConfidencePct(appConf);
   return null;
 }
 
@@ -176,12 +177,12 @@ export function readConfidencePct(row: PipelineIterationRecord): number | null {
 export function simAccuracyPct(row: PipelineIterationRecord): number | null {
   const m = row.manualMetrics;
   const simDial = avgSimDialAccuracyPct(m);
-  if (simDial != null) return Math.round(simDial * 100) / 100;
+  if (simDial != null) return roundPortalAccuracyConfidencePct(simDial);
   if (m?.readAccuracySimulatorLaptop != null && Number.isFinite(m.readAccuracySimulatorLaptop)) {
     return m.readAccuracySimulatorLaptop;
   }
   const utAvg = avgUtDialAccuracyPct(m);
-  if (utAvg != null) return Math.round(utAvg * 100) / 100;
+  if (utAvg != null) return roundPortalAccuracyConfidencePct(utAvg);
 
   const p = row.portalStats;
   if (p) {
@@ -191,7 +192,7 @@ export function simAccuracyPct(row: PipelineIterationRecord): number | null {
         (v): v is number => v != null && Number.isFinite(v),
       ),
     );
-    if (utDials != null) return Math.round(utDials * 100) / 100;
+    if (utDials != null) return roundPortalAccuracyConfidencePct(utDials);
   }
   return null;
 }
@@ -200,14 +201,14 @@ export function simAccuracyPct(row: PipelineIterationRecord): number | null {
 export function readAccuracyPct(row: PipelineIterationRecord): number | null {
   const m = row.manualMetrics;
   const appDial = avgAppDialAccuracyPct(m);
-  if (appDial != null) return Math.round(appDial * 100) / 100;
+  if (appDial != null) return roundPortalAccuracyConfidencePct(appDial);
   if (m?.readAccuracyUt != null && Number.isFinite(m.readAccuracyUt)) return m.readAccuracyUt;
   if (m?.readAccuracyFtRow != null && Number.isFinite(m.readAccuracyFtRow)) return m.readAccuracyFtRow;
   if (m?.exactReadingAccuracyPct != null && Number.isFinite(m.exactReadingAccuracyPct)) {
     return m.exactReadingAccuracyPct;
   }
   const ftAvg = avgFtDialAccuracyPct(m);
-  if (ftAvg != null) return Math.round(ftAvg * 100) / 100;
+  if (ftAvg != null) return roundPortalAccuracyConfidencePct(ftAvg);
 
   const p = row.portalStats;
   if (p) {
@@ -217,7 +218,7 @@ export function readAccuracyPct(row: PipelineIterationRecord): number | null {
         (v): v is number => v != null && Number.isFinite(v),
       ),
     );
-    if (ftDials != null) return Math.round(ftDials * 100) / 100;
+    if (ftDials != null) return roundPortalAccuracyConfidencePct(ftDials);
   }
   return null;
 }
@@ -227,13 +228,13 @@ export function evalAccuracyPct(row: PipelineIterationRecord): number | null {
   const m = row.manualMetrics;
   if (m?.readAccuracyFtRow != null && Number.isFinite(m.readAccuracyFtRow)) return m.readAccuracyFtRow;
   const ftAvg = avgFtDialAccuracyPct(m);
-  if (ftAvg != null) return Math.round(ftAvg * 100) / 100;
+  if (ftAvg != null) return roundPortalAccuracyConfidencePct(ftAvg);
   if (m?.readAccuracyUt != null && Number.isFinite(m.readAccuracyUt)) return m.readAccuracyUt;
   if (m?.exactReadingAccuracyPct != null && Number.isFinite(m.exactReadingAccuracyPct)) {
     return m.exactReadingAccuracyPct;
   }
   const utAvg = avgUtDialAccuracyPct(m);
-  if (utAvg != null) return Math.round(utAvg * 100) / 100;
+  if (utAvg != null) return roundPortalAccuracyConfidencePct(utAvg);
 
   const p = row.portalStats;
   if (p) {
@@ -243,14 +244,14 @@ export function evalAccuracyPct(row: PipelineIterationRecord): number | null {
         (v): v is number => v != null && Number.isFinite(v),
       ),
     );
-    if (ftDials != null) return Math.round(ftDials * 100) / 100;
+    if (ftDials != null) return roundPortalAccuracyConfidencePct(ftDials);
     if (p.digitMatchUtPct != null && Number.isFinite(p.digitMatchUtPct)) return portalPct(p.digitMatchUtPct);
     const utDials = meanFinite(
       [p.dial1UtPct, p.dial2UtPct, p.dial3UtPct, p.dial4UtPct].filter(
         (v): v is number => v != null && Number.isFinite(v),
       ),
     );
-    if (utDials != null) return Math.round(utDials * 100) / 100;
+    if (utDials != null) return roundPortalAccuracyConfidencePct(utDials);
     if (p.queueCorrectRateAll != null && Number.isFinite(p.queueCorrectRateAll)) {
       return portalPct(p.queueCorrectRateAll);
     }
@@ -265,7 +266,7 @@ export function manualReviewRatePct(row: PipelineIterationRecord): number | null
   const correct = row.portalStats?.queueCorrectRateAll;
   if (correct != null && Number.isFinite(correct)) {
     const pct = correct <= 1 ? (1 - correct) * 100 : 100 - correct;
-    return Math.round(Math.min(100, Math.max(0, pct)) * 100) / 100;
+    return roundPortalAccuracyConfidencePct(Math.min(100, Math.max(0, pct)));
   }
   return null;
 }
@@ -311,19 +312,22 @@ function dialField(
 ): number | null {
   if (!m) return null;
   const key = `${prefix}${n}${metric}` as keyof NonNullable<typeof m>;
-  return normalizeManualMetricPct(m[key]);
+  const v = normalizeManualMetricPct(m[key]);
+  return v != null && Number.isFinite(v) ? roundPortalAccuracyConfidencePct(v) : null;
 }
 
 function manualUtDialPct(m: PipelineIterationRecord['manualMetrics'], n: (typeof DIAL_NUMS)[number]): number | null {
   if (!m) return null;
   const key = `dial${n}UtPct` as keyof NonNullable<typeof m>;
-  return normalizeManualMetricPct(m[key]);
+  const v = normalizeManualMetricPct(m[key]);
+  return v != null && Number.isFinite(v) ? roundPortalAccuracyConfidencePct(v) : null;
 }
 
 function manualFtDialPct(m: PipelineIterationRecord['manualMetrics'], n: (typeof DIAL_NUMS)[number]): number | null {
   if (!m) return null;
   const key = `dial${n}FtPct` as keyof NonNullable<typeof m>;
-  return normalizeManualMetricPct(m[key]);
+  const v = normalizeManualMetricPct(m[key]);
+  return v != null && Number.isFinite(v) ? roundPortalAccuracyConfidencePct(v) : null;
 }
 
 function portalDialPct(
@@ -453,7 +457,7 @@ export function pipelineImprovementSummary(row: PipelineGroupedChartRow): string
   if (first == null || last == null) return null;
   const delta = last - first;
   const sign = delta >= 0 ? '+' : '';
-  return `#${row.slots[0].iterationNumber} → #${row.slots[row.slots.length - 1].iterationNumber}: ${sign}${delta.toFixed(1)} pts read accuracy`;
+  return `#${row.slots[0].iterationNumber} → #${row.slots[row.slots.length - 1].iterationNumber}: ${sign}${delta.toFixed(PORTAL_ACCURACY_CONFIDENCE_PCT_DECIMALS)} pts read accuracy`;
 }
 
 export type AppLineChartSeries = {
@@ -650,7 +654,7 @@ export function latestPerDialAppMetrics(
       if (d.appConf != null && Number.isFinite(d.appConf)) confVals.push(d.appConf);
     }
     const avg = (vals: number[]): number | null =>
-      vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null;
+      vals.length ? roundPortalAccuracyConfidencePct(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
     return { dial, accuracy: avg(accVals), confidence: avg(confVals) };
   });
 }

@@ -6,9 +6,10 @@ import {
   deltaTone,
   formatDeltaPp,
 } from '../utils/pipelineAnalyticsStory';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 function fmtPct(v: number | null | undefined): string {
-  return v != null && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
+  return formatPortalAccuracyConfidencePct(v);
 }
 
 function fmtNum(v: number | null | undefined): string {

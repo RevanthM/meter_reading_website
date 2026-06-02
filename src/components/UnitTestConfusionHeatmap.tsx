@@ -5,6 +5,7 @@ import {
   buildDigitConfusionMatrix,
   CONFUSION_LEGEND_TICKS,
   CONFUSION_MISREAD_LEGEND_TICKS,
+  type ConfusionMatrixOptions,
   confusionMatrixCellFill,
   confusionMatrixCellText,
   confusionRowRecall,
@@ -54,10 +55,14 @@ const UnitTestConfusionHeatmap: FC<Props> = ({
 
   const rows = perImageRows ?? [];
 
+  const confusionOptions = useMemo((): ConfusionMatrixOptions | undefined => {
+    return imageSource === 'field_test' ? { strictModelPrediction: true } : undefined;
+  }, [imageSource]);
+
   const confusion = useMemo(() => {
     if (!rows.length) return null;
-    return buildDigitConfusionMatrix(rows, confusionDial);
-  }, [rows, confusionDial]);
+    return buildDigitConfusionMatrix(rows, confusionDial, confusionOptions);
+  }, [rows, confusionDial, confusionOptions]);
 
   const canDrillIntoMisreads = Boolean(imageSource && workType && rows.length);
 
@@ -76,7 +81,13 @@ const UnitTestConfusionHeatmap: FC<Props> = ({
 
   const handleMisreadClick = (expectedDigit: number, predictedDigit: number) => {
     if (!canDrillIntoMisreads) return;
-    const matched = filterConfusionMisreadRows(rows, expectedDigit, predictedDigit, confusionDial);
+    const matched = filterConfusionMisreadRows(
+      rows,
+      expectedDigit,
+      predictedDigit,
+      confusionDial,
+      confusionOptions,
+    );
     if (!matched.length) return;
     setOpenCell({ expectedDigit, predictedDigit, rows: matched });
   };
@@ -100,9 +111,12 @@ const UnitTestConfusionHeatmap: FC<Props> = ({
               matrix)
             </p>
             <p className="dashboard-confusion-help">
-              <strong>Rows</strong> = true digit on the meter. <strong>Columns</strong> = model
-              prediction. <strong>Diagonal (green)</strong> = correct recall (95% red → 100% green).{' '}
-              <strong>Off-diagonal (amber/red)</strong> = misread
+              <strong>Rows</strong> = true digit on the meter. <strong>Columns</strong> ={' '}
+              {imageSource === 'field_test'
+                ? 'model prediction (strict; dial 4 bill-lower does not count as correct).'
+                : 'model prediction.'}{' '}
+              <strong>Diagonal (green)</strong> = predicted digit matches true digit (95% red → 100%
+              green). <strong>Off-diagonal (amber/red)</strong> = model predicted a different digit
               {canDrillIntoMisreads ? ' — click a count to open the image(s).' : '.'}
             </p>
           </div>

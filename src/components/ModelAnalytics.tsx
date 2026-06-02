@@ -5,6 +5,10 @@ import { fetchImprovementStats, type ModelAnalyticsResponse, type ModelVersionSt
 import type { WorkType } from '../types';
 import { workTypeLabels } from '../types';
 import {
+  formatPortalAccuracyConfidencePctFromFraction,
+  PORTAL_ACCURACY_CONFIDENCE_PCT_DECIMALS,
+} from '../utils/portalMetricFormat';
+import {
   ArrowLeft,
   Cpu,
   RefreshCw,
@@ -19,9 +23,8 @@ import {
   List,
 } from 'lucide-react';
 
-function pct(n: number | null | undefined, digits = 1): string {
-  if (n == null || Number.isNaN(n)) return '—';
-  return `${(n * 100).toFixed(digits)}%`;
+function pct(n: number | null | undefined): string {
+  return formatPortalAccuracyConfidencePctFromFraction(n);
 }
 
 function fmtMs(n: number | null | undefined): string {
@@ -140,7 +143,7 @@ const ModelAnalytics: React.FC = () => {
       `Correct-queue share ${pct(cur.queueCorrectRate)} vs ${pct(prev.queueCorrectRate)} (${dCorrect >= 0 ? '+' : ''}${dCorrect.toFixed(1)} pts).`,
     ];
     if (dConf != null) {
-      parts.push(`Mean confidence ${dConf >= 0 ? '+' : ''}${dConf.toFixed(1)} pts vs previous version.`);
+      parts.push(`Mean confidence ${dConf >= 0 ? '+' : ''}${dConf.toFixed(PORTAL_ACCURACY_CONFIDENCE_PCT_DECIMALS)} pts vs previous version.`);
     }
     return parts.join(' ');
   }, [versions]);

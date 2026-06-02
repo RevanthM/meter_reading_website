@@ -34,6 +34,7 @@ import DashboardAnalyticsStoryNav, {
 } from './DashboardAnalyticsStoryNav';
 import PipelineChartLineFilter from './PipelineChartLineFilter';
 import DialPctDonut from './DialPctDonut';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 const ACCURACY_FILL = '#0d9488';
 const CONFIDENCE_FILL = '#3b82f6';
@@ -46,7 +47,9 @@ const tooltipStyle = {
 };
 
 function pctTooltip(v: unknown): string {
-  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
+  return typeof v === 'number' && Number.isFinite(v)
+    ? formatPortalAccuracyConfidencePct(v)
+    : '—';
 }
 
 function datasetDotRadius(imageCount: unknown, imageRange: { min: number; max: number }): number {

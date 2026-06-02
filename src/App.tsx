@@ -26,6 +26,7 @@ import FieldTestReadingsList from './components/FieldTestReadingsList';
 import FieldTestResultsPage from './components/FieldTestResultsPage';
 import ManualUploadPage from './components/ManualUploadPage';
 import ManualUploadLabelPage from './components/ManualUploadLabelPage';
+import SyncHealthPage from './components/SyncHealthPage';
 import PortalWelcomeModal from './components/PortalWelcomeModal';
 import './App.css';
 
@@ -71,6 +72,7 @@ function AppContent() {
           <Route path="/test-data/images/edit/:fileName" element={<Navigate to="/test-data/images" replace />} />
           <Route path="/manual-upload" element={<ManualUploadPage />} />
           <Route path="/manual-upload/label" element={<ManualUploadLabelPage />} />
+          <Route path="/admin/sync-health" element={<SyncHealthPage />} />
         </Route>
       </Routes>
     </div>

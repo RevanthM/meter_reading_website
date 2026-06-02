@@ -22,19 +22,21 @@ import {
   suggestNextIterationAndModel,
   type PipelineCatalogId,
 } from '../utils/pipelineCatalog';
+import {
+  formatPortalAccuracyConfidencePct,
+  formatPortalAccuracyConfidencePctFromFraction,
+} from '../utils/portalMetricFormat';
 
 function deepCloneRow(r: PipelineIterationRecord): PipelineIterationRecord {
   return JSON.parse(JSON.stringify(r)) as PipelineIterationRecord;
 }
 
 function fmtPct01(x: number | null | undefined): string {
-  if (x == null || !Number.isFinite(x)) return '—';
-  return `${(x * 100).toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePctFromFraction(x);
 }
 
 function fmtPct100(x: number | null | undefined): string {
-  if (x == null || !Number.isFinite(x)) return '—';
-  return `${x.toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePct(x);
 }
 
 type IterationModalSection = 'pipeline' | 'dataset' | 'testResults' | 'fieldTest';

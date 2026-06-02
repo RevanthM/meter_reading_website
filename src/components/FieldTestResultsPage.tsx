@@ -29,6 +29,7 @@ const FieldTestResultsPage: FC = () => {
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [selectedCycleId, setSelectedCycleId] = useState('');
   const [rollup, setRollup] = useState<FieldTestRollup | null>(null);
+  const [analyticsSource, setAnalyticsSource] = useState<string | null>(null);
   const [showNewCycle, setShowNewCycle] = useState(false);
   const [editingCycle, setEditingCycle] = useState(false);
   const [formName, setFormName] = useState('');
@@ -64,6 +65,7 @@ const FieldTestResultsPage: FC = () => {
       try {
         const res = await fetchFieldTestCycleAnalytics(workType, cycleId, { refresh });
         setRollup(res.rollup);
+        setAnalyticsSource(res.source ?? null);
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Failed to load analytics');
         setRollup(null);
@@ -349,6 +351,14 @@ const FieldTestResultsPage: FC = () => {
             <p className="field-test-results-cycle-meta">
               {selectedCycle.startDate} – {selectedCycle.endDate} · built{' '}
               {new Date(rollup.builtAt).toLocaleString()}
+              {rollup.version != null ? ` · rollup v${rollup.version}` : ''}
+              {analyticsSource ? ` · ${analyticsSource}` : ''}
+              {rollup.excludedFromResultsCount != null && rollup.excludedFromResultsCount > 0
+                ? ` · ${rollup.excludedFromResultsCount} excluded (not correct/incorrect)`
+                : ''}
+              {rollup.cycleCaptureCount != null && rollup.cycleCaptureCount > rollup.captureCount
+                ? ` · ${rollup.captureCount} scored of ${rollup.cycleCaptureCount} in range`
+                : null}
               {analyticsLoading ? ' · updating…' : null}
             </p>
           ) : null}

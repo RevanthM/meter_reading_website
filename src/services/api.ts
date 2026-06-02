@@ -587,6 +587,10 @@ export interface FieldTestRollup {
   startDate: string;
   endDate: string;
   builtAt: string;
+  /** All field captures in the cycle date range (before correct/incorrect filter). */
+  cycleCaptureCount?: number;
+  /** Excluded from metrics (no dials, not sure, etc.). */
+  excludedFromResultsCount?: number;
   captureCount: number;
   totalReads: number;
   readsWithGroundTruth: number;
@@ -723,9 +727,14 @@ export async function fetchFieldTestCycleAnalytics(
   options?: { refresh?: boolean },
 ): Promise<FieldTestCycleAnalyticsResponse> {
   const q = new URLSearchParams({ workType });
-  if (options?.refresh) q.set('refresh', '1');
+  if (options?.refresh) {
+    q.set('refresh', '1');
+    q.set('_t', String(Date.now()));
+  }
   try {
-    const response = await fetch(`${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}/analytics?${q}`);
+    const response = await fetch(`${API_BASE_URL}/field-test/cycles/${encodeURIComponent(cycleId)}/analytics?${q}`, {
+      cache: options?.refresh ? 'no-store' : 'default',
+    });
     const text = await response.text();
     if (!response.ok) {
       const err = parseJsonBody<{ error?: string }>(text, response.status);
@@ -2003,6 +2012,98 @@ export async function createManualUploadBulk(
     throw new Error(body.errors?.[0]?.error || body.error || 'Upload failed');
   }
   return body;
+}
+
+export type AuditEventRecord = {
+  id: string;
+  ts: string;
+  source: string;
+  action: string;
+  intent: string | null;
+  actor: { email: string | null; userName: string | null; role: string | null };
+  target: {
+    sessionId: string | null;
+    workType: string | null;
+    imageSignature: string | null;
+  };
+  detail: Record<string, unknown>;
+  outcome: string;
+  error: string | null;
+};
+
+export type AuditSyncSessionRow = {
+  sessionId: string | null;
+  imageSignature: string | null;
+  queued: boolean;
+  uploadStarted: boolean;
+  uploadSucceeded: boolean;
+  uploadFailed: boolean;
+  lastAction: string | null;
+  lastTs: string | null;
+  lastError: string | null;
+  feedbackType: string | null;
+};
+
+export type AuditSyncSummary = {
+  userName: string;
+  from: string;
+  to: string;
+  eventCount: number;
+  uniqueSessions: number;
+  queuedCount: number;
+  uploadStarted: number;
+  uploadSucceeded: number;
+  uploadFailed: number;
+  pendingUpload: number;
+  portalSessionsInRange: number;
+  gapVsPortal: number;
+  lastBatch: { ts: string; uploaded: string | number | null; failed: string | number | null } | null;
+  sessions: AuditSyncSessionRow[];
+};
+
+export async function fetchAuditEvents(
+  params: {
+    from?: string;
+    to?: string;
+    userName?: string;
+    sessionId?: string;
+    action?: string;
+    limit?: number;
+  },
+  portalWorkMode: PortalWorkMode = 'admin',
+): Promise<{ events: AuditEventRecord[] }> {
+  const q = new URLSearchParams();
+  if (params.from) q.set('from', params.from);
+  if (params.to) q.set('to', params.to);
+  if (params.userName) q.set('userName', params.userName);
+  if (params.sessionId) q.set('sessionId', params.sessionId);
+  if (params.action) q.set('action', params.action);
+  if (params.limit != null) q.set('limit', String(params.limit));
+  const response = await fetch(`${API_BASE_URL}/audit-events?${q}`, {
+    headers: { 'x-portal-work-mode': portalWorkMode },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function fetchAuditSyncSummary(
+  userName: string,
+  from: string,
+  to: string,
+  portalWorkMode: PortalWorkMode = 'admin',
+): Promise<AuditSyncSummary> {
+  const q = new URLSearchParams({ userName, from, to });
+  const response = await fetch(`${API_BASE_URL}/audit-events/sync-summary?${q}`, {
+    headers: { 'x-portal-work-mode': portalWorkMode },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
 }
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {

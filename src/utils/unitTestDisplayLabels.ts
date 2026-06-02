@@ -1,4 +1,5 @@
 import type { PipelineIterationUnitTestLink } from '../services/api';
+import { formatPortalAccuracyConfidencePct } from './portalMetricFormat';
 
 export function formatUtcShort(utc: string | null | undefined): string | null {
   if (!utc?.trim()) return null;
@@ -17,7 +18,7 @@ export function formatUtcShort(utc: string | null | undefined): string | null {
 
 export function formatPctShort(value: number | null | undefined): string | null {
   if (value == null || !Number.isFinite(value)) return null;
-  return `${value.toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePct(value);
 }
 
 type ResultsSummaryInput = {

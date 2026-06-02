@@ -2,10 +2,11 @@ import { useMemo, type FC } from 'react';
 import type { PipelineIterationRecord } from '../services/api';
 import { FACTORY_PRODUCT_LINE_CHART } from '../constants/pipelineChartTheme';
 import { buildReportSummaryRows } from '../utils/pipelineAnalyticsStory';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 function cell(v: number | null | undefined, pct = false): string {
   if (v == null || !Number.isFinite(v)) return '—';
-  return pct ? `${v.toFixed(1)}%` : v.toLocaleString();
+  return pct ? formatPortalAccuracyConfidencePct(v) : v.toLocaleString();
 }
 
 type Props = {

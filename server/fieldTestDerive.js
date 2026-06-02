@@ -52,14 +52,16 @@ function mlBaselineReadingFromMetadata(metadata) {
   return raw.padStart(4, '0').slice(-4);
 }
 
-/** Per-capture dial corrections for rollups. */
-export function countReadsCorrectedFromItem(item) {
-  const stored = Number(item?.reads_corrected_count);
-  if (Number.isFinite(stored) && stored > 0) return stored;
-
-  const incorrect = Array.isArray(item?.user_incorrect_dial_numbers)
-    ? item.user_incorrect_dial_numbers.filter((n) => Number.isInteger(n))
+/** Dial numbers (1–4) the reviewer marked as model-incorrect. */
+export function incorrectDialNumbersFromItem(item) {
+  return Array.isArray(item?.user_incorrect_dial_numbers)
+    ? item.user_incorrect_dial_numbers.filter((n) => Number.isInteger(n) && n >= 1 && n <= 4)
     : [];
+}
+
+/** Explicit reviewer flags only — do not infer from ml vs final string diff. */
+export function countReadsCorrectedFromItem(item) {
+  const incorrect = incorrectDialNumbersFromItem(item);
   if (incorrect.length > 0) return incorrect.length;
 
   const correctedPos = Array.isArray(item?.user_corrected_positions)
@@ -67,36 +69,46 @@ export function countReadsCorrectedFromItem(item) {
     : [];
   if (correctedPos.length > 0) return correctedPos.length;
 
-  if (Array.isArray(item?.dial_details)) {
-    let fromFlags = 0;
-    for (const d of item.dial_details) {
-      if (d && d.user_dial_correct === false) fromFlags += 1;
-    }
-    if (fromFlags > 0) return fromFlags;
-  }
+  const stored = Number(item?.reads_corrected_count);
+  if (Number.isFinite(stored) && stored > 0) return stored;
 
-  const ml = mlBaselineReadingFromMetadata(item);
-  const final = finalReadingFromMetadata(item);
-  if (ml.length === 4 && final.length === 4) {
-    let diff = 0;
-    for (let i = 0; i < 4; i++) {
-      if (ml[i] !== final[i]) diff += 1;
-    }
-    if (diff > 0) return diff;
-  }
-
-  if (item?.had_user_correction === true || String(item?.feedback_type || '').toLowerCase() === 'incorrect') {
-    return 1;
-  }
   return 0;
 }
 
+/** True when the on-device model needed no dial corrections (field-test ground truth). */
+export function captureModelReadingCorrect(item) {
+  return countReadsCorrectedFromItem(item) === 0;
+}
+
+/**
+ * Include in field-test Results metrics only when the reviewer chose Correct or Incorrect.
+ * Excludes No dials detected, Not sure, and other non-verdict outcomes.
+ */
+export function isFieldTestScorableCapture(item) {
+  if (!item) return false;
+  if (item.field_test_capture === true) return true;
+
+  const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
+  if (feedback === 'correct' || feedback === 'incorrect') return true;
+
+  const status = String(item.folder_status ?? '').trim().toLowerCase();
+  if (status === 'correct') return true;
+  if (status.startsWith('incorrect')) return true;
+
+  return false;
+}
+
+/** @param {object[]} items */
+export function filterFieldTestScorableSessions(items) {
+  if (!Array.isArray(items)) return [];
+  return items.filter(isFieldTestScorableCapture);
+}
+
+/** Dial 4 bill-lower: predicted one digit below expected still counts correct (matches iOS). */
 function dialDigitMatches(expected, predicted, dialNumber) {
-  if (expected !== predicted) {
-    if (dialNumber === 4 && predicted === (expected + 9) % 10) return true;
-    return false;
-  }
-  return true;
+  if (expected === predicted) return true;
+  if (dialNumber === 4 && predicted < expected) return true;
+  return false;
 }
 
 /**
@@ -166,30 +178,7 @@ export function deriveFieldTestFromMetadata(metadata) {
         ? correctedPositions.length
         : 0;
 
-  if (readsCorrected === 0) {
-    for (const d of dialDetails) {
-      if (d && d.user_dial_correct === false) readsCorrected += 1;
-    }
-  }
-
-  if (readsCorrected === 0 && mlBaseline.length === 4 && finalReading.length === 4) {
-    for (let i = 0; i < 4; i++) {
-      if (mlBaseline[i] !== finalReading[i]) readsCorrected += 1;
-    }
-  }
-
-  const feedbackType = String(metadata?.feedback_type || '').trim().toLowerCase();
-  const manuallyReviewed =
-    metadata?.is_manually_reviewed === true || metadata?.is_human_reviewed === true;
-
-  const hadUserCorrection =
-    readsCorrected > 0 ||
-    (manuallyReviewed && feedbackType && feedbackType !== 'correct') ||
-    Boolean(
-      metadata?.user_correction &&
-        String(metadata.user_correction).replace(/\D/g, '') !==
-          String(metadata?.ml_prediction ?? '').replace(/\D/g, ''),
-    );
+  const hadUserCorrection = readsCorrected > 0;
 
   const dialCount =
     typeof metadata?.dial_count === 'number' && Number.isFinite(metadata.dial_count)
@@ -262,19 +251,30 @@ export function sessionItemToPerImageRow(item) {
     .replace(/\D/g, '')
     .padStart(4, '0')
     .slice(-4);
-  const predicted = mlBaselineReadingFromMetadata(item);
-
   let perDial = [];
-  try {
-    perDial = item.per_dial_compact ? JSON.parse(String(item.per_dial_compact)) : [];
-  } catch {
-    perDial = [];
+  if (Array.isArray(item.dial_details) && item.dial_details.length > 0) {
+    try {
+      perDial = JSON.parse(
+        deriveFieldTestFromMetadata({
+          dial_details: item.dial_details,
+          final_reading: item.final_reading,
+          user_correction: item.user_correction,
+          ml_prediction: item.ml_prediction,
+          ml_raw_prediction: item.ml_raw_prediction,
+          user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
+          user_corrected_positions: item.user_corrected_positions,
+        }).per_dial_compact,
+      );
+    } catch {
+      perDial = [];
+    }
+  }
+  if (!perDial.length) {
+    perDial = perDialFromItem(item);
   }
 
-  const overallMatch =
-    finalReading && predicted
-      ? String(finalReading === predicted)
-      : '';
+  const overallMatch = finalReading ? String(captureModelReadingCorrect(item)) : '';
+  const predicted = mlBaselineReadingFromMetadata(item);
 
   const row = {
     s3_key: item.primary_image_key || `${item.s3_session_prefix || ''}original.jpg`,
@@ -290,6 +290,7 @@ export function sessionItemToPerImageRow(item) {
     average_confidence: item.confidence != null ? String(item.confidence) : '',
     dial_count: String(item.dial_count ?? perDial.length ?? 4),
     reads_corrected_count: String(countReadsCorrectedFromItem(item)),
+    incorrect_dial_numbers: incorrectDialNumbersFromItem(item).join(','),
   };
 
   const dialDetails = Array.isArray(item.dial_details) ? item.dial_details : [];

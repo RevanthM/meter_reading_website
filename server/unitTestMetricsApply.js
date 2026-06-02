@@ -2,13 +2,13 @@
  * Apply iOS unit-test CSV metrics onto pipeline iteration manualMetrics (app accuracy & confidence).
  */
 
-export function normalizeConfidencePct(raw) {
-  if (raw == null || raw === '') return null;
-  const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-  if (!Number.isFinite(n)) return null;
-  const pct = n <= 1 && n >= 0 ? n * 100 : n;
-  return Math.round(pct * 10) / 10;
-}
+import {
+  confidencePctFromRaw,
+  normalizeConfidencePct,
+  roundPortalAccuracyConfidencePct,
+} from './portalMetricFormat.js';
+
+export { normalizeConfidencePct } from './portalMetricFormat.js';
 
 function parseDigit(raw) {
   const t = String(raw ?? '').trim();
@@ -47,6 +47,11 @@ function resolvePredictedDigit(row, dial) {
   return null;
 }
 
+function accuracyPctFromCounts(correct, withGroundTruth) {
+  if (withGroundTruth <= 0) return null;
+  return roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth);
+}
+
 /** @param {Record<string, string | number | null | undefined>} summary */
 export function dialStatsFromCsvSummary(summary) {
   const out = [];
@@ -55,11 +60,11 @@ export function dialStatsFromCsvSummary(summary) {
     const correct = parseInt(String(summary[`dial${d}_correct`] ?? ''), 10) || 0;
     const accRaw = summary[`dial${d}_accuracy_percent`];
     let accuracyPct = null;
-    if (accRaw != null && accRaw !== '') {
+    if (withGroundTruth > 0) {
+      accuracyPct = accuracyPctFromCounts(correct, withGroundTruth);
+    } else if (accRaw != null && accRaw !== '') {
       const v = parseFloat(String(accRaw));
-      if (Number.isFinite(v)) accuracyPct = Math.round(v * 10) / 10;
-    } else if (withGroundTruth > 0) {
-      accuracyPct = Math.round((1000 * correct) / withGroundTruth) / 10;
+      if (Number.isFinite(v)) accuracyPct = roundPortalAccuracyConfidencePct(v);
     }
     out.push({
       dial: d,
@@ -94,7 +99,7 @@ export function dialStatsFromPerImageRows(rows) {
       ) {
         correct += 1;
       }
-      const conf = normalizeConfidencePct(
+      const conf = confidencePctFromRaw(
         row[`dial${d}_composite_confidence`] ?? row[`dial${d}_stage2_kp_model_confidence`],
       );
       if (conf != null) confs.push(conf);
@@ -103,11 +108,10 @@ export function dialStatsFromPerImageRows(rows) {
       dial: d,
       withGroundTruth,
       correct,
-      accuracyPct:
-        withGroundTruth > 0 ? Math.round((1000 * correct) / withGroundTruth) / 10 : null,
+      accuracyPct: accuracyPctFromCounts(correct, withGroundTruth),
       confidencePct:
         confs.length > 0
-          ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(confs.reduce((a, b) => a + b, 0) / confs.length)
           : null,
     });
   }
@@ -116,10 +120,11 @@ export function dialStatsFromPerImageRows(rows) {
 
 /** @param {{ summary: Record<string, unknown>; perImageRows?: Record<string, string>[] }} detail */
 export function resolveDialStats(detail) {
-  const fromSummary = dialStatsFromCsvSummary(detail.summary);
-  if (fromSummary.some((d) => d.withGroundTruth > 0)) return fromSummary;
-  if (detail.perImageRows?.length) return dialStatsFromPerImageRows(detail.perImageRows);
-  return fromSummary;
+  if (detail.perImageRows?.length) {
+    const fromRows = dialStatsFromPerImageRows(detail.perImageRows);
+    if (fromRows.some((d) => d.withGroundTruth > 0)) return fromRows;
+  }
+  return dialStatsFromCsvSummary(detail.summary);
 }
 
 /**
@@ -133,8 +138,9 @@ export function applyUnitTestDetailToManualMetrics(summary, perImageRows, existi
 
   const acc = summary.accuracyPercent;
   if (acc != null && Number.isFinite(Number(acc))) {
-    next.exactReadingAccuracyPct = Number(acc);
-    next.readAccuracyUt = Number(acc);
+    const accPct = roundPortalAccuracyConfidencePct(Number(acc));
+    next.exactReadingAccuracyPct = accPct;
+    next.readAccuracyUt = accPct;
     appliedLabels.push('Exact reading accuracy', 'Read acc. UT');
   }
 

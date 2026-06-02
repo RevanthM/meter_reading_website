@@ -11,12 +11,13 @@ import {
 } from '../utils/pipelineAnalyticsStory';
 import DialPctDonut from './DialPctDonut';
 import type { LatestDialAppMetric } from '../constants/pipelineChartTheme';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 const ACCURACY_FILL = '#0d9488';
 const CONFIDENCE_FILL = '#3b82f6';
 
 function fmtPct(v: number | null | undefined): string {
-  return v != null && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
+  return formatPortalAccuracyConfidencePct(v);
 }
 
 function fmtNum(v: number | null | undefined): string {

@@ -6,11 +6,12 @@ import {
   deltaTone,
   formatDeltaPp,
 } from '../utils/pipelineAnalyticsStory';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 function fmtValue(metric: 'images' | 'accuracy' | 'confidence', v: number | null): string {
   if (v == null || !Number.isFinite(v)) return '—';
   if (metric === 'images') return v.toLocaleString();
-  return `${v.toFixed(1)}%`;
+  return formatPortalAccuracyConfidencePct(v);
 }
 
 type Props = {

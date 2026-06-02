@@ -27,6 +27,7 @@ import {
 } from '../constants/pipelineChartTheme';
 import { inferProductLineForRow } from '../constants/factoryStages';
 import { isEstimatedEvalMetrics } from '../utils/iterationMetricsEnrichment';
+import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 const STATUS_VISUAL: Record<string, { fill: string; label: string }> = {
   Completed: { fill: '#16a34a', label: 'Completed' },
@@ -58,6 +59,10 @@ type Props = {
   /** Active pipeline filter label for empty-state copy. */
   pipelineFilter?: ChartPipelineFilter;
 };
+
+function pctAccConfLabel(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v) ? formatPortalAccuracyConfidencePct(v) : '';
+}
 
 function pctLabel(v: unknown): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '';
@@ -260,17 +265,20 @@ const PipelineIterationsCharts: FC<Props> = ({
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #e2e8f0)" />
                   <XAxis type="number" domain={[55, 100]} tickFormatter={(v) => `${v}%`} />
                   <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v: number, name: string) => [formatPortalAccuracyConfidencePct(v), name]}
+                  />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar dataKey="sim" name="Sim confidence" radius={[0, 4, 4, 0]}>
-                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
+                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctAccConfLabel} />
                     {confidenceData.map((d) => {
                       const theme = chartThemeForLine(d.line);
                       return <Cell key={`${d.id}-sim`} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
                     })}
                   </Bar>
                   <Bar dataKey="read" name="App confidence" radius={[0, 4, 4, 0]}>
-                    <LabelList dataKey="read" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
+                    <LabelList dataKey="read" position="right" fontSize={10} fontWeight={600} formatter={pctAccConfLabel} />
                     {confidenceData.map((d) => {
                       const theme = chartThemeForLine(d.line);
                       return <Cell key={`${d.id}-read`} fill={theme.fill} stroke={theme.stroke} strokeWidth={1} />;
@@ -300,14 +308,16 @@ const PipelineIterationsCharts: FC<Props> = ({
                   <YAxis type="category" dataKey="label" width={148} tick={{ fontSize: 11 }} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    formatter={(v: number, name: string, item: { payload?: { estimated?: boolean } }) => [
-                      `${v.toFixed(1)}%${item?.payload?.estimated && name === 'Read accuracy' ? ' (estimated)' : ''}`,
-                      name,
-                    ]}
+                    formatter={(v: number, name: string, item: { payload?: { estimated?: boolean } }) => {
+                      const base = formatPortalAccuracyConfidencePct(v);
+                      const suffix =
+                        item?.payload?.estimated && name === 'Read accuracy' ? ' (estimated)' : '';
+                      return [`${base}${suffix}`, name];
+                    }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar dataKey="sim" name="Sim accuracy" radius={[0, 4, 4, 0]}>
-                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctLabel} />
+                    <LabelList dataKey="sim" position="right" fontSize={10} fontWeight={600} formatter={pctAccConfLabel} />
                     {accuracyData.map((d) => {
                       const theme = chartThemeForLine(d.line);
                       return <Cell key={`${d.id}-sim`} fill={theme.fillMuted} stroke={theme.stroke} strokeWidth={1} />;
@@ -320,7 +330,8 @@ const PipelineIterationsCharts: FC<Props> = ({
                       fontSize={10}
                       fontWeight={600}
                       formatter={(v: number | string, _n: string, item: { payload?: { estimated?: boolean } }) => {
-                        const base = typeof v === 'number' ? `${v.toFixed(0)}%` : String(v);
+                        const base =
+                          typeof v === 'number' ? formatPortalAccuracyConfidencePct(v) : String(v);
                         return item?.payload?.estimated ? `${base}*` : base;
                       }}
                     />

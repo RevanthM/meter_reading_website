@@ -4,9 +4,17 @@
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
-import { countReadsCorrectedFromItem, sessionItemToPerImageRow } from './fieldTestDerive.js';
+import {
+  captureModelReadingCorrect,
+  countReadsCorrectedFromItem,
+  filterFieldTestScorableSessions,
+  incorrectDialNumbersFromItem,
+  sessionItemToPerImageRow,
+} from './fieldTestDerive.js';
+import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-const ROLLUP_VERSION = 1;
+export const FIELD_TEST_ROLLUP_VERSION = 3;
+const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
   const wt = String(workType || '1000').trim() || '1000';
@@ -19,6 +27,24 @@ function parseReadingMatch(raw) {
   if (t === 'true' || t === '1') return true;
   if (t === 'false' || t === '0') return false;
   return null;
+}
+
+/** Per-image confidence % for difficulty tiers (session avg, else mean of dial confidences). */
+function imageConfidencePctFromRow(row) {
+  const sessionConf = normalizeConfidencePct(row.average_confidence);
+  const dialConfs = [];
+  for (let d = 1; d <= 4; d += 1) {
+    const c = normalizeConfidencePct(
+      row[`dial${d}_composite_confidence`] ?? row[`dial${d}_confidence`],
+    );
+    if (c != null) dialConfs.push(c);
+  }
+  if (dialConfs.length > 0) {
+    return roundPortalAccuracyConfidencePct(
+      dialConfs.reduce((sum, c) => sum + c, 0) / dialConfs.length,
+    );
+  }
+  return sessionConf;
 }
 
 function difficultyStatsFromRows(perImageRows) {
@@ -50,11 +76,8 @@ function difficultyStatsFromRows(perImageRows) {
         bucket.correct += 1;
       }
     }
-    const conf = parseFloat(row.average_confidence);
-    if (Number.isFinite(conf)) {
-      const pct = conf <= 1 && conf >= 0 ? conf * 100 : conf;
-      bucket.confs.push(pct);
-    }
+    const conf = imageConfidencePctFromRow(row);
+    if (conf != null) bucket.confs.push(conf);
   }
 
   return tiers.map(({ code, label }) => {
@@ -69,10 +92,12 @@ function difficultyStatsFromRows(perImageRows) {
       withGroundTruth: b.withGroundTruth,
       correct: b.correct,
       accuracyPct:
-        b.withGroundTruth > 0 ? Math.round((1000 * b.correct) / b.withGroundTruth) / 10 : null,
+        b.withGroundTruth > 0
+          ? roundPortalAccuracyConfidencePct((100 * b.correct) / b.withGroundTruth)
+          : null,
       confidencePct:
         b.confs.length > 0
-          ? Math.round((b.confs.reduce((a, c) => a + c, 0) / b.confs.length) * 10) / 10
+          ? roundPortalAccuracyConfidencePct(b.confs.reduce((sum, c) => sum + c, 0) / b.confs.length)
           : null,
     };
   });
@@ -84,7 +109,10 @@ function countReads(perImageRows, sessionItems = []) {
   let readsCorrect = 0;
   let readsCorrected = 0;
 
-  for (const row of perImageRows) {
+  for (let i = 0; i < perImageRows.length; i += 1) {
+    const row = perImageRows[i];
+    const item = sessionItems[i];
+    const incorrectDials = item ? new Set(incorrectDialNumbersFromItem(item)) : new Set();
     const corrected = parseInt(row.reads_corrected_count || '0', 10) || 0;
     if (corrected > 0) readsCorrected += corrected;
 
@@ -93,8 +121,7 @@ function countReads(perImageRows, sessionItems = []) {
       if (exp === '' || exp == null) continue;
       totalReads += 1;
       readsWithGroundTruth += 1;
-      const match = parseReadingMatch(row[`dial${d}_digit_match`]);
-      if (match === true) readsCorrect += 1;
+      if (!incorrectDials.has(d)) readsCorrect += 1;
     }
   }
 
@@ -110,40 +137,42 @@ function countReads(perImageRows, sessionItems = []) {
  * @param {object[]} sessionItems — Dynamo items (field captures)
  */
 export function buildFieldTestRollup(cycle, sessionItems) {
-  const perImageRows = sessionItems.map((item) => sessionItemToPerImageRow(item));
-  const captureCount = sessionItems.length;
-  const readStats = countReads(perImageRows, sessionItems);
+  const allInCycle = Array.isArray(sessionItems) ? sessionItems : [];
+  const scorableItems = filterFieldTestScorableSessions(allInCycle);
+  const perImageRows = scorableItems.map((item) => sessionItemToPerImageRow(item));
+  const captureCount = scorableItems.length;
+  const readStats = countReads(perImageRows, scorableItems);
 
   let capturesCorrect = 0;
   let capturesWithGroundTruth = 0;
   const confs = [];
 
-  for (const row of perImageRows) {
+  for (let i = 0; i < perImageRows.length; i += 1) {
+    const row = perImageRows[i];
+    const item = scorableItems[i];
     const expected = String(row.expected_reading_from_filename || '').trim();
     if (expected) {
       capturesWithGroundTruth += 1;
-      const match = parseReadingMatch(row.overall_reading_match);
-      if (match === true) capturesCorrect += 1;
-      else if (match !== false && (row.predicted_reading || '').trim() === expected) {
+      if (item ? captureModelReadingCorrect(item) : parseReadingMatch(row.overall_reading_match) === true) {
         capturesCorrect += 1;
       }
     }
-    const c = parseFloat(row.average_confidence);
-    if (Number.isFinite(c)) confs.push(c <= 1 ? c * 100 : c);
+    const c = imageConfidencePctFromRow(row);
+    if (c != null) confs.push(c);
   }
 
   const accuracyPercent =
     capturesWithGroundTruth > 0
-      ? Math.round((1000 * capturesCorrect) / capturesWithGroundTruth) / 10
+      ? roundPortalAccuracyConfidencePct((100 * capturesCorrect) / capturesWithGroundTruth)
       : null;
   const averageConfidencePct =
     confs.length > 0
-      ? Math.round((confs.reduce((a, b) => a + b, 0) / confs.length) * 10) / 10
+      ? roundPortalAccuracyConfidencePct(confs.reduce((a, b) => a + b, 0) / confs.length)
       : null;
 
   const correctionPct =
     readStats.totalReads > 0
-      ? Math.round((1000 * readStats.readsCorrected) / readStats.totalReads) / 10
+      ? roundPortalAccuracyConfidencePct((100 * readStats.readsCorrected) / readStats.totalReads)
       : null;
 
   return {
@@ -154,6 +183,8 @@ export function buildFieldTestRollup(cycle, sessionItems) {
     startDate: cycle.startDate,
     endDate: cycle.endDate,
     builtAt: new Date().toISOString(),
+    cycleCaptureCount: allInCycle.length,
+    excludedFromResultsCount: Math.max(0, allInCycle.length - scorableItems.length),
     captureCount,
     totalReads: readStats.totalReads,
     readsWithGroundTruth: readStats.readsWithGroundTruth,
