@@ -6,8 +6,8 @@
  * 2. Portal — reviewer checks the capture; Correct / Incorrect is the final verdict for metrics.
  * 3. If the reviewer marks Incorrect, the capture counts as wrong even when per-dial flags are missing in Dynamo.
  *
- * Model accuracy compares the on-device ML read (`ml_raw_prediction`) to ground truth derived from
- * that final reviewer verdict (and user correction when the reviewer said Incorrect).
+ * Confusion matrix / accuracy: predicted = `ml_raw_prediction`; expected (GT) follows reviewer verdict —
+ * Incorrect → `user_correction` (reviewer truth) first; Correct → accepted read (`final_reading` / `ml_raw`).
  */
 import { normalizeFieldTestCaptureTrigger } from './fieldTestCaptureTrigger.js';
 
@@ -55,25 +55,23 @@ function pickGroundTruthReading(candidates) {
 /**
  * Ground-truth reading for field-test per-dial expected digits (reviewer truth, not model output).
  * - Dial corrections flagged → user correction chain.
- * - Reviewer marked incorrect → prefer user_correction (true reading when ML was wrong).
+ * - Reviewer marked incorrect → GT is reviewer truth (`user_correction` before `final_reading` / ML).
  * - Reviewer marked correct, no dial flags → prefer ml_raw over stale user_correction (Dynamo gap).
  */
 export function finalReadingFromMetadata(metadata) {
   const hadDialCorrections = countReadsCorrectedFromItem(metadata) > 0;
-  const withFinal = [
-    metadata?.final_reading,
-    metadata?.user_correction,
-    metadata?.ml_raw_prediction,
-    metadata?.ml_prediction,
-  ];
-
-  if (hadDialCorrections) return pickGroundTruthReading(withFinal);
-
   const feedback = String(metadata?.feedback_type ?? '').trim().toLowerCase();
   const reviewerWrong = metadata?.is_correct === false || feedback === 'incorrect';
   const reviewerRight = metadata?.is_correct === true || feedback === 'correct';
 
-  if (reviewerWrong) return pickGroundTruthReading(withFinal);
+  if (hadDialCorrections || reviewerWrong) {
+    return pickGroundTruthReading([
+      metadata?.user_correction,
+      metadata?.final_reading,
+      metadata?.ml_raw_prediction,
+      metadata?.ml_prediction,
+    ]);
+  }
 
   if (reviewerRight) {
     return pickGroundTruthReading([
