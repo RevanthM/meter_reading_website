@@ -1,5 +1,13 @@
 /**
  * Derive field-test analytics fields from iOS metadata.json (no separate manifest).
+ *
+ * Capture lifecycle (field test):
+ * 1. iOS — user photographs the meter; they either fix dials/readings on device or accept as correct.
+ * 2. Portal — reviewer checks the capture; Correct / Incorrect is the final verdict for metrics.
+ * 3. If the reviewer marks Incorrect, the capture counts as wrong even when per-dial flags are missing in Dynamo.
+ *
+ * Model accuracy compares the on-device ML read (`ml_raw_prediction`) to ground truth derived from
+ * that final reviewer verdict (and user correction when the reviewer said Incorrect).
  */
 import { normalizeFieldTestCaptureTrigger } from './fieldTestCaptureTrigger.js';
 
@@ -129,6 +137,17 @@ export function countReadsCorrectedFromItem(item) {
 /** True when the on-device model needed no dial corrections (field-test ground truth). */
 export function captureModelReadingCorrect(item) {
   return countReadsCorrectedFromItem(item) === 0;
+}
+
+/**
+ * Reviewer final check failed — portal Incorrect / is_correct false.
+ * This is the source of truth for “marked incorrect” in field-test Results (not iOS per-dial flags alone).
+ */
+export function captureMarkedIncorrectByReviewer(item) {
+  if (!item) return false;
+  const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
+  if (feedback === 'incorrect') return true;
+  return item.is_correct === false;
 }
 
 /**

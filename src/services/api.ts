@@ -596,6 +596,12 @@ export interface FieldTestRollup {
   readsWithGroundTruth: number;
   readsCorrect: number;
   readsCorrected: number;
+  /** Reviewer marked capture incorrect (session verdict). */
+  capturesMarkedIncorrect?: number;
+  /** Sum of user_incorrect_dial_numbers / reads_corrected_count when present. */
+  explicitDialCorrections?: number;
+  /** Dials where model digit ≠ reviewer ground truth. */
+  dialsModelWrong?: number;
   correctionPct: number | null;
   summary: UnitTestCsvSummary;
   imageDifficultyBreakdown: UnitTestImageDifficultyTier[];

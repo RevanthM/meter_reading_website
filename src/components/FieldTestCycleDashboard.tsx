@@ -67,11 +67,20 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
           </strong>
         </div>
         <div className="field-test-kpi-card">
-          <span className="field-test-kpi-label">Reads corrected</span>
-          <strong className="field-test-kpi-value">{rollup.readsCorrected.toLocaleString()}</strong>
+          <span className="field-test-kpi-label">Marked incorrect</span>
+          <strong className="field-test-kpi-value">
+            {(rollup.capturesMarkedIncorrect ?? rollup.readsCorrected).toLocaleString()}
+          </strong>
+          <span className="field-test-kpi-sublabel">
+            {rollup.explicitDialCorrections != null && rollup.explicitDialCorrections > 0
+              ? `${rollup.explicitDialCorrections} dial flags`
+              : rollup.dialsModelWrong != null && rollup.dialsModelWrong > 0
+                ? `${rollup.dialsModelWrong} dial${rollup.dialsModelWrong === 1 ? '' : 's'} wrong vs truth`
+                : 'Reviewer marked incorrect on portal'}
+          </span>
         </div>
         <div className="field-test-kpi-card">
-          <span className="field-test-kpi-label">% corrections</span>
+          <span className="field-test-kpi-label">% marked incorrect</span>
           <strong className="field-test-kpi-value">
             {rollup.correctionPct != null ? `${rollup.correctionPct.toFixed(1)}%` : '—'}
           </strong>

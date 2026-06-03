@@ -5,13 +5,14 @@ import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import {
+  captureMarkedIncorrectByReviewer,
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
   sessionItemToPerImageRow,
 } from './fieldTestDerive.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 6;
+export const FIELD_TEST_ROLLUP_VERSION = 7;
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
@@ -105,12 +106,17 @@ function countReads(perImageRows, sessionItems = []) {
   let totalReads = 0;
   let readsWithGroundTruth = 0;
   let readsCorrect = 0;
-  let readsCorrected = 0;
+  let explicitDialCorrections = 0;
+  let dialsModelWrong = 0;
+  let capturesMarkedIncorrect = 0;
 
   for (let i = 0; i < perImageRows.length; i += 1) {
     const row = perImageRows[i];
-    const corrected = parseInt(row.reads_corrected_count || '0', 10) || 0;
-    if (corrected > 0) readsCorrected += corrected;
+    const item = sessionItems[i];
+    const explicit =
+      parseInt(row.reads_corrected_count || '0', 10) || (item ? countReadsCorrectedFromItem(item) : 0);
+    if (explicit > 0) explicitDialCorrections += explicit;
+    if (item && captureMarkedIncorrectByReviewer(item)) capturesMarkedIncorrect += 1;
 
     for (let d = 1; d <= 4; d++) {
       const exp = row[`dial${d}_expected_digit`];
@@ -118,14 +124,23 @@ function countReads(perImageRows, sessionItems = []) {
       totalReads += 1;
       readsWithGroundTruth += 1;
       if (row[`dial${d}_digit_match`] === 'true') readsCorrect += 1;
+      else if (row[`dial${d}_digit_match`] === 'false') dialsModelWrong += 1;
     }
   }
 
-  if (readsCorrected === 0 && sessionItems.length > 0) {
-    readsCorrected = sessionItems.reduce((sum, item) => sum + countReadsCorrectedFromItem(item), 0);
-  }
+  /** Prefer explicit per-dial flags; else reviewer “incorrect” captures (~12–13 in May cycle). */
+  const readsCorrected =
+    explicitDialCorrections > 0 ? explicitDialCorrections : capturesMarkedIncorrect;
 
-  return { totalReads, readsWithGroundTruth, readsCorrect, readsCorrected };
+  return {
+    totalReads,
+    readsWithGroundTruth,
+    readsCorrect,
+    readsCorrected,
+    explicitDialCorrections,
+    dialsModelWrong,
+    capturesMarkedIncorrect,
+  };
 }
 
 /**
@@ -166,8 +181,8 @@ export function buildFieldTestRollup(cycle, sessionItems) {
       : null;
 
   const correctionPct =
-    readStats.totalReads > 0
-      ? roundPortalAccuracyConfidencePct((100 * readStats.readsCorrected) / readStats.totalReads)
+    captureCount > 0
+      ? roundPortalAccuracyConfidencePct((100 * readStats.capturesMarkedIncorrect) / captureCount)
       : null;
 
   return {
@@ -185,6 +200,9 @@ export function buildFieldTestRollup(cycle, sessionItems) {
     readsWithGroundTruth: readStats.readsWithGroundTruth,
     readsCorrect: readStats.readsCorrect,
     readsCorrected: readStats.readsCorrected,
+    capturesMarkedIncorrect: readStats.capturesMarkedIncorrect,
+    explicitDialCorrections: readStats.explicitDialCorrections,
+    dialsModelWrong: readStats.dialsModelWrong,
     correctionPct,
     summary: {
       imagesProcessed: captureCount,
