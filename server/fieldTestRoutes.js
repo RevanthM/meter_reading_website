@@ -23,7 +23,11 @@ import {
   normalizeFieldTestCaptureTrigger,
 } from './fieldTestCaptureTrigger.js';
 import { matchesFieldTestDatePreset } from './fieldTestDateFilter.js';
-import { deriveFieldTestFromMetadata, fieldTestCaptureToListItem } from './fieldTestDerive.js';
+import {
+  deriveFieldTestFromMetadata,
+  fieldTestCaptureToListItem,
+  isFieldTestPortalCapture,
+} from './fieldTestDerive.js';
 import { sessionItemToReading } from './sessionIndex/metadataMapping.js';
 import { resolvePrimaryListImageKey } from './sessionIndex/index.js';
 import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
@@ -49,6 +53,7 @@ function prepareSessionItem(item) {
     is_manually_reviewed: item.is_manually_reviewed,
     is_human_reviewed: item.is_human_reviewed,
     feedback_type: item.feedback_type,
+    folder_status: item.folder_status,
     is_correct: item.is_correct,
     had_user_correction: item.had_user_correction,
   });
@@ -56,11 +61,7 @@ function prepareSessionItem(item) {
 }
 
 function isFieldSessionItem(item) {
-  if (item.field_test_capture === true) return true;
-  return (
-    String(item.upload_mode || '').trim().toLowerCase() === 'field' &&
-    String(item.source_type || 'field').toLowerCase() === 'field'
-  );
+  return isFieldTestPortalCapture(item);
 }
 
 function matchesCaptureFilters(capture, filters) {
@@ -125,11 +126,14 @@ export function registerFieldTestRoutes(app, deps) {
   }
 
   function isFieldTestReading(reading) {
-    if (reading?.fieldTestCapture === true) return true;
-    return (
-      String(reading?.uploadMode || '').trim().toLowerCase() === 'field' &&
-      String(reading?.type || 'field').toLowerCase() === 'field'
-    );
+    if (!reading) return false;
+    return isFieldTestPortalCapture({
+      field_test_capture: reading.fieldTestCapture === true,
+      upload_mode: reading.uploadMode,
+      source_type: reading.type,
+      feedback_type: reading.feedbackType,
+      folder_status: reading.status,
+    });
   }
 
   async function loadFieldSessionItems(workType) {

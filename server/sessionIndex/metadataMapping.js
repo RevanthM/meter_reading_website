@@ -144,6 +144,7 @@ export function metadataToSessionItem(metadata, ctx) {
     const derived = deriveFieldTestFromMetadata({
       ...metadata,
       dial_details: dialDetails,
+      folder_status: status,
     });
     item.image_difficulty = derived.image_difficulty;
     item.on_tick_dial_count = derived.on_tick_dial_count;

@@ -37,10 +37,29 @@ function normalizeDifficulty(raw) {
   return 'normal';
 }
 
+/**
+ * Ground-truth reading for field-test per-dial expected digits.
+ * When the reviewer did not flag dial corrections, prefer `final_reading` then the raw
+ * model read (`ml_raw_prediction`) over `user_correction` so a stale Dynamo row without
+ * `final_reading` still matches S3 (e.g. 1814 vs user_correction 1813 → dial 4 is 4 not 3).
+ */
 function finalReadingFromMetadata(metadata) {
-  const raw = String(
-    metadata.final_reading ?? metadata.user_correction ?? metadata.ml_prediction ?? '',
-  ).replace(/\D/g, '');
+  const hadDialCorrections = countReadsCorrectedFromItem(metadata) > 0;
+  const candidates = hadDialCorrections
+    ? [
+        metadata?.final_reading,
+        metadata?.user_correction,
+        metadata?.ml_raw_prediction,
+        metadata?.ml_prediction,
+      ]
+    : [
+        metadata?.final_reading,
+        metadata?.ml_raw_prediction,
+        metadata?.user_correction,
+        metadata?.ml_prediction,
+      ];
+  const picked = candidates.find((v) => v != null && String(v).trim() !== '');
+  const raw = String(picked ?? '').replace(/\D/g, '');
   if (!raw) return '';
   return raw.padStart(4, '0').slice(-4);
 }
@@ -81,12 +100,26 @@ export function captureModelReadingCorrect(item) {
 }
 
 /**
+ * Reviewer moved the session to No dials / Not sure (S3 folder or metadata feedback).
+ * These captures are excluded from field-test Images and Results even when `field_test_capture` is set.
+ */
+export function isFieldTestExcludedOutcome(item) {
+  const feedback = String(item?.feedback_type ?? '').trim().toLowerCase();
+  if (feedback === 'no_dials' || feedback === 'not_sure') return true;
+
+  const status = String(item?.folder_status ?? '').trim().toLowerCase();
+  if (status === 'no_dials' || status === 'not_sure') return true;
+
+  return false;
+}
+
+/**
  * Include in field-test Results metrics only when the reviewer chose Correct or Incorrect.
  * Excludes No dials detected, Not sure, and other non-verdict outcomes.
  */
 export function isFieldTestScorableCapture(item) {
   if (!item) return false;
-  if (item.field_test_capture === true) return true;
+  if (isFieldTestExcludedOutcome(item)) return false;
 
   const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
   if (feedback === 'correct' || feedback === 'incorrect') return true;
@@ -96,6 +129,19 @@ export function isFieldTestScorableCapture(item) {
   if (status.startsWith('incorrect')) return true;
 
   return false;
+}
+
+/** Field upload rows shown on Field test Images / list (same exclusion as scorable). */
+export function isFieldTestPortalCapture(item) {
+  if (!item) return false;
+  if (isFieldTestExcludedOutcome(item)) return false;
+
+  if (item.field_test_capture === true) return true;
+
+  return (
+    String(item.upload_mode || '').trim().toLowerCase() === 'field' &&
+    String(item.source_type || '').trim().toLowerCase() === 'field'
+  );
 }
 
 /** @param {object[]} items */
@@ -202,7 +248,11 @@ export function deriveFieldTestFromMetadata(metadata) {
     per_dial_compact: JSON.stringify(perDial),
     field_test_capture:
       String(metadata?.upload_mode || '').trim().toLowerCase() === 'field' &&
-      metadata?.is_manually_reviewed === true,
+      (metadata?.is_manually_reviewed === true || metadata?.is_human_reviewed === true) &&
+      !isFieldTestExcludedOutcome({
+        feedback_type: metadata?.feedback_type,
+        folder_status: metadata?.folder_status,
+      }),
     dial_count: dialCount,
     reads_with_ground_truth: readsWithGroundTruth,
     reads_correct: readsCorrect,
@@ -231,8 +281,10 @@ export function perDialFromItem(item) {
           final_reading: item.final_reading,
           user_correction: item.user_correction,
           ml_prediction: item.ml_prediction,
+          ml_raw_prediction: item.ml_raw_prediction,
           user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
           user_corrected_positions: item.user_corrected_positions,
+          reads_corrected_count: item.reads_corrected_count,
         }).per_dial_compact,
       );
       if (Array.isArray(parsed)) return parsed;
@@ -247,10 +299,15 @@ export function perDialFromItem(item) {
 export function sessionItemToPerImageRow(item) {
   const difficulty = normalizeDifficulty(item.image_difficulty);
   const code = difficultyToCode(difficulty);
-  const finalReading = String(item.final_reading || item.user_correction || item.ml_prediction || '')
-    .replace(/\D/g, '')
-    .padStart(4, '0')
-    .slice(-4);
+  const finalReading = finalReadingFromMetadata({
+    final_reading: item.final_reading,
+    user_correction: item.user_correction,
+    ml_prediction: item.ml_prediction,
+    ml_raw_prediction: item.ml_raw_prediction,
+    user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
+    user_corrected_positions: item.user_corrected_positions,
+    reads_corrected_count: item.reads_corrected_count,
+  });
   let perDial = [];
   if (Array.isArray(item.dial_details) && item.dial_details.length > 0) {
     try {
@@ -263,6 +320,7 @@ export function sessionItemToPerImageRow(item) {
           ml_raw_prediction: item.ml_raw_prediction,
           user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
           user_corrected_positions: item.user_corrected_positions,
+          reads_corrected_count: item.reads_corrected_count,
         }).per_dial_compact,
       );
     } catch {

@@ -35,8 +35,17 @@ export function fieldTestCaptureFromReading(r: S3MeterReading): FieldTestCapture
   };
 }
 
+function isFieldTestExcludedOutcome(reading: S3MeterReading): boolean {
+  const feedback = String(reading.feedbackType || '').trim().toLowerCase();
+  if (feedback === 'no_dials' || feedback === 'not_sure') return true;
+  const status = String(reading.status || '').trim().toLowerCase();
+  if (status === 'no_dials' || status === 'not_sure') return true;
+  return false;
+}
+
 /** Same rules as server `isFieldTestReading` in fieldTestRoutes.js */
 export function isFieldTestReading(r: S3MeterReading): boolean {
+  if (isFieldTestExcludedOutcome(r)) return false;
   if (r.fieldTestCapture === true) return true;
   return (
     String(r.uploadMode || '').trim().toLowerCase() === 'field' &&

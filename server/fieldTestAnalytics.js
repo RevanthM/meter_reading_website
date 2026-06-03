@@ -13,7 +13,7 @@ import {
 } from './fieldTestDerive.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 3;
+export const FIELD_TEST_ROLLUP_VERSION = 5;
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
