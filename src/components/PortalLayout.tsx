@@ -139,7 +139,7 @@ const FIELD_TEST_IMAGES_NAV: NavLeaf = {
   path: '/field-test/images',
   label: 'Images',
   description: 'Field captures in cycle',
-  hint: 'Filter by cycle, user, difficulty, reading',
+  hint: 'Map or grid · filter by cycle, user, difficulty',
   icon: <ImageIcon size={17} strokeWidth={2} />,
 };
 

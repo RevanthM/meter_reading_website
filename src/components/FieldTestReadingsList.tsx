@@ -8,6 +8,9 @@ import {
 import { Calendar, ClipboardList, Eye, MapPin, Search, SlidersHorizontal, User, X, ArrowDown, ArrowUp } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
+import CaptureViewModeToggle from './CaptureViewModeToggle';
+import { CaptureMapViewKeepAlive } from './CaptureMapView';
+import { useCaptureViewMode } from '../hooks/useCaptureViewMode';
 import {
   fetchFieldTestCaptures,
   fetchFieldTestCycles,
@@ -41,6 +44,7 @@ import { readingMatchesDateRangeWindow } from '../utils/fieldTestReadings';
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
 const SEARCH_DEBOUNCE_MS = 350;
+const FIELD_TEST_VIEW_MODE_KEY = 'portal.fieldTest.viewMode';
 
 const FIELD_TEST_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
 type FieldTestCohortId = (typeof FIELD_TEST_COHORT_IDS)[number];
@@ -114,6 +118,7 @@ const FieldTestReadingsList: FC = () => {
     sortDir: 'desc',
   });
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [viewMode, setViewMode] = useCaptureViewMode(FIELD_TEST_VIEW_MODE_KEY);
 
   const cycleIdParam = searchParams.get('cycleId') || '';
   const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
@@ -309,6 +314,26 @@ const FieldTestReadingsList: FC = () => {
       sortDir: prev.sortDir === 'desc' ? 'asc' : 'desc',
     }));
   };
+
+  const openReading = useCallback(
+    (reading: S3MeterReading) => {
+      const sp = new URLSearchParams(searchParams);
+      sp.set('workType', workType);
+      navigate(
+        {
+          pathname: `/reading/${encodeURIComponent(reading.id)}`,
+          search: sp.toString() ? `?${sp.toString()}` : '',
+        },
+        {
+          state: {
+            readingQueueIds: filteredReadings.map((r) => r.id),
+            listReturn: { pathname: location.pathname, search: location.search },
+          },
+        },
+      );
+    },
+    [navigate, searchParams, workType, filteredReadings, location.pathname, location.search],
+  );
 
   const countLabel = useMemo(() => {
     if (initialLoading && allReadings.length === 0) return 'Loading…';
@@ -544,6 +569,14 @@ const FieldTestReadingsList: FC = () => {
                 ) : null}
               </div>
             </div>
+            <div className="readings-list-filter-toolbar-row field-test-readings-view-mode-row">
+              <CaptureViewModeToggle mode={viewMode} onChange={setViewMode} />
+              {viewMode === 'map' ? (
+                <span className="field-test-view-mode-hint">
+                  Tap a pin for captures at that spot · same filters as list
+                </span>
+              ) : null}
+            </div>
             </>
           ) : null}
         </div>
@@ -567,6 +600,14 @@ const FieldTestReadingsList: FC = () => {
         ) : null}
 
         {filteredReadings.length > 0 ? (
+          <CaptureMapViewKeepAlive
+            active={viewMode === 'map'}
+            readings={filteredReadings}
+            onSelectReading={openReading}
+          />
+        ) : null}
+
+        {filteredReadings.length > 0 && viewMode === 'list' ? (
           <div className={`table-container${refreshing ? ' table-container--refreshing' : ''}`}>
             <table className="readings-table">
               <thead>
@@ -664,25 +705,7 @@ const FieldTestReadingsList: FC = () => {
                         <span className="meter-value">{reading.meterValue}</span>
                       </td>
                       <td data-label="Actions">
-                        <button
-                          className="view-button"
-                          onClick={() => {
-                            const sp = new URLSearchParams(searchParams);
-                            sp.set('workType', workType);
-                            navigate(
-                              {
-                                pathname: `/reading/${encodeURIComponent(reading.id)}`,
-                                search: sp.toString() ? `?${sp.toString()}` : '',
-                              },
-                              {
-                                state: {
-                                  readingQueueIds: filteredReadings.map((r) => r.id),
-                                  listReturn: { pathname: location.pathname, search: location.search },
-                                },
-                              },
-                            );
-                          }}
-                        >
+                        <button className="view-button" onClick={() => openReading(reading)}>
                           <Eye size={16} />
                           <span>View</span>
                         </button>

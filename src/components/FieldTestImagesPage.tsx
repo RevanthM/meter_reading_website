@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
-import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ImageIcon, Loader2, Search, X } from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
+import CaptureViewModeToggle from './CaptureViewModeToggle';
+import { CaptureMapViewKeepAlive } from './CaptureMapView';
+import { useCaptureViewMode } from '../hooks/useCaptureViewMode';
 import FieldTestCaptureLightbox from './FieldTestCaptureLightbox';
 import {
   downloadUrlAsFile,
@@ -15,7 +18,7 @@ import {
   type S3MeterReading,
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
-import { canViewFieldTestResults } from '../utils/portalWorkMode';
+import { canViewFieldTestImages } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import {
   difficultyToCode,
@@ -59,9 +62,11 @@ function fieldTestCaptureDisplayFileName(cap: FieldTestCaptureRow): string {
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 const SEARCH_DEBOUNCE_MS = 350;
 const CAPTURES_PAGE_LIMIT = 96;
+const FIELD_TEST_IMAGES_VIEW_MODE_KEY = 'portal.fieldTest.images.viewMode';
 
 const FieldTestImagesPage: FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
@@ -77,6 +82,7 @@ const FieldTestImagesPage: FC = () => {
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [viewMode, setViewMode] = useCaptureViewMode(FIELD_TEST_IMAGES_VIEW_MODE_KEY);
   const presignSeqRef = useRef(0);
   const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
     query: '',
@@ -97,11 +103,7 @@ const FieldTestImagesPage: FC = () => {
 
   useEffect(() => {
     if (!outletCtx?.workMode) return;
-    if (outletCtx.workMode === 'reviewer' || outletCtx.workMode === 'test_data_reviewer') {
-      navigate('/field-test', { replace: true });
-      return;
-    }
-    if (!canViewFieldTestResults(outletCtx.workMode)) {
+    if (!canViewFieldTestImages(outletCtx.workMode)) {
       navigate('/', { replace: true });
     }
   }, [navigate, outletCtx?.workMode]);
@@ -183,17 +185,21 @@ const FieldTestImagesPage: FC = () => {
 
   const cities = useMemo(() => buildFieldTestCityOptions(allReadings), [allReadings]);
 
-  const filteredCaptures = useMemo(() => {
+  const filteredReadings = useMemo(() => {
     let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, presetWindow));
     list = filterFieldTestReadings(list, filterInput);
-    list = [...list].sort((a, b) => {
+    return [...list].sort((a, b) => {
       const cmp = String(b.dateOfReading || b.createdAt || '').localeCompare(
         String(a.dateOfReading || a.createdAt || ''),
       );
       return filters.sortDir === 'desc' ? cmp : -cmp;
     });
-    return list.map(fieldTestCaptureFromReading);
   }, [allReadings, presetWindow, filterInput, filters.sortDir]);
+
+  const filteredCaptures = useMemo(
+    () => filteredReadings.map(fieldTestCaptureFromReading),
+    [filteredReadings],
+  );
 
   const visibleCaptures = useMemo(
     () => filteredCaptures.slice(0, CAPTURES_PAGE_LIMIT),
@@ -319,6 +325,26 @@ const FieldTestImagesPage: FC = () => {
     presigning,
     refreshing,
   ]);
+
+  const openReading = useCallback(
+    (reading: S3MeterReading) => {
+      const sp = new URLSearchParams(searchParams);
+      sp.set('workType', workType);
+      navigate(
+        {
+          pathname: `/reading/${encodeURIComponent(reading.id)}`,
+          search: sp.toString() ? `?${sp.toString()}` : '',
+        },
+        {
+          state: {
+            readingQueueIds: filteredReadings.map((r) => r.id),
+            listReturn: { pathname: location.pathname, search: location.search },
+          },
+        },
+      );
+    },
+    [navigate, searchParams, workType, filteredReadings, location.pathname, location.search],
+  );
 
   const openLightbox = (index: number) => {
     const cap = capturesWithUrls[index];
@@ -538,17 +564,30 @@ const FieldTestImagesPage: FC = () => {
                   ) : null}
                 </div>
               </div>
+              <div className="readings-list-filter-toolbar-row field-test-readings-view-mode-row">
+                <CaptureViewModeToggle mode={viewMode} onChange={setViewMode} />
+                {viewMode === 'map' ? (
+                  <span className="field-test-view-mode-hint">
+                    Tap a pin for captures at that spot · grid view shows image thumbnails
+                  </span>
+                ) : (
+                  <span className="field-test-view-mode-hint">
+                    Grid shows up to {CAPTURES_PAGE_LIMIT} previews · switch to Map for all GPS pins
+                  </span>
+                )}
+              </div>
             </>
           ) : null}
         </div>
       </header>
 
+      <main className="list-content field-test-images-list-content">
       {initialLoading && allReadings.length === 0 ? (
         <ListViewLoading message="Loading field test images…" />
       ) : null}
       {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-      {!initialLoading && !err && filteredCaptures.length === 0 ? (
+      {!initialLoading && !err && filteredReadings.length === 0 ? (
         <p className="unit-test-images-page-message pipeline-iterations-empty">
           {allReadings.length === 0
             ? 'No field test images yet. New iOS field uploads appear here after Dynamo sync.'
@@ -556,7 +595,15 @@ const FieldTestImagesPage: FC = () => {
         </p>
       ) : null}
 
-      {!initialLoading && capturesWithUrls.length > 0 ? (
+      {filteredReadings.length > 0 ? (
+        <CaptureMapViewKeepAlive
+          active={viewMode === 'map'}
+          readings={filteredReadings}
+          onSelectReading={openReading}
+        />
+      ) : null}
+
+      {!initialLoading && !err && filteredReadings.length > 0 && viewMode === 'list' && capturesWithUrls.length > 0 ? (
         <div className="unit-test-images-grid unit-test-images-page-grid">
           {capturesWithUrls.map((cap, index) => {
             const downloading = downloadingKey === cap.sessionId;
@@ -615,6 +662,7 @@ const FieldTestImagesPage: FC = () => {
           })}
         </div>
       ) : null}
+      </main>
 
       {lightboxIndex != null &&
       (capturesWithUrls[lightboxIndex]?.url || capturesWithUrls[lightboxIndex]?.fullMeterUrl) ? (

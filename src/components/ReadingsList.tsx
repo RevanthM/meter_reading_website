@@ -49,6 +49,10 @@ import {
 import { calendarDayKeyInPortalTz, formatReadingShortDate } from '../utils/readingDisplayDates';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
+import CaptureViewModeToggle from './CaptureViewModeToggle';
+import { CaptureMapViewKeepAlive } from './CaptureMapView';
+import { useCaptureViewMode } from '../hooks/useCaptureViewMode';
+import { captureLocationListLine } from '../utils/captureLocation';
 
 /** When browsing all statuses, surface awaiting-review (incorrect_new) first, then pipeline order, then correct. */
 const LIST_PRIORITY: Record<string, number> = {
@@ -231,6 +235,7 @@ const ReadingsList: FC = () => {
     bulkUpdateStatus,
     workType,
     dataSource,
+    setDataSource,
     isUsingRealData,
     ensureReadingsLoaded,
     refreshData,
@@ -345,6 +350,9 @@ const ReadingsList: FC = () => {
     setCapturedDraft(capturedParam);
   }, [capturedParam]);
 
+  const viewModeStorageKey = `portal.readingsList.viewMode.${dataSource}`;
+  const [viewMode, setViewMode] = useCaptureViewMode(viewModeStorageKey);
+
   const readings = useMemo(() => {
     const filterKey = listStatusKey;
     const base = getReadingsByStatus(
@@ -391,6 +399,26 @@ const ReadingsList: FC = () => {
     effectiveListSortDir,
     location.search,
   ]);
+
+  const openReading = useCallback(
+    (reading: S3MeterReading) => {
+      const sp = new URLSearchParams(searchParams);
+      sp.set('workType', workType);
+      navigate(
+        {
+          pathname: `/reading/${encodeURIComponent(reading.id)}`,
+          search: sp.toString() ? `?${sp.toString()}` : '',
+        },
+        {
+          state: {
+            readingQueueIds: readings.map((r) => r.id),
+            listReturn: { pathname: location.pathname, search: location.search },
+          },
+        },
+      );
+    },
+    [navigate, searchParams, workType, readings, location.pathname, location.search],
+  );
 
   const clearListFilters = () => setSearchParams({}, { replace: true });
 
@@ -947,10 +975,39 @@ const ReadingsList: FC = () => {
             </button>
           ) : null}
         </div>
+        <div className="readings-list-filter-toolbar-row">
+          <span className="readings-list-filter-label">Source</span>
+          <div className="readings-list-filter-chips readings-list-source-chips">
+            {(
+              [
+                { value: 'all' as const, label: 'All', icon: null },
+                { value: 'field' as const, label: 'Field', icon: <Radio size={14} aria-hidden /> },
+                { value: 'simulator' as const, label: 'Simulator', icon: <Monitor size={14} aria-hidden /> },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`readings-list-filter-chip readings-list-source-chip${dataSource === opt.value ? ' active' : ''}`}
+                onClick={() => setDataSource(opt.value)}
+                aria-pressed={dataSource === opt.value}
+              >
+                {opt.icon}
+                <span>{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="readings-list-filter-toolbar-row field-test-readings-view-mode-row">
+          <CaptureViewModeToggle mode={viewMode} onChange={setViewMode} />
+          <span className="field-test-view-mode-hint">
+            {viewMode === 'map' ? 'Tap a pin to open capture detail' : 'Table view with bulk actions'}
+          </span>
+        </div>
       </div>
 
       {/* Bulk Action Bar */}
-      {selectedIds.size > 0 && (
+      {viewMode === 'list' && selectedIds.size > 0 && (
         <div className="bulk-action-bar">
           <div className="bulk-action-bar-top">
             <div className="selection-info">
@@ -1088,6 +1145,19 @@ const ReadingsList: FC = () => {
         {readingsLoading && readings.length === 0 ? (
           <ListViewLoading message="Loading sessions…" />
         ) : (
+        <>
+        {readings.length > 0 ? (
+          <CaptureMapViewKeepAlive
+            active={viewMode === 'map'}
+            readings={readings}
+            onSelectReading={openReading}
+          />
+        ) : null}
+        {viewMode === 'map' && readings.length === 0 ? (
+          <div className="empty-state">
+            <p>No readings to show on the map for this list and filters.</p>
+          </div>
+        ) : viewMode === 'list' ? (
         <div className="table-container">
           {readingsLoading ? (
             <ListViewLoading variant="inline" message="Refreshing sessions…" />
@@ -1187,7 +1257,9 @@ const ReadingsList: FC = () => {
                       }
                     >
                       <MapPin size={16} className="cell-icon" />
-                      <span>{reading.location}</span>
+                      <span>
+                        {captureLocationListLine(reading.captureLocation) || reading.location || '—'}
+                      </span>
                     </div>
                   </td>
                   <td data-label="Source">
@@ -1269,22 +1341,7 @@ const ReadingsList: FC = () => {
                   <td data-label="Actions">
                     <button
                       className="view-button"
-                      onClick={() => {
-                        const sp = new URLSearchParams(searchParams);
-                        sp.set('workType', workType);
-                        navigate(
-                          {
-                            pathname: `/reading/${encodeURIComponent(reading.id)}`,
-                            search: sp.toString() ? `?${sp.toString()}` : '',
-                          },
-                          {
-                            state: {
-                              readingQueueIds: readings.map((r) => r.id),
-                              listReturn: { pathname: location.pathname, search: location.search },
-                            },
-                          },
-                        );
-                      }}
+                      onClick={() => openReading(reading)}
                       style={{ '--accent': getStatusColor() } as CSSProperties}
                     >
                       <Eye size={16} />
@@ -1310,6 +1367,8 @@ const ReadingsList: FC = () => {
             </div>
           ) : null}
         </div>
+        ) : null}
+        </>
         )}
       </main>
     </div>
