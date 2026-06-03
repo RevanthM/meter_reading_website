@@ -37,31 +37,63 @@ function normalizeDifficulty(raw) {
   return 'normal';
 }
 
-/**
- * Ground-truth reading for field-test per-dial expected digits.
- * When the reviewer did not flag dial corrections, prefer `final_reading` then the raw
- * model read (`ml_raw_prediction`) over `user_correction` so a stale Dynamo row without
- * `final_reading` still matches S3 (e.g. 1814 vs user_correction 1813 → dial 4 is 4 not 3).
- */
-function finalReadingFromMetadata(metadata) {
-  const hadDialCorrections = countReadsCorrectedFromItem(metadata) > 0;
-  const candidates = hadDialCorrections
-    ? [
-        metadata?.final_reading,
-        metadata?.user_correction,
-        metadata?.ml_raw_prediction,
-        metadata?.ml_prediction,
-      ]
-    : [
-        metadata?.final_reading,
-        metadata?.ml_raw_prediction,
-        metadata?.user_correction,
-        metadata?.ml_prediction,
-      ];
+function pickGroundTruthReading(candidates) {
   const picked = candidates.find((v) => v != null && String(v).trim() !== '');
   const raw = String(picked ?? '').replace(/\D/g, '');
   if (!raw) return '';
   return raw.padStart(4, '0').slice(-4);
+}
+
+/**
+ * Ground-truth reading for field-test per-dial expected digits (reviewer truth, not model output).
+ * - Dial corrections flagged → user correction chain.
+ * - Reviewer marked incorrect → prefer user_correction (true reading when ML was wrong).
+ * - Reviewer marked correct, no dial flags → prefer ml_raw over stale user_correction (Dynamo gap).
+ */
+export function finalReadingFromMetadata(metadata) {
+  const hadDialCorrections = countReadsCorrectedFromItem(metadata) > 0;
+  const withFinal = [
+    metadata?.final_reading,
+    metadata?.user_correction,
+    metadata?.ml_raw_prediction,
+    metadata?.ml_prediction,
+  ];
+
+  if (hadDialCorrections) return pickGroundTruthReading(withFinal);
+
+  const feedback = String(metadata?.feedback_type ?? '').trim().toLowerCase();
+  const reviewerWrong = metadata?.is_correct === false || feedback === 'incorrect';
+  const reviewerRight = metadata?.is_correct === true || feedback === 'correct';
+
+  if (reviewerWrong) return pickGroundTruthReading(withFinal);
+
+  if (reviewerRight) {
+    return pickGroundTruthReading([
+      metadata?.final_reading,
+      metadata?.ml_raw_prediction,
+      metadata?.user_correction,
+      metadata?.ml_prediction,
+    ]);
+  }
+
+  return pickGroundTruthReading([
+    metadata?.final_reading,
+    metadata?.ml_raw_prediction,
+    metadata?.user_correction,
+    metadata?.ml_prediction,
+  ]);
+}
+
+/** True when every dial with ground truth matches the model (per-dial `match` flags). */
+export function captureModelMatchesGroundTruth(perDial) {
+  if (!Array.isArray(perDial) || perDial.length === 0) return false;
+  let any = false;
+  for (const row of perDial) {
+    if (row?.expected == null) continue;
+    any = true;
+    if (row.match !== true) return false;
+  }
+  return any;
 }
 
 /** Model reading before user review (never prefer post-correction ml_prediction). */
@@ -285,6 +317,8 @@ export function perDialFromItem(item) {
           user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
           user_corrected_positions: item.user_corrected_positions,
           reads_corrected_count: item.reads_corrected_count,
+          is_correct: item.is_correct,
+          feedback_type: item.feedback_type,
         }).per_dial_compact,
       );
       if (Array.isArray(parsed)) return parsed;
@@ -299,7 +333,7 @@ export function perDialFromItem(item) {
 export function sessionItemToPerImageRow(item) {
   const difficulty = normalizeDifficulty(item.image_difficulty);
   const code = difficultyToCode(difficulty);
-  const finalReading = finalReadingFromMetadata({
+  const groundMeta = {
     final_reading: item.final_reading,
     user_correction: item.user_correction,
     ml_prediction: item.ml_prediction,
@@ -307,20 +341,17 @@ export function sessionItemToPerImageRow(item) {
     user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
     user_corrected_positions: item.user_corrected_positions,
     reads_corrected_count: item.reads_corrected_count,
-  });
+    is_correct: item.is_correct,
+    feedback_type: item.feedback_type,
+  };
+  const finalReading = finalReadingFromMetadata(groundMeta);
   let perDial = [];
   if (Array.isArray(item.dial_details) && item.dial_details.length > 0) {
     try {
       perDial = JSON.parse(
         deriveFieldTestFromMetadata({
           dial_details: item.dial_details,
-          final_reading: item.final_reading,
-          user_correction: item.user_correction,
-          ml_prediction: item.ml_prediction,
-          ml_raw_prediction: item.ml_raw_prediction,
-          user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
-          user_corrected_positions: item.user_corrected_positions,
-          reads_corrected_count: item.reads_corrected_count,
+          ...groundMeta,
         }).per_dial_compact,
       );
     } catch {
@@ -331,7 +362,9 @@ export function sessionItemToPerImageRow(item) {
     perDial = perDialFromItem(item);
   }
 
-  const overallMatch = finalReading ? String(captureModelReadingCorrect(item)) : '';
+  const overallMatch = finalReading
+    ? String(captureModelMatchesGroundTruth(perDial))
+    : '';
   const predicted = mlBaselineReadingFromMetadata(item);
 
   const row = {

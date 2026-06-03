@@ -5,15 +5,13 @@ import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import {
-  captureModelReadingCorrect,
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
-  incorrectDialNumbersFromItem,
   sessionItemToPerImageRow,
 } from './fieldTestDerive.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 5;
+export const FIELD_TEST_ROLLUP_VERSION = 6;
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
@@ -111,8 +109,6 @@ function countReads(perImageRows, sessionItems = []) {
 
   for (let i = 0; i < perImageRows.length; i += 1) {
     const row = perImageRows[i];
-    const item = sessionItems[i];
-    const incorrectDials = item ? new Set(incorrectDialNumbersFromItem(item)) : new Set();
     const corrected = parseInt(row.reads_corrected_count || '0', 10) || 0;
     if (corrected > 0) readsCorrected += corrected;
 
@@ -121,7 +117,7 @@ function countReads(perImageRows, sessionItems = []) {
       if (exp === '' || exp == null) continue;
       totalReads += 1;
       readsWithGroundTruth += 1;
-      if (!incorrectDials.has(d)) readsCorrect += 1;
+      if (row[`dial${d}_digit_match`] === 'true') readsCorrect += 1;
     }
   }
 
@@ -149,11 +145,10 @@ export function buildFieldTestRollup(cycle, sessionItems) {
 
   for (let i = 0; i < perImageRows.length; i += 1) {
     const row = perImageRows[i];
-    const item = scorableItems[i];
     const expected = String(row.expected_reading_from_filename || '').trim();
     if (expected) {
       capturesWithGroundTruth += 1;
-      if (item ? captureModelReadingCorrect(item) : parseReadingMatch(row.overall_reading_match) === true) {
+      if (parseReadingMatch(row.overall_reading_match) === true) {
         capturesCorrect += 1;
       }
     }
