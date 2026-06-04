@@ -64,6 +64,10 @@ const LIST_READING_PROJECTION = [
   'primary_image_key',
   'image_count',
   'capture_location',
+  'review_assignment_batch_id',
+  'review_assigned_to',
+  'review_assigned_at',
+  'review_assigned_by',
 ].join(', ');
 
 function cleanItem(item) {
@@ -109,6 +113,7 @@ export function createSessionIndexStore({ tableName, region, credentials } = {})
       async updateAfterMove() {},
       async getBySessionId() { return null; },
       async queryReadings() { return null; },
+      async queryReadingsByFolderStatus() { return null; },
       async queryCounts() { return null; },
       async countUploadedOnPortalDay() { return 0; },
     };
@@ -232,6 +237,28 @@ export function createSessionIndexStore({ tableName, region, credentials } = {})
     return readings;
   }
 
+  /** Query one folder status across field and/or simulator (e.g. incorrect_new awaiting review). */
+  async function queryReadingsByFolderStatus(
+    portalWorkType = '1000',
+    folderStatus = 'incorrect_new',
+    sources = ['field', 'simulator'],
+  ) {
+    const wt = String(portalWorkType || '1000').trim() || '1000';
+    const status = String(folderStatus || '').trim();
+    const srcs = (sources || []).map((s) => String(s || '').trim()).filter(Boolean);
+    if (!status || srcs.length === 0) return [];
+    const chunks = await Promise.all(
+      srcs.map((src) =>
+        queryGsi1(buildGsi1Pk(wt, status, src), { projection: LIST_READING_PROJECTION }),
+      ),
+    );
+    const readings = dedupeReadings(
+      chunks.flat().map((item) => sessionItemToReading(item, { images: [] })).filter(Boolean),
+    );
+    readings.sort((a, b) => new Date(b.dateOfReading) - new Date(a.dateOfReading));
+    return readings;
+  }
+
   async function queryLightReadings(source = 'all', portalWorkType = '1000') {
     return queryReadings(source, portalWorkType);
   }
@@ -328,6 +355,7 @@ export function createSessionIndexStore({ tableName, region, credentials } = {})
     updateAfterMove,
     getBySessionId,
     queryReadings,
+    queryReadingsByFolderStatus,
     queryLightReadings,
     queryReadingItems,
     queryCounts,

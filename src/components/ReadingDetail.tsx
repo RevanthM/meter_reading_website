@@ -974,6 +974,10 @@ const ReadingDetail: React.FC = () => {
         if (metaDirty) {
           patch.ml_prediction = isManualUploadQueue ? userCorrection : mlPrediction;
           patch.user_correction = userCorrection;
+          const rawSnap = fieldTestPredictedReading(snapshotForMove);
+          if (rawSnap) {
+            patch.ml_raw_prediction = rawSnap;
+          }
           patch.portal_review_notes = comments;
           if (isReviewerSaveMode) {
             if (datasetDestination !== baseDest) {

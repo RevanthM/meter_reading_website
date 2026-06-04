@@ -291,6 +291,16 @@ const PortalLayout: FC = () => {
           {
             kind: 'leaf',
             item: {
+              path: '/admin/review-assignments',
+              label: 'Assignments',
+              description: 'Reviewer work batches',
+              hint: 'Assign field test & awaiting review by date or count',
+              icon: <ClipboardList size={17} strokeWidth={2} />,
+            },
+          },
+          {
+            kind: 'leaf',
+            item: {
               path: '/admin/audit-logs',
               label: 'Audit logs',
               description: 'Device & admin events',

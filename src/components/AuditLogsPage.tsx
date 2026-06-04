@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import {
   ArrowLeft,
   AlertTriangle,
@@ -15,7 +16,6 @@ import {
   type AuditSessionRow,
   type AuditLogSummary,
 } from '../services/api';
-import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { calendarDayKeyInPortalTz } from '../utils/readingDisplayDates';
 import { auditActionLabel, formatAuditTs } from '../utils/auditEventDisplay';
 
@@ -33,9 +33,8 @@ function sessionStatusLabel(row: AuditSessionRow): string {
 
 const AuditLogsPage: React.FC = () => {
   const navigate = useNavigate();
-  const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
-  const workMode = outletCtx?.workMode ?? 'admin';
-  const isAdmin = workMode === 'admin';
+  const { isPortalAdmin } = useAuth();
+  const isAdmin = isPortalAdmin;
 
   const [userNameFilter, setUserNameFilter] = useState('');
   const [from, setFrom] = useState(todayPortalDay);
@@ -60,8 +59,8 @@ const AuditLogsPage: React.FC = () => {
     try {
       const filter = userNameFilter.trim() || undefined;
       const [sum, ev] = await Promise.all([
-        fetchAuditLogSummary(from, to, workMode, filter),
-        fetchAuditEvents({ userName: filter, from, to, limit: 300 }, workMode),
+        fetchAuditLogSummary(from, to, 'admin', filter),
+        fetchAuditEvents({ userName: filter, from, to, limit: 300 }, 'admin'),
       ]);
       setSummary(sum);
       setEvents(ev.events);
@@ -73,7 +72,7 @@ const AuditLogsPage: React.FC = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [userNameFilter, from, to, workMode]);
+  }, [userNameFilter, from, to]);
 
   useEffect(() => {
     if (isAdmin) void load();

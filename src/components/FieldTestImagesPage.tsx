@@ -20,6 +20,7 @@ import {
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { canViewFieldTestImages } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
+import { useMergeContextReadingUpserts } from '../hooks/useMergeContextReadingUpserts';
 import {
   difficultyToCode,
   formatUnitTestDifficultyTag,
@@ -78,6 +79,7 @@ const FieldTestImagesPage: FC = () => {
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
   const [cyclesResolved, setCyclesResolved] = useState(false);
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
+  const { mergeWithContext } = useMergeContextReadingUpserts(setAllReadings);
   const [presignedUrls, setPresignedUrls] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
@@ -152,7 +154,7 @@ const FieldTestImagesPage: FC = () => {
           refresh: opts?.refresh,
         })) as FieldTestReadingsListResponse;
 
-        setAllReadings(res.readings);
+        setAllReadings(mergeWithContext(res.readings));
         setPresignedUrls({});
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
@@ -160,7 +162,7 @@ const FieldTestImagesPage: FC = () => {
         setInitialLoading(false);
       }
     },
-    [workType, effectiveCycleId, captureReady],
+    [workType, effectiveCycleId, captureReady, mergeWithContext],
   );
 
   useEffect(() => {

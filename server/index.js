@@ -36,6 +36,8 @@ import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './respons
 import { registerTestDataReviewRoutes } from './testDataReview.js';
 import { registerFieldTestRoutes } from './fieldTestRoutes.js';
 import { registerAuditEventRoutes, appendAuditEvents } from './auditEvents.js';
+import { registerReviewAssignmentRoutes } from './reviewAssignments.js';
+import { isAdminPortalRequest } from './portalAdminAccess.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
@@ -847,9 +849,10 @@ async function getSignedImageUrl(key) {
 }
 
 /** Align per-dial `prediction` with `ml_prediction` when flat rows are stale (e.g. all zeros). */
-function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction) {
+function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction, userCorrection) {
   if (!Array.isArray(dialDetails) || dialDetails.length === 0) return dialDetails;
   const mv = String(mlPrediction ?? '').replace(/\D/g, '');
+  const exp = String(userCorrection ?? '').replace(/\D/g, '');
 
   const normalized = dialDetails.map((d, i) => {
     if (!d || typeof d !== 'object') return d;
@@ -870,17 +873,21 @@ function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction) {
     };
   });
 
-  if (!mv) return normalized;
+  if (!mv && !exp) return normalized;
 
   const fromRows = [...normalized]
     .sort((a, b) => a.dial - b.dial)
     .map((r) => String(r.prediction))
     .join('');
-  if (fromRows === mv) return normalized;
+  if (exp && fromRows === exp) return normalized;
+  if (mv && fromRows === mv) return normalized;
+
+  const alignTo = mv || exp;
+  if (!alignTo) return normalized;
 
   return normalized.map((row, i) => {
     const dialNum = row.dial >= 1 ? row.dial : i + 1;
-    const ch = mv[dialNum - 1];
+    const ch = alignTo[dialNum - 1];
     if (ch && /\d/.test(ch)) {
       return { ...row, prediction: parseInt(ch, 10) };
     }
@@ -1012,7 +1019,11 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       confidence: normalizeSessionConfidenceValue(metadata.confidence),
       processingTimeMs: metadata.processing_time_ms,
       dialCount: metadata.dial_count,
-      dialDetails: normalizeDialDetailsFromMetadata(metadata.dial_details, metadata.ml_prediction),
+      dialDetails: normalizeDialDetailsFromMetadata(
+        metadata.dial_details,
+        metadata.ml_prediction,
+        metadata.user_correction,
+      ),
       conditionCode: metadata.condition_code,
       userName: metadata.user_name || metadata.user_email || '',
       imageSource: metadata.image_source || '',
@@ -1105,7 +1116,11 @@ async function parseSessionLight(prefix, status, sourceType, workType = '1000') 
       meterValue: metadata.ml_prediction,
       expectedValue: metadata.user_correction || undefined,
       confidence: normalizeSessionConfidenceValue(metadata.confidence),
-      dialDetails: normalizeDialDetailsFromMetadata(metadata.dial_details, metadata.ml_prediction),
+      dialDetails: normalizeDialDetailsFromMetadata(
+        metadata.dial_details,
+        metadata.ml_prediction,
+        metadata.user_correction,
+      ),
       appVersion: metadata.app_version != null ? String(metadata.app_version) : '',
       imageCount,
     };
@@ -3263,10 +3278,12 @@ registerFieldTestRoutes(app, {
   getPresignedUrl: getSignedImageUrl,
 });
 
-function isAdminPortalRequest(req) {
-  const mode = String(req.headers['x-portal-work-mode'] || '').trim().toLowerCase();
-  return mode === 'admin';
-}
+registerReviewAssignmentRoutes(app, {
+  s3Client,
+  bucket: BUCKET_NAME,
+  sessionIndex,
+  requireAdmin: isAdminPortalRequest,
+});
 
 registerAuditEventRoutes(app, {
   s3Client,

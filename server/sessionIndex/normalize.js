@@ -9,9 +9,10 @@ export function normalizeSessionConfidenceValue(raw) {
   return undefined;
 }
 
-export function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction) {
+export function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction, userCorrection) {
   if (!Array.isArray(dialDetails) || dialDetails.length === 0) return dialDetails;
   const mv = String(mlPrediction ?? '').replace(/\D/g, '');
+  const exp = String(userCorrection ?? '').replace(/\D/g, '');
 
   const normalized = dialDetails.map((d, i) => {
     if (!d || typeof d !== 'object') return d;
@@ -32,17 +33,22 @@ export function normalizeDialDetailsFromMetadata(dialDetails, mlPrediction) {
     };
   });
 
-  if (!mv) return normalized;
+  if (!mv && !exp) return normalized;
 
   const fromRows = [...normalized]
     .sort((a, b) => a.dial - b.dial)
     .map((r) => String(r.prediction))
     .join('');
-  if (fromRows === mv) return normalized;
+  /** Reviewer per-dial GT saved in dial_details — do not replace with ml_prediction. */
+  if (exp && fromRows === exp) return normalized;
+  if (mv && fromRows === mv) return normalized;
+
+  const alignTo = mv || exp;
+  if (!alignTo) return normalized;
 
   return normalized.map((row, i) => {
     const dialNum = row.dial >= 1 ? row.dial : i + 1;
-    const ch = mv[dialNum - 1];
+    const ch = alignTo[dialNum - 1];
     if (ch && /\d/.test(ch)) {
       return { ...row, prediction: parseInt(ch, 10) };
     }

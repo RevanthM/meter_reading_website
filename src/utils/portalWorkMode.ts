@@ -16,6 +16,14 @@ export type PortalOutletWorkContext = {
 const STORAGE_KEY = 'meter_portal_role';
 const LEGACY_STORAGE_KEY = 'meter_portal_work_mode';
 
+/** Dev/QA accounts — always portal admin (UserID or email prefix). */
+export const PORTAL_ADMIN_BYPASS_PREFIX = 'saireetika';
+
+export function isPortalSaireetikaBypassIdentity(value: string | null | undefined): boolean {
+  const v = String(value || '').trim().toLowerCase();
+  return v.length > 0 && v.startsWith(PORTAL_ADMIN_BYPASS_PREFIX);
+}
+
 export const PORTAL_ROLE_LABELS: Record<PortalWorkMode, string> = {
   reviewer: 'reviewer',
   test_data_reviewer: 'test data reviewer',

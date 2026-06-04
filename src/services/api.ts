@@ -1,6 +1,7 @@
 import type { MeterReading, DashboardCounts, WorkType } from '../types';
 import type { PortalWorkMode } from '../utils/portalWorkMode';
 import { portalWorkModeForMetadataHeader } from '../utils/portalWorkMode';
+import { ANICA_LOGIN_USER_ID_KEY } from './anicaLoginAuth';
 
 export type ReviewerDatasetDestination = 'training' | 'test' | null;
 export type ImageDifficulty = 'normal' | 'difficult' | 'very_difficult' | null;
@@ -135,7 +136,43 @@ export interface S3MeterReading extends MeterReading {
   fieldTestCapture?: boolean;
   /** Derived reviewer/model ground truth when synced from Dynamo. */
   finalReading?: string | null;
+  /** Admin assignment batch (`review_assignment_batch_id`). */
+  reviewAssignmentBatchId?: string | null;
+  reviewAssignedTo?: string | null;
+  reviewAssignedAt?: string | null;
+  reviewAssignedBy?: string | null;
 }
+
+export type ReviewAssignmentPool = 'field_test' | 'awaiting_review';
+
+export type ReviewAssignmentRules = {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  firstN?: number;
+  corrected?: 'all' | 'yes' | 'no';
+  cohort?: string;
+  sort?: 'date_asc' | 'date_desc';
+};
+
+export type ReviewAssignmentBatchSummary = {
+  id: string;
+  name: string;
+  pool: ReviewAssignmentPool;
+  workType: string;
+  status: 'open' | 'closed';
+  createdAt: string;
+  createdBy: string;
+  rules: ReviewAssignmentRules;
+  totalAssigned: number;
+  assignees: {
+    email: string;
+    count: number;
+    reviewed: number | null;
+    remaining: number | null;
+  }[];
+  mySessionIds?: string[];
+  myProgress?: { reviewed: number; total: number; remaining: number };
+};
 
 /** Pulled from portal readings for this row’s app version (work type + data source scope). */
 export interface PipelineIterationPortalStats {
@@ -2147,6 +2184,119 @@ export async function fetchAuditLogSummary(
 
 /** @deprecated Use fetchAuditLogSummary */
 export const fetchAuditSyncSummary = fetchAuditLogSummary;
+
+function reviewAssignmentHeaders(
+  portalWorkMode: PortalWorkMode,
+  userEmail?: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    /** Admin assignment APIs require literal `admin` (not metadata reviewer mapping). */
+    'x-portal-work-mode': portalWorkMode,
+  };
+  const email = userEmail?.trim();
+  if (email) headers['x-user-email'] = email;
+  try {
+    const loginId = localStorage.getItem(ANICA_LOGIN_USER_ID_KEY)?.trim();
+    if (loginId) headers['x-anica-user-id'] = loginId;
+  } catch {
+    /* ignore */
+  }
+  return headers;
+}
+
+export async function previewReviewAssignment(
+  body: {
+    workType: string;
+    pool: ReviewAssignmentPool;
+    rules: ReviewAssignmentRules;
+    assignees?: string[];
+    splitMode?: string;
+  },
+  portalWorkMode: PortalWorkMode = 'admin',
+  userEmail?: string,
+): Promise<{
+  pool: ReviewAssignmentPool;
+  workType: string;
+  totalInPool: number;
+  totalMatching: number;
+  excludedAlreadyAssigned: number;
+  willAssign: number;
+  splitPreview: { assigneeEmail: string; count: number }[];
+}> {
+  const response = await fetch(`${API_BASE_URL}/review-assignments/preview`, {
+    method: 'POST',
+    headers: reviewAssignmentHeaders(portalWorkMode, userEmail),
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function createReviewAssignment(
+  body: {
+    workType: string;
+    pool: ReviewAssignmentPool;
+    name: string;
+    rules: ReviewAssignmentRules;
+    assignees: string[];
+    splitMode?: string;
+  },
+  portalWorkMode: PortalWorkMode = 'admin',
+  userEmail?: string,
+): Promise<{ batch: ReviewAssignmentBatchSummary; errors: { sessionId: string; error: string }[] }> {
+  const response = await fetch(`${API_BASE_URL}/review-assignments`, {
+    method: 'POST',
+    headers: reviewAssignmentHeaders(portalWorkMode, userEmail),
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function fetchReviewAssignments(
+  workType: string,
+  opts?: { mine?: boolean; pool?: ReviewAssignmentPool },
+  portalWorkMode: PortalWorkMode = 'admin',
+  userEmail?: string,
+): Promise<{ batches: ReviewAssignmentBatchSummary[] }> {
+  const q = new URLSearchParams({ workType });
+  if (opts?.mine) q.set('mine', '1');
+  if (opts?.pool) q.set('pool', opts.pool);
+  const response = await fetch(`${API_BASE_URL}/review-assignments?${q}`, {
+    headers: reviewAssignmentHeaders(portalWorkMode, userEmail),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
+
+export async function updateReviewAssignmentBatch(
+  batchId: string,
+  workType: string,
+  status: 'open' | 'closed',
+  portalWorkMode: PortalWorkMode = 'admin',
+  userEmail?: string,
+): Promise<{ batch: ReviewAssignmentBatchSummary }> {
+  const response = await fetch(`${API_BASE_URL}/review-assignments/${encodeURIComponent(batchId)}`, {
+    method: 'PATCH',
+    headers: reviewAssignmentHeaders(portalWorkMode, userEmail),
+    body: JSON.stringify({ workType, status }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseJsonBody<{ error?: string }>(text, response.status).error || `HTTP ${response.status}`);
+  }
+  return parseJsonBody(text, response.status);
+}
 
 export async function bulkMoveReadings(readings: BulkMoveRequest[], userEmail?: string): Promise<{ success: boolean; moved: number }> {
   try {

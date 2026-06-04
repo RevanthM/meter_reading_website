@@ -44,6 +44,8 @@ interface ReadingsContextType {
   getReadingById: (id: string) => S3MeterReading | undefined;
   /** Merge one session into the in-memory list (after PATCH / approve without full S3 rescan). */
   upsertReading: (reading: S3MeterReading) => void;
+  /** Bumps on each upsertReading — field-test pages merge into their local capture lists. */
+  readingUpsertRevision: number;
   refreshData: () => Promise<void>;
   /** Folder counts only (fast). Use `{ silent: true }` after saves so KPIs do not flash loading. */
   refreshCounts: (options?: LoadCountsOptions) => Promise<void>;
@@ -63,6 +65,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [workType, setWorkType] = useState<WorkType>('1000');
   const readingsLoadStarted = useRef(false);
   const readingsLoadPromise = useRef<Promise<void> | null>(null);
+  const [readingUpsertRevision, setReadingUpsertRevision] = useState(0);
 
   const loadCounts = useCallback(async (source?: DataSource, wt?: WorkType, options?: LoadCountsOptions) => {
     const silent = options?.silent === true;
@@ -353,6 +356,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
       next[ix] = { ...next[ix], ...reading };
       return next;
     });
+    setReadingUpsertRevision((n) => n + 1);
   }, []);
 
   const loading = countsLoading || readingsLoading;
@@ -379,6 +383,7 @@ export const ReadingsProvider: React.FC<{ children: ReactNode }> = ({ children }
         getReadingsByStatus,
         getReadingById,
         upsertReading,
+        readingUpsertRevision,
         refreshData,
         refreshCounts,
       }}

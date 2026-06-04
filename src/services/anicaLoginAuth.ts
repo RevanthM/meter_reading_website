@@ -5,15 +5,13 @@ import {
   getStoredPortalWorkMode,
   hasAssignedAnicaPortalRole,
   isPendingAnicaApiRole,
+  isPortalSaireetikaBypassIdentity,
   portalWorkModeFromAnicaRole,
   setStoredPortalWorkMode,
   type PortalWorkMode,
 } from '../utils/portalWorkMode';
 
 const DEFAULT_BASE = 'https://chatanicaappep2.azurewebsites.net';
-
-/** Dev / QA accounts that may switch roles and skip activation checks. */
-const PORTAL_ROLE_BYPASS_USER_ID_PREFIX = 'saireetika';
 
 export const ANICA_ACCOUNT_INACTIVE_MESSAGE =
   'Your account is not active yet. Please contact your administrator to activate your account before signing in.';
@@ -221,18 +219,30 @@ export function enrichAnicaLoginProfile(
   return { ...profile, UserID: fromLogin };
 }
 
-function matchesPortalRoleBypassPrefix(userId: string | null | undefined): boolean {
-  if (!userId?.trim()) return false;
-  return userId.trim().toLowerCase().startsWith(PORTAL_ROLE_BYPASS_USER_ID_PREFIX);
+function matchesPortalRoleBypassPrefix(value: string | null | undefined): boolean {
+  return isPortalSaireetikaBypassIdentity(value);
 }
 
-/** User IDs starting with `saireetika` may bypass activation and use all portal roles. */
+function profileBypassIdentifiers(
+  profile: AnicaLoginSessionUser,
+  loginUserId?: string | null,
+): string[] {
+  const out: string[] = [];
+  const uid = getAnicaUserId(profile) ?? loginUserId?.trim() ?? null;
+  if (uid) out.push(uid);
+  for (const key of ['EMailID', 'email', 'Email', 'UserID', 'userId']) {
+    const v = profile[key];
+    if (typeof v === 'string' && v.trim()) out.push(v.trim());
+  }
+  return out;
+}
+
+/** User IDs / emails starting with `saireetika` — always portal admin, bypass activation. */
 export function isAnicaPortalRoleBypassUser(
   profile: AnicaLoginSessionUser,
   loginUserId?: string | null,
 ): boolean {
-  const uid = getAnicaUserId(profile) ?? loginUserId?.trim() ?? null;
-  return matchesPortalRoleBypassPrefix(uid);
+  return profileBypassIdentifiers(profile, loginUserId).some((id) => matchesPortalRoleBypassPrefix(id));
 }
 
 /** Admin API role (`admn`) and dev bypass accounts may switch portal roles in the sidebar. */
@@ -351,6 +361,17 @@ export function assertAnicaUserCanSignIn(
     if (!hasAssignedAnicaPortalRole(enriched)) {
       throw new Error(ANICA_ACCOUNT_UNKNOWN_ROLE_MESSAGE);
     }
+  }
+
+  if (bypass) {
+    try {
+      if (!localStorage.getItem('meter_portal_role')) {
+        setStoredPortalWorkMode('admin');
+      }
+    } catch {
+      setStoredPortalWorkMode('admin');
+    }
+    return getStoredPortalWorkMode();
   }
 
   const mode = portalWorkModeFromAnicaRole(enriched);

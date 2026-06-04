@@ -33,7 +33,11 @@ export function metadataToSessionItem(metadata, ctx) {
 
   const portalWorkType = inferPortalWorkTypeFromMetadata(metadata, ctx.portalWorkType || '1000');
   const capturedAt = metadata.timestamp || new Date().toISOString();
-  const dialDetails = normalizeDialDetailsFromMetadata(metadata.dial_details, metadata.ml_prediction);
+  const dialDetails = normalizeDialDetailsFromMetadata(
+    metadata.dial_details,
+    metadata.ml_prediction,
+    metadata.user_correction,
+  );
 
   const item = {
     session_id: sessionId,
@@ -80,6 +84,20 @@ export function metadataToSessionItem(metadata, ctx) {
       metadata.portal_metadata_updated_at != null ? String(metadata.portal_metadata_updated_at) : null,
     portal_metadata_updated_by:
       metadata.portal_metadata_updated_by != null ? String(metadata.portal_metadata_updated_by) : null,
+    review_assignment_batch_id:
+      typeof metadata.review_assignment_batch_id === 'string' && metadata.review_assignment_batch_id.trim()
+        ? metadata.review_assignment_batch_id.trim().slice(0, 64)
+        : null,
+    review_assigned_to:
+      typeof metadata.review_assigned_to === 'string' && metadata.review_assigned_to.trim()
+        ? metadata.review_assigned_to.trim().slice(0, 320)
+        : null,
+    review_assigned_at:
+      typeof metadata.review_assigned_at === 'string' ? metadata.review_assigned_at : null,
+    review_assigned_by:
+      typeof metadata.review_assigned_by === 'string' && metadata.review_assigned_by.trim()
+        ? metadata.review_assigned_by.trim().slice(0, 320)
+        : null,
     reviewer_dataset_destination:
       metadata.reviewer_dataset_destination === 'training' || metadata.reviewer_dataset_destination === 'test'
         ? metadata.reviewer_dataset_destination
@@ -212,6 +230,10 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     isManuallyReviewed: item.is_manually_reviewed === true,
     portalMetadataUpdatedBy: item.portal_metadata_updated_by ?? undefined,
     portalMetadataUpdatedAt: item.portal_metadata_updated_at ?? undefined,
+    reviewAssignmentBatchId: item.review_assignment_batch_id ?? undefined,
+    reviewAssignedTo: item.review_assigned_to ?? undefined,
+    reviewAssignedAt: item.review_assigned_at ?? undefined,
+    reviewAssignedBy: item.review_assigned_by ?? undefined,
     manualLabelPending: item.manual_label_pending === true,
     primaryImageKey: item.primary_image_key ?? undefined,
     comments: item.portal_review_notes != null && item.portal_review_notes !== '' ? String(item.portal_review_notes) : '',

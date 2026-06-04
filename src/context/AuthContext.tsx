@@ -19,16 +19,19 @@ import {
   canSwitchPortalRolesFromProfile,
   clearAnicaLoginSession,
   getAnicaUserId,
+  isAnicaPortalRoleBypassUser,
   loadValidatedAnicaLoginSession,
   persistAnicaLoginSession,
   assertAnicaUserCanSignIn,
 } from '../services/anicaLoginAuth';
 import {
   getStoredPortalWorkMode,
+  isPortalSaireetikaBypassIdentity,
   portalWorkModeFromAnicaRole,
   setStoredPortalWorkMode,
   type PortalWorkMode,
 } from '../utils/portalWorkMode';
+import { ANICA_LOGIN_USER_ID_KEY } from '../services/anicaLoginAuth';
 
 interface AuthContextType {
   user: User | null;
@@ -54,6 +57,8 @@ interface AuthContextType {
   portalWorkMode: PortalWorkMode;
   /** Dev bypass users may switch between all portal roles in the sidebar. */
   canSwitchPortalRoles: boolean;
+  /** Admin UI + APIs (`saireetika*` bypass accounts and `admn` role). */
+  isPortalAdmin: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -82,8 +87,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const anicaLoginUserRef = useRef<AnicaLoginSessionUser | null>(anicaLoginUser);
   anicaLoginUserRef.current = anicaLoginUser;
 
+  const resolvedUserEmail = user?.email || anicaLoginDisplayEmail(anicaLoginUser);
+
+  const isBypassAdminUser = useMemo(() => {
+    if (anicaLoginUser && isAnicaPortalRoleBypassUser(anicaLoginUser)) return true;
+    if (isPortalSaireetikaBypassIdentity(resolvedUserEmail)) return true;
+    try {
+      const storedId = localStorage.getItem(ANICA_LOGIN_USER_ID_KEY);
+      if (isPortalSaireetikaBypassIdentity(storedId)) return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }, [anicaLoginUser, resolvedUserEmail]);
+
   const portalWorkMode = useMemo((): PortalWorkMode => {
     if (anicaLoginUser && canSwitchPortalRolesFromProfile(anicaLoginUser)) {
+      return getStoredPortalWorkMode();
+    }
+    if (isBypassAdminUser) {
       return getStoredPortalWorkMode();
     }
     if (anicaLoginUser) {
@@ -91,11 +113,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (fromProfile) return fromProfile;
     }
     return getStoredPortalWorkMode();
-  }, [anicaLoginUser]);
+  }, [anicaLoginUser, isBypassAdminUser]);
 
+  /** `saireetika*` and `admn` can use the role dropdown (reviewer, labeler, admin, …). */
   const canSwitchPortalRoles = useMemo(
-    () => !!anicaLoginUser && canSwitchPortalRolesFromProfile(anicaLoginUser),
-    [anicaLoginUser],
+    () =>
+      !!anicaLoginUser &&
+      (canSwitchPortalRolesFromProfile(anicaLoginUser) || isBypassAdminUser),
+    [anicaLoginUser, isBypassAdminUser],
+  );
+
+  /** Admin pages/APIs — bypass accounts always, or when role is set to admin. */
+  const isPortalAdmin = useMemo(
+    () => isBypassAdminUser || portalWorkMode === 'admin',
+    [isBypassAdminUser, portalWorkMode],
   );
 
   useEffect(() => {
@@ -323,7 +354,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     <AuthContext.Provider value={{
       user,
       anicaLoginUser,
-      userEmail: user?.email || anicaLoginDisplayEmail(anicaLoginUser),
+      userEmail: resolvedUserEmail,
       loading,
       error,
       mfaRequired,
@@ -341,6 +372,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       isAuthorized,
       portalWorkMode,
       canSwitchPortalRoles,
+      isPortalAdmin,
     }}>
       {children}
     </AuthContext.Provider>

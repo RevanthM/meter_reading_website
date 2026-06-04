@@ -20,7 +20,16 @@ import {
 } from '../services/api';
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { canViewFieldTestImages } from '../utils/portalWorkMode';
+import { useAuth } from '../context/AuthContext';
 import { useReadings } from '../context/ReadingsContext';
+import { useMergeContextReadingUpserts } from '../hooks/useMergeContextReadingUpserts';
+import { useMyAssignmentOrder } from '../hooks/useMyAssignmentOrder';
+import AssignedToMeToggle from './AssignedToMeToggle';
+import {
+  assignmentAssignParamActive,
+  filterAssignedToUser,
+  sortReadingsByAssignmentOrder,
+} from '../utils/reviewAssignments';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
 import { formatReadingDateTime, formatReadingShortDate } from '../utils/readingDisplayDates';
@@ -102,11 +111,22 @@ const FieldTestReadingsList: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const outletCtx = useOutletContext<PortalOutletWorkContext | undefined>();
   const { workType } = useReadings();
+  const { userEmail } = useAuth();
+  const portalWorkMode = outletCtx?.workMode ?? 'reviewer';
+  const assignFilterActive = assignmentAssignParamActive(searchParams);
+  const { batches: myBatches, orderIds: assignmentOrderIds } = useMyAssignmentOrder(
+    'field_test',
+    workType,
+    userEmail,
+    portalWorkMode,
+    assignFilterActive,
+  );
   const [initialLoading, setInitialLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [cycles, setCycles] = useState<FieldTestCycle[]>([]);
   const [activeCycle, setActiveCycle] = useState<FieldTestCycle | null>(null);
   const [allReadings, setAllReadings] = useState<S3MeterReading[]>([]);
+  const { mergeWithContext } = useMergeContextReadingUpserts(setAllReadings);
   const [refreshing, setRefreshing] = useState(false);
   const [cyclesResolved, setCyclesResolved] = useState(false);
   const [filters, setFilters] = useState<Omit<FieldTestCaptureFilters, 'datePreset'>>({
@@ -186,14 +206,22 @@ const FieldTestReadingsList: FC = () => {
           refresh: opts?.refresh,
         })) as FieldTestReadingsListResponse;
 
-        setAllReadings(res.readings);
+        setAllReadings(mergeWithContext(res.readings));
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Failed to load field test captures');
       } finally {
         setInitialLoading(false);
       }
     },
-    [workType, showCyclePicker, captureCycleKey, effectiveCycleId, captureReady, cycles.length],
+    [
+      workType,
+      showCyclePicker,
+      captureCycleKey,
+      effectiveCycleId,
+      captureReady,
+      cycles.length,
+      mergeWithContext,
+    ],
   );
 
   useEffect(() => {
@@ -295,6 +323,42 @@ const FieldTestReadingsList: FC = () => {
     return list;
   }, [allReadings, presetWindow, filterInput, activeCohort, filters.sortDir]);
 
+  const setAssignFilter = useCallback(
+    (active: boolean) => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          if (active) n.set('assign', 'me');
+          else n.delete('assign');
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const assignedToMeCount = useMemo(
+    () => filterAssignedToUser(filteredReadings, userEmail).length,
+    [filteredReadings, userEmail],
+  );
+
+  const displayReadings = useMemo(() => {
+    let list = filteredReadings;
+    if (assignFilterActive) {
+      list = filterAssignedToUser(list, userEmail);
+      if (assignmentOrderIds.length > 0) {
+        list = sortReadingsByAssignmentOrder(list, assignmentOrderIds);
+      }
+    }
+    return list;
+  }, [filteredReadings, assignFilterActive, userEmail, assignmentOrderIds]);
+
+  const assignmentRemaining = useMemo(() => {
+    if (!assignFilterActive || myBatches.length === 0) return null;
+    return myBatches.reduce((n, b) => n + (b.myProgress?.remaining ?? 0), 0);
+  }, [assignFilterActive, myBatches]);
+
   const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
   const clearFilters = () => {
     setFilters({
@@ -327,19 +391,19 @@ const FieldTestReadingsList: FC = () => {
         },
         {
           state: {
-            readingQueueIds: filteredReadings.map((r) => r.id),
+            readingQueueIds: displayReadings.map((r) => r.id),
             listReturn: { pathname: location.pathname, search: location.search },
           },
         },
       );
     },
-    [navigate, searchParams, workType, filteredReadings, location.pathname, location.search],
+    [navigate, searchParams, workType, displayReadings, location.pathname, location.search],
   );
 
   const countLabel = useMemo(() => {
     if (initialLoading && allReadings.length === 0) return 'Loading…';
     const cyclePart = showCyclePicker && activeCycle ? ` · ${activeCycle.name}` : '';
-    const visibleCount = filteredReadings.length;
+    const visibleCount = displayReadings.length;
     const loadedCount = allReadings.length;
     const countText =
       visibleCount !== loadedCount
@@ -354,7 +418,8 @@ const FieldTestReadingsList: FC = () => {
     initialLoading,
     refreshing,
     allReadings.length,
-    filteredReadings.length,
+    displayReadings.length,
+    assignFilterActive,
     activeCycle,
     showCyclePicker,
     activeCohort,
@@ -388,6 +453,15 @@ const FieldTestReadingsList: FC = () => {
 
           {!err ? (
             <>
+            <div className="readings-list-filter-toolbar field-test-assignment-filter-toolbar">
+              <AssignedToMeToggle
+                active={assignFilterActive}
+                onChange={setAssignFilter}
+                assignedCount={assignedToMeCount}
+                totalCount={filteredReadings.length}
+                progressRemaining={assignmentRemaining}
+              />
+            </div>
             <div
               className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
             >
@@ -592,7 +666,7 @@ const FieldTestReadingsList: FC = () => {
         ) : null}
         {err ? <p className="unit-test-images-page-message training-hub-inline-error">{err}</p> : null}
 
-        {!refreshing && !initialLoading && !err && filteredReadings.length === 0 ? (
+        {!refreshing && !initialLoading && !err && displayReadings.length === 0 ? (
           <p className="unit-test-images-page-message pipeline-iterations-empty">
             {allReadings.length === 0
               ? 'No field captures yet. Open a capture to set correct/incorrect and image difficulty.'
@@ -600,15 +674,15 @@ const FieldTestReadingsList: FC = () => {
           </p>
         ) : null}
 
-        {filteredReadings.length > 0 ? (
+        {displayReadings.length > 0 ? (
           <CaptureMapViewKeepAlive
             active={viewMode === 'map'}
-            readings={filteredReadings}
+            readings={displayReadings}
             onSelectReading={openReading}
           />
         ) : null}
 
-        {filteredReadings.length > 0 && viewMode === 'list' ? (
+        {displayReadings.length > 0 && viewMode === 'list' ? (
           <div className={`table-container${refreshing ? ' table-container--refreshing' : ''}`}>
             <table className="readings-table">
               <thead>
@@ -643,7 +717,7 @@ const FieldTestReadingsList: FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredReadings.map((reading) => {
+                {displayReadings.map((reading) => {
                   const { label, color } = getReadingListStatusDisplay(reading);
                   const correction = fieldTestReviewerCorrectionMeta(reading);
                   return (

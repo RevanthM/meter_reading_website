@@ -1,6 +1,14 @@
 import { useState, useMemo, useCallback, useEffect, type CSSProperties, type FC } from 'react';
 import { useParams, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { useReadings } from '../context/ReadingsContext';
+import { useMyAssignmentOrder } from '../hooks/useMyAssignmentOrder';
+import AssignedToMeToggle from './AssignedToMeToggle';
+import {
+  assignmentAssignParamActive,
+  filterAssignedToUser,
+  sortReadingsByAssignmentOrder,
+} from '../utils/reviewAssignments';
 import type { ReadingStatus, ReadingsListFilter } from '../types';
 import {
   statusLabels,
@@ -303,6 +311,17 @@ const ReadingsList: FC = () => {
 
   const listStatusKey = (status ?? 'all') as ReadingsListFilter;
 
+  const { userEmail } = useAuth();
+  const showAssignmentFilter = listStatusKey === 'incorrect_new';
+  const assignFilterActive = showAssignmentFilter && assignmentAssignParamActive(searchParams);
+  const { batches: myBatches, orderIds: assignmentOrderIds } = useMyAssignmentOrder(
+    'awaiting_review',
+    workType,
+    userEmail,
+    portalWorkMode,
+    assignFilterActive,
+  );
+
   const sortParamRaw = useMemo(() => {
     const p = new URLSearchParams(location.search);
     return (p.get('sort') || '').trim().toLowerCase();
@@ -400,6 +419,42 @@ const ReadingsList: FC = () => {
     location.search,
   ]);
 
+  const setAssignFilter = useCallback(
+    (active: boolean) => {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          if (active) n.set('assign', 'me');
+          else n.delete('assign');
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const assignedToMeCount = useMemo(
+    () => filterAssignedToUser(readings, userEmail).length,
+    [readings, userEmail],
+  );
+
+  const displayReadings = useMemo(() => {
+    let list = readings;
+    if (assignFilterActive) {
+      list = filterAssignedToUser(list, userEmail);
+      if (assignmentOrderIds.length > 0) {
+        list = sortReadingsByAssignmentOrder(list, assignmentOrderIds);
+      }
+    }
+    return list;
+  }, [readings, assignFilterActive, userEmail, assignmentOrderIds]);
+
+  const assignmentRemaining = useMemo(() => {
+    if (!assignFilterActive || myBatches.length === 0) return null;
+    return myBatches.reduce((n, b) => n + (b.myProgress?.remaining ?? 0), 0);
+  }, [assignFilterActive, myBatches]);
+
   const openReading = useCallback(
     (reading: S3MeterReading) => {
       const sp = new URLSearchParams(searchParams);
@@ -411,13 +466,13 @@ const ReadingsList: FC = () => {
         },
         {
           state: {
-            readingQueueIds: readings.map((r) => r.id),
+            readingQueueIds: displayReadings.map((r) => r.id),
             listReturn: { pathname: location.pathname, search: location.search },
           },
         },
       );
     },
-    [navigate, searchParams, workType, readings, location.pathname, location.search],
+    [navigate, searchParams, workType, displayReadings, location.pathname, location.search],
   );
 
   const clearListFilters = () => setSearchParams({}, { replace: true });
@@ -565,10 +620,10 @@ const ReadingsList: FC = () => {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === readings.length) {
+    if (selectedIds.size === displayReadings.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(readings.map(r => r.id)));
+      setSelectedIds(new Set(displayReadings.map((r) => r.id)));
     }
   };
 
@@ -606,8 +661,8 @@ const ReadingsList: FC = () => {
     }
   };
 
-  const isAllSelected = readings.length > 0 && selectedIds.size === readings.length;
-  const isSomeSelected = selectedIds.size > 0 && selectedIds.size < readings.length;
+  const isAllSelected = displayReadings.length > 0 && selectedIds.size === displayReadings.length;
+  const isSomeSelected = selectedIds.size > 0 && selectedIds.size < displayReadings.length;
 
   const listStatusForZip = (status ?? 'all') as string;
 
@@ -738,7 +793,10 @@ const ReadingsList: FC = () => {
             <div>
               <h1>{getStatusTitle()}</h1>
               <p>
-                {readings.length} reading{readings.length !== 1 ? 's' : ''} found
+                {displayReadings.length} reading{displayReadings.length !== 1 ? 's' : ''} found
+                {assignFilterActive && readings.length !== displayReadings.length
+                  ? ` (${readings.length} total)`
+                  : ''}
                 {dateFilterLabel ? (
                   <>
                     {' '}
@@ -884,6 +942,15 @@ const ReadingsList: FC = () => {
       </div>
 
       <div className="readings-list-filter-toolbar">
+        {showAssignmentFilter ? (
+          <AssignedToMeToggle
+            active={assignFilterActive}
+            onChange={setAssignFilter}
+            assignedCount={assignedToMeCount}
+            totalCount={readings.length}
+            progressRemaining={assignmentRemaining}
+          />
+        ) : null}
         <div className="readings-list-filter-toolbar-head">
           <SlidersHorizontal size={16} aria-hidden />
           <span>List filters</span>
@@ -1142,18 +1209,18 @@ const ReadingsList: FC = () => {
       )}
 
       <main className="list-content">
-        {readingsLoading && readings.length === 0 ? (
+        {readingsLoading && displayReadings.length === 0 ? (
           <ListViewLoading message="Loading sessions…" />
         ) : (
         <>
-        {readings.length > 0 ? (
+        {displayReadings.length > 0 ? (
           <CaptureMapViewKeepAlive
             active={viewMode === 'map'}
-            readings={readings}
+            readings={displayReadings}
             onSelectReading={openReading}
           />
         ) : null}
-        {viewMode === 'map' && readings.length === 0 ? (
+        {viewMode === 'map' && displayReadings.length === 0 ? (
           <div className="empty-state">
             <p>No readings to show on the map for this list and filters.</p>
           </div>
@@ -1232,7 +1299,7 @@ const ReadingsList: FC = () => {
               </tr>
             </thead>
             <tbody>
-              {readings.map((reading) => (
+              {displayReadings.map((reading) => (
                 <tr 
                   key={reading.id} 
                   className={selectedIds.has(reading.id) ? 'selected' : ''}
@@ -1352,7 +1419,7 @@ const ReadingsList: FC = () => {
               ))}
             </tbody>
           </table>
-          {readings.length === 0 && !readingsLoading ? (
+          {displayReadings.length === 0 && !readingsLoading ? (
             <div className="empty-state">
               <p>
                 {dateFilterLabel ||
