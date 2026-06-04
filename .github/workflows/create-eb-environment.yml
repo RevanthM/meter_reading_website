@@ -122,17 +122,28 @@ jobs:
             --environment-name "${{ inputs.template_env }}" \
             --output json > /tmp/config.json
 
-          # App env vars only (avoid VPC/SG clone issues).
+          # App env vars only (avoid VPC/SG clone issues). Never clone static AWS keys — use IAM instance profile.
           jq '
+            def is_static_aws_key:
+              (.OptionName | ascii_upcase) as $n
+              | $n == "AWS_ACCESS_KEY_ID" or $n == "AWS_SECRET_ACCESS_KEY";
             .ConfigurationSettings[0].OptionSettings
             | map(select(
                 .ResourceName == null
                 and .Namespace == "aws:elasticbeanstalk:application:environment"
                 and (.Value != null)
                 and (.Value | type == "string")
+                and (is_static_aws_key | not)
               ))
             | map({Namespace, OptionName, Value})
           ' /tmp/config.json > /tmp/option-settings.json
+
+          if jq -e '.[] | select((.OptionName | ascii_upcase) == "AWS_ACCESS_KEY_ID" or (.OptionName | ascii_upcase) == "AWS_SECRET_ACCESS_KEY")' /tmp/option-settings.json >/dev/null; then
+            echo "Refusing to create environment: static AWS keys still in option-settings.json" >&2
+            jq '.[] | select((.OptionName | ascii_upcase) | test("^AWS_(ACCESS_KEY|SECRET)"))' /tmp/option-settings.json >&2 || true
+            exit 1
+          fi
+          echo "Confirmed: no AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in clone set"
 
           # Instance profile is required; copy from template (any namespace/option name).
           PROFILE=$(jq -r '
