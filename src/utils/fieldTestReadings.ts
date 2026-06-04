@@ -1,4 +1,6 @@
 import type { FieldTestCaptureRow, FieldTestCycle, ImageDifficulty, S3MeterReading } from '../services/api';
+import { fieldTestCaptureFromReading as fieldTestDisplayFromReading } from './fieldTestDisplay';
+import { fieldTestReviewerCorrectionMeta } from './fieldTestCorrectionMeta';
 import { calendarDayKeyInPortalTz } from './readingDisplayDates';
 
 /** Portal reading row → field test image grid row (no presigned URLs). */
@@ -7,13 +9,11 @@ export function fieldTestCaptureFromReading(r: S3MeterReading): FieldTestCapture
     primaryImageKey?: string;
     onTickDialCount?: number | null;
     readsCorrectedCount?: number;
+    finalReading?: string | null;
   };
   const difficulty = String(r.imageDifficulty || 'normal').toLowerCase() as ImageDifficulty;
-  const finalReading =
-    String(r.expectedValue || r.meterValue || '')
-      .replace(/\D/g, '')
-      .padStart(4, '0')
-      .slice(-4) || null;
+  const { finalReading, predictedReading } = fieldTestDisplayFromReading(r);
+  const correction = fieldTestReviewerCorrectionMeta(r);
   return {
     sessionId: r.id,
     s3SessionPrefix: r.s3SessionPrefix,
@@ -22,11 +22,14 @@ export function fieldTestCaptureFromReading(r: S3MeterReading): FieldTestCapture
     capturedAt: r.dateOfReading || r.createdAt || '',
     capturedBy: r.userName || '',
     finalReading,
-    predictedReading: r.meterValue || null,
+    predictedReading,
     imageDifficulty: difficulty,
     onTickDialCount: extended.onTickDialCount ?? null,
     readsCorrectedCount: extended.readsCorrectedCount ?? 0,
-    hadUserCorrection: r.hadUserCorrection === true,
+    hadUserCorrection: correction.isCorrected,
+    correctedBy: correction.correctedBy,
+    correctedAt: correction.correctedAt,
+    correctedOnDevice: correction.correctedOnDevice,
     dialCount: r.dialCount ?? 4,
     confidence: r.confidence ?? null,
     appVersion: r.appVersion || null,

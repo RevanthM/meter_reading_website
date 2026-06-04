@@ -16,6 +16,9 @@ import type { WorkType } from '../types';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { formatSessionIdForDisplay } from '../utils/sessionDisplay';
 import { partitionMeterImages } from '../utils/meterImagePartition';
+import { fieldTestReviewerCorrectionMeta } from '../utils/fieldTestCorrectionMeta';
+import { fieldTestCaptureFromReading } from '../utils/fieldTestDisplay';
+import FieldTestCorrectionMetaLines from './FieldTestCorrectionMetaLines';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
@@ -29,6 +32,8 @@ type Props = {
   workType: WorkType;
   onClose: () => void;
   onIndexChange: (index: number) => void;
+  /** Shown above session id when opened from confusion matrix drill-down. */
+  misreadLabel?: string;
 };
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
@@ -38,16 +43,25 @@ function difficultyBadgeClass(difficulty: string | null | undefined): string {
   return 'unit-test-difficulty-badge unit-test-difficulty-badge--d1';
 }
 
-const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClose, onIndexChange }) => {
+const FieldTestCaptureLightbox: FC<Props> = ({
+  captures,
+  index,
+  workType,
+  onClose,
+  onIndexChange,
+  misreadLabel,
+}) => {
   const cap = captures[index];
+  const [displayCap, setDisplayCap] = useState<FieldTestCaptureRow | null>(cap ?? null);
   const total = captures.length;
   const canPrev = index > 0;
   const canNext = index < total - 1;
   const [resolvedFullMeterUrl, setResolvedFullMeterUrl] = useState<string | null>(null);
   const [loadingFullMeter, setLoadingFullMeter] = useState(false);
 
-  const fullMeterUrl = cap?.fullMeterUrl || resolvedFullMeterUrl || null;
-  const hasGuided = Boolean(cap?.url);
+  const viewCap = displayCap ?? cap;
+  const fullMeterUrl = viewCap?.fullMeterUrl || resolvedFullMeterUrl || null;
+  const hasGuided = Boolean(viewCap?.url);
   const hasFull = Boolean(fullMeterUrl);
 
   const [viewKind, setViewKind] = useState<ViewKind>('guided');
@@ -59,28 +73,43 @@ const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClos
   const stageRef = useRef<HTMLDivElement>(null);
 
   const imageUrl = useMemo(() => {
-    if (!cap) return '';
+    if (!viewCap) return '';
     if (viewKind === 'full') return fullMeterUrl || '';
-    return cap.url || fullMeterUrl || '';
-  }, [cap, fullMeterUrl, viewKind]);
+    return viewCap.url || fullMeterUrl || '';
+  }, [viewCap, fullMeterUrl, viewKind]);
 
   useEffect(() => {
+    setDisplayCap(cap ?? null);
     setResolvedFullMeterUrl(null);
     setLoadingFullMeter(false);
-  }, [cap?.sessionId]);
+  }, [cap]);
 
   useEffect(() => {
-    if (!cap?.sessionId || cap.fullMeterUrl) return;
+    if (!cap?.sessionId) return;
     let cancelled = false;
     setLoadingFullMeter(true);
     void fetchReadingById(cap.sessionId, workType, cap.s3SessionPrefix)
       .then((reading) => {
-        if (cancelled || !reading?.images?.length) return;
-        const { fullMeter } = partitionMeterImages(reading.images);
-        if (fullMeter?.url) setResolvedFullMeterUrl(fullMeter.url);
+        if (cancelled || !reading) return;
+        const correction = fieldTestReviewerCorrectionMeta(reading);
+        const { finalReading, predictedReading } = fieldTestCaptureFromReading(reading);
+        if (reading.images?.length) {
+          const { fullMeter } = partitionMeterImages(reading.images);
+          if (fullMeter?.url) setResolvedFullMeterUrl(fullMeter.url);
+        }
+        setDisplayCap({
+          ...cap,
+          capturedBy: reading.userName || cap.capturedBy,
+          finalReading: finalReading ?? cap.finalReading,
+          predictedReading: predictedReading ?? cap.predictedReading,
+          hadUserCorrection: correction.isCorrected,
+          correctedBy: correction.correctedBy,
+          correctedAt: correction.correctedAt,
+          correctedOnDevice: correction.correctedOnDevice,
+        });
       })
       .catch(() => {
-        /* list/detail may be unavailable — tab stays disabled */
+        /* keep rollup/list metadata */
       })
       .finally(() => {
         if (!cancelled) setLoadingFullMeter(false);
@@ -88,7 +117,7 @@ const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClos
     return () => {
       cancelled = true;
     };
-  }, [cap?.fullMeterUrl, cap?.s3SessionPrefix, cap?.sessionId, workType]);
+  }, [cap, workType]);
 
   const clampZoom = useCallback((z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)), []);
 
@@ -175,11 +204,11 @@ const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClos
   );
 
   const handleDownload = async () => {
-    if (!cap || !imageUrl) return;
+    if (!viewCap || !imageUrl) return;
     const fileName =
       viewKind === 'full'
-        ? `${cap.sessionId}-full_meter.jpg`
-        : `${cap.sessionId}-guided.jpg`;
+        ? `${viewCap.sessionId}-full_meter.jpg`
+        : `${viewCap.sessionId}-guided.jpg`;
     setDownloading(true);
     try {
       await downloadUrlAsFile(imageUrl, fileName);
@@ -201,18 +230,18 @@ const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClos
     return () => window.removeEventListener('keydown', onKey);
   }, [canNext, canPrev, goToSibling, onClose]);
 
-  if (!cap) return null;
+  if (!viewCap) return null;
 
   const showImageStage = Boolean(imageUrl) || (viewKind === 'full' && loadingFullMeter);
 
-  if (!showImageStage && viewKind === 'guided' && !cap.url && !fullMeterUrl) return null;
+  if (!showImageStage && viewKind === 'guided' && !viewCap.url && !fullMeterUrl) return null;
 
   return createPortal(
     <div
       className="lightbox manual-label-lightbox unit-test-image-lightbox field-test-capture-lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label={`Field test capture ${formatSessionIdForDisplay(cap.sessionId)}`}
+      aria-label={`Field test capture ${formatSessionIdForDisplay(viewCap.sessionId)}`}
       onClick={onClose}
     >
       <div
@@ -335,24 +364,34 @@ const FieldTestCaptureLightbox: FC<Props> = ({ captures, index, workType, onClos
           <p className="manual-label-lightbox-panel-count">
             Capture {index + 1} of {total}
           </p>
+          {misreadLabel ? (
+            <p className="field-test-capture-lightbox-misread-label">{misreadLabel}</p>
+          ) : null}
           <p className="unit-test-image-lightbox-filename">
-            <code>{formatSessionIdForDisplay(cap.sessionId)}</code>
+            <code>{formatSessionIdForDisplay(viewCap.sessionId)}</code>
           </p>
           <p className="field-test-capture-lightbox-meta">
-            <span className={difficultyBadgeClass(cap.imageDifficulty)}>
-              {formatUnitTestDifficultyTag(cap.imageDifficulty)}
+            <span className={difficultyBadgeClass(viewCap.imageDifficulty)}>
+              {formatUnitTestDifficultyTag(viewCap.imageDifficulty)}
             </span>
-            {cap.hadUserCorrection ? <span className="field-test-corrected-pill">Corrected</span> : null}
+            {viewCap.hadUserCorrection ? (
+              <span className="field-test-corrected-pill">Corrected</span>
+            ) : null}
           </p>
           <p className="unit-test-image-lightbox-reading-preview">
-            Final reading: <strong>{cap.finalReading || '—'}</strong>
+            Ground truth: <strong>{viewCap.finalReading || '—'}</strong>
           </p>
           <p className="field-test-capture-lightbox-meta-line">
-            Predicted: <strong>{cap.predictedReading ?? '—'}</strong>
+            Model (raw): <strong>{viewCap.predictedReading ?? '—'}</strong>
           </p>
-          <p className="field-test-capture-lightbox-meta-line">
-            {cap.capturedBy || 'Unknown'} · {cap.dialCount} reads
-          </p>
+          <FieldTestCorrectionMetaLines
+            capturedBy={viewCap.capturedBy}
+            dialCount={viewCap.dialCount}
+            hadUserCorrection={viewCap.hadUserCorrection}
+            correctedBy={viewCap.correctedBy}
+            correctedAt={viewCap.correctedAt}
+            correctedOnDevice={viewCap.correctedOnDevice}
+          />
           <button
             type="button"
             className="view-button unit-test-image-lightbox-download-btn"

@@ -23,7 +23,8 @@ import { canViewFieldTestImages } from '../utils/portalWorkMode';
 import { useReadings } from '../context/ReadingsContext';
 import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
-import { formatReadingShortDate } from '../utils/readingDisplayDates';
+import { formatReadingDateTime, formatReadingShortDate } from '../utils/readingDisplayDates';
+import { fieldTestReviewerCorrectionMeta } from '../utils/fieldTestCorrectionMeta';
 import {
   formatPresetLabel,
   getDateRangeFromPreset,
@@ -509,7 +510,7 @@ const FieldTestReadingsList: FC = () => {
                   }
                 >
                   <option value="all">All</option>
-                  <option value="yes">User corrected</option>
+                  <option value="yes">Corrected</option>
                   <option value="no">No correction</option>
                 </select>
               </label>
@@ -636,6 +637,7 @@ const FieldTestReadingsList: FC = () => {
                     </button>
                   </th>
                   <th>Captured by</th>
+                  <th>Corrected by</th>
                   <th className="readings-th-meter-value">Meter value</th>
                   <th>Actions</th>
                 </tr>
@@ -643,6 +645,7 @@ const FieldTestReadingsList: FC = () => {
               <tbody>
                 {filteredReadings.map((reading) => {
                   const { label, color } = getReadingListStatusDisplay(reading);
+                  const correction = fieldTestReviewerCorrectionMeta(reading);
                   return (
                     <tr key={reading.id}>
                       <td data-label="Location">
@@ -682,7 +685,7 @@ const FieldTestReadingsList: FC = () => {
                               Test
                             </span>
                           ) : null}
-                          {reading.hadUserCorrection ? (
+                          {correction.isCorrected ? (
                             <span className="field-test-corrected-pill">Corrected</span>
                           ) : null}
                         </span>
@@ -700,6 +703,28 @@ const FieldTestReadingsList: FC = () => {
                             {reading.userName?.trim() ? reading.userName : '—'}
                           </span>
                         </div>
+                      </td>
+                      <td data-label="Corrected by">
+                        {correction.correctedBy ? (
+                          <div className="field-test-correction-cell">
+                            <span className="field-test-correction-cell-by" title={correction.correctedBy}>
+                              {correction.correctedBy}
+                            </span>
+                            {correction.correctedAt ? (
+                              <time
+                                className="field-test-correction-cell-at"
+                                dateTime={correction.correctedAt}
+                                title={correction.correctedAt}
+                              >
+                                {formatReadingDateTime(correction.correctedAt)}
+                              </time>
+                            ) : null}
+                          </div>
+                        ) : correction.correctedOnDevice ? (
+                          <span className="field-test-correction-cell-device">On device</span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="readings-td-meter-value" data-label="Meter value">
                         <span className="meter-value">{reading.meterValue}</span>

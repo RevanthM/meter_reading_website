@@ -399,7 +399,33 @@ export function sessionItemToPerImageRow(item) {
     dial_count: String(item.dial_count ?? perDial.length ?? 4),
     reads_corrected_count: String(countReadsCorrectedFromItem(item)),
     incorrect_dial_numbers: incorrectDialNumbersFromItem(item).join(','),
+    ml_raw_prediction: item.ml_raw_prediction || predicted,
+    user_correction: item.user_correction || '',
+    final_reading: finalReading,
+    feedback_type: item.feedback_type || '',
+    is_correct:
+      item.is_correct === true ? 'true' : item.is_correct === false ? 'false' : '',
+    portal_metadata_updated_by: item.portal_metadata_updated_by || '',
+    portal_metadata_updated_at: item.portal_metadata_updated_at || '',
   };
+
+  const correction = fieldTestReviewerCorrectionMeta({
+    hadUserCorrection: countReadsCorrectedFromItem(item) > 0,
+    portalMetadataUpdatedBy: item.portal_metadata_updated_by,
+    portalMetadataUpdatedAt: item.portal_metadata_updated_at,
+    expectedValue: item.user_correction,
+    rawPrediction: item.ml_raw_prediction,
+    meterValue: item.ml_prediction,
+    feedbackType: item.feedback_type,
+    isCorrect: item.is_correct,
+    finalReading,
+    readsCorrectedCount: countReadsCorrectedFromItem(item),
+  });
+  row.is_corrected = correction.isCorrected ? 'true' : 'false';
+  row.dials_changed_count = String(correction.dialsChangedCount);
+  row.corrected_by = correction.correctedBy || '';
+  row.corrected_at = correction.correctedAt || '';
+  row.corrected_on_device = correction.correctedOnDevice ? 'true' : 'false';
 
   const dialDetails = Array.isArray(item.dial_details) ? item.dial_details : [];
 
@@ -427,8 +453,71 @@ export function sessionItemToPerImageRow(item) {
   return row;
 }
 
+function pad4Reading(value) {
+  const raw = String(value ?? '').replace(/\D/g, '');
+  if (!raw) return '';
+  return raw.padStart(4, '0').slice(-4);
+}
+
+/** Count dial positions where ground truth ≠ on-device model (`ml_raw`). */
+export function countFieldTestDialReadingChanges(groundTruth, modelReading) {
+  const gt = pad4Reading(groundTruth);
+  const model = pad4Reading(modelReading);
+  if (!gt || !model) return 0;
+  let changed = 0;
+  for (let i = 0; i < 4; i++) {
+    if (gt[i] !== model[i]) changed += 1;
+  }
+  return changed;
+}
+
+/** Corrected only when ≥1 dial digit changed vs model, or device flagged dial edits. */
+export function fieldTestReviewerCorrectionMeta(reading) {
+  const correctedBy = String(reading.portalMetadataUpdatedBy ?? '').trim() || null;
+  const correctedAt = String(reading.portalMetadataUpdatedAt ?? '').trim() || null;
+  const groundTruth = finalReadingFromMetadata({
+    final_reading: reading.finalReading,
+    user_correction: reading.expectedValue,
+    ml_prediction: reading.meterValue,
+    ml_raw_prediction: reading.rawPrediction,
+    feedback_type: reading.feedbackType,
+    is_correct: reading.isCorrect,
+    reads_corrected_count: reading.readsCorrectedCount,
+  });
+  const modelReading = mlBaselineReadingFromMetadata({
+    ml_raw_prediction: reading.rawPrediction,
+    ml_prediction: reading.meterValue,
+  });
+  const dialsChangedCount = countFieldTestDialReadingChanges(groundTruth, modelReading);
+  const deviceCorrected = reading.hadUserCorrection === true;
+  const isCorrected = deviceCorrected || dialsChangedCount > 0;
+  const portalAttributed = Boolean(isCorrected && correctedBy);
+
+  return {
+    isCorrected,
+    dialsChangedCount,
+    correctedBy: portalAttributed ? correctedBy : null,
+    correctedAt: portalAttributed && correctedAt ? correctedAt : null,
+    correctedOnDevice: isCorrected && deviceCorrected && !portalAttributed,
+  };
+}
+
 export function fieldTestCaptureToListItem(reading) {
   const difficulty = normalizeDifficulty(reading.imageDifficulty);
+  const correction = fieldTestReviewerCorrectionMeta(reading);
+  const finalReading = finalReadingFromMetadata({
+    final_reading: reading.finalReading,
+    user_correction: reading.expectedValue,
+    ml_prediction: reading.meterValue,
+    ml_raw_prediction: reading.rawPrediction,
+    feedback_type: reading.feedbackType,
+    is_correct: reading.isCorrect,
+    reads_corrected_count: reading.readsCorrectedCount,
+  });
+  const predictedReading = mlBaselineReadingFromMetadata({
+    ml_raw_prediction: reading.rawPrediction,
+    ml_prediction: reading.meterValue,
+  });
   return {
     sessionId: reading.id,
     s3SessionPrefix: reading.s3SessionPrefix,
@@ -436,16 +525,15 @@ export function fieldTestCaptureToListItem(reading) {
     primaryImageKey: reading.primaryImageKey,
     capturedAt: reading.dateOfReading,
     capturedBy: reading.userName || '',
-    finalReading:
-      String(reading.expectedValue || reading.meterValue || '')
-        .replace(/\D/g, '')
-        .padStart(4, '0')
-        .slice(-4) || null,
-    predictedReading: reading.meterValue || null,
+    finalReading: finalReading || null,
+    predictedReading: predictedReading || null,
     imageDifficulty: difficulty,
     onTickDialCount: reading.onTickDialCount ?? null,
     readsCorrectedCount: reading.readsCorrectedCount ?? 0,
-    hadUserCorrection: reading.hadUserCorrection === true,
+    hadUserCorrection: correction.isCorrected,
+    correctedBy: correction.correctedBy,
+    correctedAt: correction.correctedAt,
+    correctedOnDevice: correction.correctedOnDevice,
     dialCount: reading.dialCount ?? 4,
     confidence: reading.confidence ?? null,
     appVersion: reading.appVersion || null,

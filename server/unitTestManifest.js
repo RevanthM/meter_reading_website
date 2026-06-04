@@ -287,3 +287,74 @@ export async function removeUnitTestManifestByS3Key(s3Client, bucket, workType, 
   const key = await writeUnitTestManifestRows(s3Client, bucket, workType, updated);
   return { key, rows: updated };
 }
+
+/** File name from a unit-test metrics CSV per-image row. */
+export function perImageRowFileNameFromCsv(row) {
+  const fromKey = String(row?.s3_key || '').split('/').pop() || '';
+  return String(row?.filename || row?.image_file_name || fromKey).trim();
+}
+
+export function inferWorkTypeFromUnitTestCsvKey(csvKey) {
+  const parts = String(csvKey || '').split('/').filter(Boolean);
+  const idx = parts.indexOf('unit_test_results');
+  if (idx > 0) {
+    const candidate = parts[idx - 1];
+    if (/^\d{4}$/.test(candidate)) return candidate;
+  }
+  for (const p of parts) {
+    if (/^\d{4}$/.test(p)) return p;
+  }
+  return '1000';
+}
+
+function readingDigits(raw) {
+  return String(raw ?? '')
+    .replace(/\D/g, '')
+    .trim();
+}
+
+/** Match metrics CSV row to manifest: exact name, else filename from expected then predicted. */
+export function lookupUnitTestManifestByCsvRow(byFile, row) {
+  const fn = perImageRowFileNameFromCsv(row);
+  if (!fn) return null;
+
+  const direct = byFile.get(fn);
+  if (direct) return { fileName: fn, manifest: direct };
+
+  const parsed = parseUnitTestImageFileName(fn);
+  if (!parsed) return null;
+
+  const difficulty = normalizeUnitTestDifficulty(row.image_difficulty || parsed.difficulty);
+  const ext = fn.split('.').pop() || 'jpeg';
+  const expected = readingDigits(row.expected_reading_from_filename);
+  const predicted = readingDigits(row.predicted_reading);
+
+  for (const reading of [expected, predicted]) {
+    if (!reading) continue;
+    const fileName = buildUnitTestImageFileName(parsed.prefix, reading, difficulty, ext);
+    const manifest = byFile.get(fileName);
+    if (manifest) return { fileName, manifest };
+  }
+
+  return null;
+}
+
+/** Replace stale `s3_key` / `filename` from manifest (expected + predicted filenames). */
+export async function refreshUnitTestPerImageRowKeys(s3Client, bucket, workType, perImageRows) {
+  if (!Array.isArray(perImageRows) || perImageRows.length === 0) return perImageRows;
+  const wt = String(workType || '1000').trim() || '1000';
+  const { rows: manifestRows } = await readUnitTestManifestRowsCached(s3Client, bucket, wt);
+  const byFile = new Map();
+  for (const r of manifestRows) {
+    if (r.image_file_name) byFile.set(r.image_file_name, r);
+  }
+  return perImageRows.map((row) => {
+    const hit = lookupUnitTestManifestByCsvRow(byFile, row);
+    if (!hit) return row;
+    const s3Key = hit.manifest.s3_key;
+    if (!s3Key || (s3Key === row.s3_key && hit.fileName === perImageRowFileNameFromCsv(row))) {
+      return row;
+    }
+    return { ...row, s3_key: s3Key, filename: hit.fileName };
+  });
+}

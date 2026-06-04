@@ -8,6 +8,7 @@ import {
   createFieldTestCycle,
   deleteFieldTestCycle,
   downloadFieldTestCycleCsv,
+  FIELD_TEST_ANALYTICS_MIN_VERSION,
   fetchFieldTestCycleAnalytics,
   fetchFieldTestCycles,
   updateFieldTestCycle,
@@ -63,7 +64,13 @@ const FieldTestResultsPage: FC = () => {
       setAnalyticsLoading(true);
       setErr(null);
       try {
-        const res = await fetchFieldTestCycleAnalytics(workType, cycleId, { refresh });
+        let res = await fetchFieldTestCycleAnalytics(workType, cycleId, { refresh });
+        const needsRebuild =
+          !refresh &&
+          (res.rollup?.version ?? 0) < FIELD_TEST_ANALYTICS_MIN_VERSION;
+        if (needsRebuild) {
+          res = await fetchFieldTestCycleAnalytics(workType, cycleId, { refresh: true });
+        }
         setRollup(res.rollup);
         setAnalyticsSource(res.source ?? null);
       } catch (e) {

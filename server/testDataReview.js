@@ -18,6 +18,7 @@ import {
   upsertUnitTestManifestRow,
   isUnitTestManifestObjectKey,
   readUnitTestManifestRowsCached,
+  lookupUnitTestManifestByCsvRow,
   writeUnitTestManifestRows,
 } from './unitTestManifest.js';
 
@@ -405,16 +406,25 @@ export async function listUnitTestImages(s3Client, bucket, workType) {
 export async function getUnitTestImageByFileName(s3Client, bucket, workType, fileName) {
   const safeName = String(fileName || '').split('/').pop() || '';
   if (!safeName) return null;
-  const prefix = unitTestImagesPrefix(workType);
-  const s3Key = `${prefix}${safeName}`;
   const { rows: manifestRows } = await readUnitTestManifestRowsCached(s3Client, bucket, workType);
-  const row = manifestRows.find((r) => r.image_file_name === safeName || r.s3_key === s3Key);
+  const byFile = new Map();
+  for (const r of manifestRows) {
+    if (r.image_file_name) byFile.set(r.image_file_name, r);
+  }
   const parsed = parseUnitTestImageFileName(safeName);
+  const hit = lookupUnitTestManifestByCsvRow(byFile, {
+    filename: safeName,
+    expected_reading_from_filename: parsed?.expected || '',
+    predicted_reading: '',
+    image_difficulty: parsed?.difficulty || '',
+  });
+  if (!hit) return null;
+  const p = parseUnitTestImageFileName(hit.fileName);
   return {
-    s3Key: row?.s3_key || s3Key,
-    fileName: safeName,
-    expectedMeterValue: row?.expected_meter_value || parsed?.expected || null,
-    imageDifficulty: row?.image_difficulty || parsed?.difficulty || 'normal',
+    s3Key: hit.manifest.s3_key,
+    fileName: hit.fileName,
+    expectedMeterValue: hit.manifest.expected_meter_value || p?.expected || null,
+    imageDifficulty: hit.manifest.image_difficulty || p?.difficulty || 'normal',
   };
 }
 
@@ -466,7 +476,7 @@ export function registerTestDataReviewRoutes(app, deps) {
       }
       const row = await getUnitTestImageByFileName(s3Client, BUCKET_NAME, workType, fileName);
       if (!row) {
-        return res.status(404).json({ error: 'Image not found.' });
+        return res.status(404).json({ error: 'Image not found in unit test images or manifest.' });
       }
       const url = await getPresignedUrl(row.s3Key);
       res.json({ ...row, url, workType });

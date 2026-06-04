@@ -42,6 +42,7 @@ import {
   fieldTestCaptureFromReading,
   readingMatchesDateRangeWindow,
 } from '../utils/fieldTestReadings';
+import FieldTestCorrectionMetaLines from './FieldTestCorrectionMetaLines';
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -514,7 +515,7 @@ const FieldTestImagesPage: FC = () => {
                     }
                   >
                     <option value="all">All</option>
-                    <option value="yes">User corrected</option>
+                    <option value="yes">Corrected</option>
                     <option value="no">No correction</option>
                   </select>
                 </label>
@@ -634,6 +635,9 @@ const FieldTestImagesPage: FC = () => {
                   <span className={difficultyBadgeClass(difficulty)}>
                     {formatUnitTestDifficultyTag(difficulty)}
                   </span>
+                  {cap.hadUserCorrection ? (
+                    <span className="field-test-corrected-pill">Corrected</span>
+                  ) : null}
                 </div>
                 <p className="unit-test-images-name">
                   <code>{fileName}</code>
@@ -641,6 +645,18 @@ const FieldTestImagesPage: FC = () => {
                 <p className="unit-test-images-expected">
                   Ground truth: <strong>{cap.finalReading ?? '—'}</strong>
                 </p>
+                <p className="unit-test-images-expected unit-test-images-predicted">
+                  Model (raw): <strong>{cap.predictedReading ?? '—'}</strong>
+                </p>
+                <FieldTestCorrectionMetaLines
+                  className="unit-test-images-meta-line"
+                  capturedBy={cap.capturedBy}
+                  dialCount={cap.dialCount}
+                  hadUserCorrection={cap.hadUserCorrection}
+                  correctedBy={cap.correctedBy}
+                  correctedAt={cap.correctedAt}
+                  correctedOnDevice={cap.correctedOnDevice}
+                />
                 <div className="unit-test-images-card-actions">
                   <button
                     type="button"

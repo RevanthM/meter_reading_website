@@ -133,6 +133,8 @@ export interface S3MeterReading extends MeterReading {
   manualLabelPending?: boolean;
   /** Field test cycle capture (`field_test_capture` in metadata). */
   fieldTestCapture?: boolean;
+  /** Derived reviewer/model ground truth when synced from Dynamo. */
+  finalReading?: string | null;
 }
 
 /** Pulled from portal readings for this row’s app version (work type + data source scope). */
@@ -533,7 +535,14 @@ export interface FieldTestCaptureRow {
   imageDifficulty: ImageDifficulty;
   onTickDialCount: number | null;
   readsCorrectedCount: number;
+  /** Device and/or portal reviewer correction. */
   hadUserCorrection: boolean;
+  /** Portal reviewer email when metadata was saved after review. */
+  correctedBy?: string | null;
+  /** ISO time of portal metadata save (`portal_metadata_updated_at`). */
+  correctedAt?: string | null;
+  /** True when only on-device dial edits exist (no portal reviewer on record). */
+  correctedOnDevice?: boolean;
   dialCount: number;
   confidence: number | null;
   appVersion: string | null;
@@ -578,6 +587,9 @@ export interface FieldTestReadingsListResponse {
   readings: S3MeterReading[];
   filterOptions: FieldTestCaptureFilterOptions;
 }
+
+/** Bump when rollup `perImageRows` shape changes; client auto-refreshes older cached rollups. */
+export const FIELD_TEST_ANALYTICS_MIN_VERSION = 9;
 
 export interface FieldTestRollup {
   version: number;
@@ -1641,6 +1653,10 @@ export interface UnitTestImageRow {
   url?: string;
   size?: number;
   lastModified?: string | null;
+  /** From metrics CSV when opened via confusion matrix (filename ground truth). */
+  groundTruthReading?: string | null;
+  /** From metrics CSV when opened via confusion matrix (model output). */
+  predictedReading?: string | null;
 }
 
 export interface UnitTestManifestRow {
@@ -1740,6 +1756,12 @@ export async function presignUnitTestImages(s3Keys: string[]): Promise<Record<st
   }
   const data = parseJsonBody<{ urls: Record<string, string> }>(text, response.status);
   return data.urls || {};
+}
+
+/** Same-origin image URL (streams via API; avoids stale presigns and S3 CORS). */
+export function unitTestImageDownloadUrl(workType: WorkType, s3Key: string): string {
+  const params = new URLSearchParams({ workType, s3Key });
+  return `${API_BASE_URL}/test-data/unit-test-images/download?${params}`;
 }
 
 export async function fetchUnitTestImageByFileName(

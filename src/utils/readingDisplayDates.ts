@@ -57,6 +57,21 @@ export function formatReadingShortDate(dateString: string): string {
   return `${String(p.month).padStart(2, '0')}/${String(p.day).padStart(2, '0')}/${String(p.year % 100).padStart(2, '0')}`;
 }
 
+/** Date + time for reviewer actions: `MM/DD/YY · h:mm AM/PM PT`. */
+export function formatReadingDateTime(dateString: string): string {
+  const d = parseReadingInstant(dateString);
+  if (!d) return '—';
+  const datePart = formatReadingShortDate(dateString);
+  if (datePart === '—') return '—';
+  const timePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: PORTAL_DISPLAY_TIME_ZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d);
+  return `${datePart} · ${timePart} PT`;
+}
+
 /** Human label for “today” in Pacific (e.g. Tue, Jan 24, 2026). */
 export function formatPortalWeekdayMedium(isoInstant: string): string {
   const d = parseReadingInstant(isoInstant);

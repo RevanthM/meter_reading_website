@@ -90,3 +90,20 @@ export function expectedFromDialDigits(digits: number[]): string {
 export function formatUnitTestDifficultyTag(difficulty: ImageDifficulty | string | null | undefined): string {
   return UNIT_TEST_DIFFICULTY_LABELS[normalizeUnitTestDifficulty(difficulty)];
 }
+
+/** Flat S3 filename: `{prefix}_d{1|2|3}_{reading}.ext` */
+export function buildUnitTestImageFileName(
+  filePrefix: string,
+  expectedMeterValue: string,
+  difficulty: ImageDifficulty | string = 'normal',
+  ext = 'jpeg',
+): string {
+  const prefix = String(filePrefix ?? '').replace(/\D/g, '') || '1';
+  const code = difficultyToCode(difficulty);
+  const reading =
+    String(expectedMeterValue ?? '')
+      .replace(/\D/g, '')
+      .slice(0, 12) || '0';
+  const cleanExt = String(ext || 'jpeg').replace(/^\./, '').toLowerCase() || 'jpeg';
+  return `${prefix}_${code}_${reading}.${cleanExt}`;
+}

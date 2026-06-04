@@ -1,4 +1,5 @@
 import type { FieldTestCaptureRow, ImageDifficulty, S3MeterReading } from '../services/api';
+import { fieldTestReviewerCorrectionMeta } from './fieldTestCorrectionMeta';
 import type { DateRangePresetId } from './dateRangePresets';
 import { getDateRangeFromPreset, isDateRangePresetId } from './dateRangePresets';
 import { calendarDayKeyInPortalTz } from './readingDisplayDates';
@@ -99,8 +100,9 @@ export function filterFieldTestReadings(
       return false;
     }
     if (filters.user !== 'all' && (r.userName || '').trim() !== filters.user) return false;
-    if (filters.corrected === 'yes' && !r.hadUserCorrection) return false;
-    if (filters.corrected === 'no' && r.hadUserCorrection) return false;
+    const corrected = fieldTestReviewerCorrectionMeta(r).isCorrected;
+    if (filters.corrected === 'yes' && !corrected) return false;
+    if (filters.corrected === 'no' && corrected) return false;
     if (!matchesFieldTestCityFilter(r, filters.location)) return false;
     if (!matchesFieldTestCaptureTriggerFilter(r, filters.captureTrigger)) return false;
     if (!matchesFieldTestDatePreset(r.dateOfReading || r.createdAt, filters.datePreset)) return false;

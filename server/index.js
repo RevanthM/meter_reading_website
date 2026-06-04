@@ -27,6 +27,10 @@ import {
   listUnitTestResultCsvKeys,
   parseUnitTestCsvSummary,
 } from './unitTestCsv.js';
+import {
+  inferWorkTypeFromUnitTestCsvKey,
+  refreshUnitTestPerImageRowKeys,
+} from './unitTestManifest.js';
 import { createImprovementAnalyticsStore, calendarDayKeyInPortalTz } from './improvementAnalytics.js';
 import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
 import { registerTestDataReviewRoutes } from './testDataReview.js';
@@ -2853,12 +2857,22 @@ async function fetchUnitTestRunDetailPayload(key, includeRows) {
   const out = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
   const csvText = await streamToString(out.Body);
   const parsed = parseUnitTestCsvSummary(csvText);
+  let perImageRows = includeRows ? parsed.perImageRows : undefined;
+  if (perImageRows?.length) {
+    const workType = inferWorkTypeFromUnitTestCsvKey(key);
+    perImageRows = await refreshUnitTestPerImageRowKeys(
+      s3Client,
+      BUCKET_NAME,
+      workType,
+      perImageRows,
+    );
+  }
   return {
     key,
     summary: parsed.summary,
     imageDifficultyBreakdown: parsed.imageDifficultyBreakdown,
     perImageCount: parsed.perImageCount,
-    perImageRows: includeRows ? parsed.perImageRows : undefined,
+    perImageRows,
   };
 }
 

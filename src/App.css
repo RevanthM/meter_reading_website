@@ -3169,6 +3169,10 @@ body {
   color: var(--status-correct);
 }
 
+.prediction-number.prediction-number--model-mismatch {
+  color: var(--accent-blue, #2563eb);
+}
+
 .prediction-row.correct .prediction-label {
   color: var(--status-correct);
 }
@@ -13632,6 +13636,54 @@ label.training-hub-filter-card-title--input {
   cursor: pointer;
 }
 
+.confusion-misread-error-panel {
+  max-width: min(360px, 92vw);
+  padding: 1.25rem 1.5rem;
+  margin: 0 auto;
+  text-align: center;
+  background: var(--bg-elevated, #fff);
+  color: var(--text-primary, #0f172a);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+}
+
+.confusion-misread-error-panel--plain {
+  font-size: 0.9rem;
+}
+
+.confusion-misread-error-panel-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.confusion-misread-error-panel-links {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.confusion-misread-error-panel-links a {
+  color: var(--accent, #2563eb);
+  font-weight: 500;
+}
+
+.confusion-misread-missing-banner {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1201;
+  max-width: min(640px, 92vw);
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--radius-md);
+  background: rgba(254, 243, 199, 0.95);
+  color: #78350f;
+  font-size: 0.8125rem;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
 .dashboard-confusion-legend {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
@@ -15602,6 +15654,70 @@ label.training-hub-filter-card-title--input {
   margin-left: auto;
 }
 
+.field-test-capture-lightbox-misread-label {
+  margin: 0 0 var(--spacing-xs);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-blue, #2563eb);
+  line-height: 1.35;
+}
+
+.field-test-correction-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.field-test-correction-meta strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.field-test-correction-meta time {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.unit-test-images-meta-line {
+  margin: 0;
+  padding: 0 var(--spacing-sm) var(--spacing-xs);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.unit-test-images-meta-line strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.field-test-correction-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 14rem;
+}
+
+.field-test-correction-cell-by {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-test-correction-cell-at {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.field-test-correction-cell-device {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .field-test-results-page-header {
   padding-top: var(--spacing-lg);
   padding-bottom: var(--spacing-md);
@@ -16552,6 +16668,21 @@ label.training-hub-filter-card-title--input {
 .unit-test-image-lightbox-shell {
   max-width: min(1200px, 96vw);
   position: relative;
+}
+
+.unit-test-image-lightbox-missing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #fecaca;
+  background: rgba(15, 23, 42, 0.72);
+  pointer-events: none;
 }
 
 .unit-test-image-lightbox-toolbar {

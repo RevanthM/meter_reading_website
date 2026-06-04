@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import {
   downloadUnitTestImage,
+  fetchUnitTestImageByFileName,
+  unitTestImageDownloadUrl,
   updateUnitTestImageExpected,
   type ImageDifficulty,
   type UnitTestImageRow,
@@ -21,6 +23,7 @@ import type { PortalWorkMode } from '../utils/portalWorkMode';
 import {
   dialDigitsFromExpected,
   expectedFromDialDigits,
+  formatUnitTestDifficultyTag,
   meterDialCountFromExpected,
   normalizeDialDigit,
   normalizeUnitTestDifficulty,
@@ -36,6 +39,13 @@ const DIFFICULTY_OPTIONS: { value: ImageDifficulty; label: string }[] = [
   { value: 'very_difficult', label: 'Very difficult (d3)' },
 ];
 
+function difficultyBadgeClass(difficulty: string | null | undefined): string {
+  const d = String(difficulty || 'normal').toLowerCase();
+  if (d === 'difficult') return 'unit-test-difficulty-badge unit-test-difficulty-badge--d2';
+  if (d === 'very_difficult') return 'unit-test-difficulty-badge unit-test-difficulty-badge--d3';
+  return 'unit-test-difficulty-badge unit-test-difficulty-badge--d1';
+}
+
 type UnitTestImageLightboxProps = {
   workType: WorkType;
   images: UnitTestImageRow[];
@@ -45,6 +55,8 @@ type UnitTestImageLightboxProps = {
   onImageUpdated: (previousS3Key: string, updated: UnitTestImageRow) => void;
   readOnly?: boolean;
   portalWorkMode?: PortalWorkMode;
+  /** Confusion matrix drill-down: true → predicted digit label. */
+  misreadLabel?: string;
 };
 
 const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
@@ -56,9 +68,14 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
   onImageUpdated,
   readOnly = false,
   portalWorkMode = 'test_data_reviewer',
+  misreadLabel,
 }) => {
   const img = images[index];
-  const imageUrl = img?.url || '';
+  const imageUrl =
+    img?.url || (img?.s3Key ? unitTestImageDownloadUrl(workType, img.s3Key) : '');
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  const displayUrl = resolvedUrl || imageUrl;
   const total = images.length;
   const canPrev = index > 0;
   const canNext = index < total - 1;
@@ -75,6 +92,11 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
 
   const composedReading = useMemo(() => expectedFromDialDigits(dialDigits), [dialDigits]);
   const meterDialCount = dialDigits.length || meterDialCountFromExpected(img?.expectedMeterValue ?? '');
+  const showRunReadings =
+    readOnly &&
+    (img?.groundTruthReading != null ||
+      img?.predictedReading != null ||
+      misreadLabel != null);
 
   const syncFormFromImage = useCallback((row: UnitTestImageRow) => {
     const expected = (row.expectedMeterValue ?? '').trim();
@@ -86,6 +108,28 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
     if (!img) return;
     syncFormFromImage(img);
   }, [img, syncFormFromImage]);
+
+  useEffect(() => {
+    setResolvedUrl(null);
+    setImageLoadFailed(false);
+  }, [img?.s3Key, imageUrl]);
+
+  const retryImageUrl = useCallback(() => {
+    if (!img?.fileName) return;
+    void fetchUnitTestImageByFileName(workType, img.fileName)
+      .then((row) => {
+        if (row.s3Key) {
+          setResolvedUrl(unitTestImageDownloadUrl(workType, row.s3Key));
+          setImageLoadFailed(false);
+        } else if (row.url) {
+          setResolvedUrl(row.url);
+          setImageLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        setImageLoadFailed(true);
+      });
+  }, [img?.fileName, workType]);
 
   const isDirty =
     img != null &&
@@ -101,7 +145,7 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
 
   useEffect(() => {
     resetView();
-  }, [img?.s3Key, imageUrl, resetView]);
+  }, [img?.s3Key, displayUrl, resetView]);
 
   const zoomIn = useCallback(() => {
     setZoom((z) => clampZoom(z + ZOOM_STEP));
@@ -244,7 +288,7 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [canNext, canPrev, goToSibling, onClose]);
 
-  if (!img || !imageUrl) return null;
+  if (!img) return null;
 
   return (
     <div
@@ -288,7 +332,25 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             }}
           >
-            <img src={imageUrl} alt={img.fileName} draggable={false} />
+            {displayUrl ? (
+              <img
+                src={displayUrl}
+                alt={img.fileName}
+                draggable={false}
+                onLoad={() => setImageLoadFailed(false)}
+                onError={() => {
+                  setImageLoadFailed(true);
+                  retryImageUrl();
+                }}
+              />
+            ) : null}
+            {imageLoadFailed || !displayUrl ? (
+              <p className="unit-test-image-lightbox-missing" role="alert">
+                Image not found in S3
+                {img.fileName ? ` (${img.fileName})` : ''}. It may have been deleted or renamed after this
+                metrics CSV was saved.
+              </p>
+            ) : null}
           </div>
 
           <div className="manual-label-lightbox-zoom-toolbar" aria-label="Zoom controls">
@@ -343,51 +405,72 @@ const UnitTestImageLightbox: FC<UnitTestImageLightboxProps> = ({
             <code>{img.fileName}</code>
           </p>
 
-          <fieldset className="reading-detail-radio-group unit-test-image-lightbox-difficulty">
-            <legend>Difficulty</legend>
-            {DIFFICULTY_OPTIONS.map((opt) => (
-              <label key={opt.value} className="reading-detail-radio">
-                <input
-                  type="radio"
-                  name="unit-test-lightbox-difficulty"
-                  checked={imageDifficulty === opt.value}
-                  disabled={saving || readOnly}
-                  onChange={() => setImageDifficulty(opt.value)}
-                />
-                {opt.label}
-              </label>
-            ))}
-          </fieldset>
+          {showRunReadings ? (
+            <>
+              {misreadLabel ? (
+                <p className="field-test-capture-lightbox-misread-label">{misreadLabel}</p>
+              ) : null}
+              <p className="field-test-capture-lightbox-meta">
+                <span className={difficultyBadgeClass(imageDifficulty)}>
+                  {formatUnitTestDifficultyTag(imageDifficulty)}
+                </span>
+              </p>
+              <p className="unit-test-image-lightbox-reading-preview">
+                Ground truth: <strong>{img.groundTruthReading || img.expectedMeterValue || '—'}</strong>
+              </p>
+              <p className="field-test-capture-lightbox-meta-line">
+                Model (raw): <strong>{img.predictedReading ?? '—'}</strong>
+              </p>
+            </>
+          ) : (
+            <>
+              <fieldset className="reading-detail-radio-group unit-test-image-lightbox-difficulty">
+                <legend>Difficulty</legend>
+                {DIFFICULTY_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="reading-detail-radio">
+                    <input
+                      type="radio"
+                      name="unit-test-lightbox-difficulty"
+                      checked={imageDifficulty === opt.value}
+                      disabled={saving || readOnly}
+                      onChange={() => setImageDifficulty(opt.value)}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </fieldset>
 
-          {dialDigits.length > 0 ? (
-            <div
-              className="unit-test-dial-row unit-test-image-lightbox-dials"
-              style={{ ['--dial-cols' as string]: String(meterDialCount) }}
-            >
-              {Array.from({ length: meterDialCount }, (_, i) => (
-                <div key={i} className="unit-test-dial-cell">
-                  <span className="unit-test-dial-label">Dial {i + 1}</span>
-                  <select
-                    className="image-dial-strip-digit-select"
-                    aria-label={`Digit for dial ${i + 1}`}
-                    value={normalizeDialDigit(dialDigits[i] ?? 0)}
-                    disabled={saving || readOnly}
-                    onChange={(e) => handleDialChange(i, parseInt(e.target.value, 10))}
-                  >
-                    {Array.from({ length: 10 }, (_, d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
+              {dialDigits.length > 0 ? (
+                <div
+                  className="unit-test-dial-row unit-test-image-lightbox-dials"
+                  style={{ ['--dial-cols' as string]: String(meterDialCount) }}
+                >
+                  {Array.from({ length: meterDialCount }, (_, i) => (
+                    <div key={i} className="unit-test-dial-cell">
+                      <span className="unit-test-dial-label">Dial {i + 1}</span>
+                      <select
+                        className="image-dial-strip-digit-select"
+                        aria-label={`Digit for dial ${i + 1}`}
+                        value={normalizeDialDigit(dialDigits[i] ?? 0)}
+                        disabled={saving || readOnly}
+                        onChange={(e) => handleDialChange(i, parseInt(e.target.value, 10))}
+                      >
+                        {Array.from({ length: 10 }, (_, d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : null}
+              ) : null}
 
-          <p className="unit-test-image-lightbox-reading-preview" aria-live="polite">
-            Reading: <strong>{composedReading || '—'}</strong>
-          </p>
+              <p className="unit-test-image-lightbox-reading-preview" aria-live="polite">
+                Reading: <strong>{composedReading || '—'}</strong>
+              </p>
+            </>
+          )}
 
           <div className="unit-test-image-lightbox-actions">
             <button

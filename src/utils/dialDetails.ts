@@ -71,9 +71,10 @@ export function dialRowsFromDialCropImages(
 
 /** Prefer `dial_details` when consistent with `ml_prediction`; otherwise digits from whole-meter reading. */
 export function reconcileDialRowsForReading(
-  reading: Pick<S3MeterReading, 'dialDetails' | 'images' | 'meterValue'>,
+  reading: Pick<S3MeterReading, 'dialDetails' | 'images' | 'meterValue' | 'expectedValue'>,
 ): DialDetailFromMetadata[] {
   const mv = meterDigitsOnly(reading.meterValue);
+  const exp = meterDigitsOnly(reading.expectedValue);
   if (!reading.dialDetails?.length) {
     return dialRowsFromDialCropImages(reading.images, reading.meterValue);
   }
@@ -85,6 +86,8 @@ export function reconcileDialRowsForReading(
 
   const fromRows = meterDigitsOnly(concatDialDigitsFromRows(normalized));
   if (!mv || fromRows === mv) return normalized;
+  /** Reviewer dial edits: keep `dial_details` when they match stored ground truth. */
+  if (exp && fromRows === exp) return normalized;
 
   const fromCrops = dialRowsFromDialCropImages(reading.images, reading.meterValue);
   if (fromCrops.length > 0 && meterDigitsOnly(concatDialDigitsFromRows(fromCrops)) === mv) {
@@ -98,5 +101,21 @@ export function reconcileDialRowsForReading(
       return { ...row, prediction: parseInt(ch, 10) };
     }
     return row;
+  });
+}
+
+/** Per-dial digits from on-device model read only (never reviewer `user_correction`). */
+export function reconcileModelDialRowsForReading(
+  reading: Pick<S3MeterReading, 'dialDetails' | 'images' | 'meterValue' | 'rawPrediction'>,
+): DialDetailFromMetadata[] {
+  const raw = reading.rawPrediction;
+  const ml =
+    raw != null && String(raw).trim() !== ''
+      ? meterDigitsOnly(raw)
+      : meterDigitsOnly(reading.meterValue);
+  return reconcileDialRowsForReading({
+    ...reading,
+    meterValue: ml || reading.meterValue,
+    expectedValue: '',
   });
 }

@@ -16,7 +16,12 @@ import {
   statusIsIncorrect,
 } from '../types';
 import { buildTargetSessionPrefixFromSource } from '../utils/s3SessionPrefix';
-import { concatDialDigitsFromRows, reconcileDialRowsForReading } from '../utils/dialDetails';
+import {
+  concatDialDigitsFromRows,
+  reconcileDialRowsForReading,
+  reconcileModelDialRowsForReading,
+} from '../utils/dialDetails';
+import { fieldTestPredictedReading } from '../utils/fieldTestDisplay';
 import { formatPortalAccuracyConfidencePctFromFraction } from '../utils/portalMetricFormat';
 import type { DialDetailFromMetadata, DialPoint, S3MeterReading } from '../services/api';
 import {
@@ -118,9 +123,16 @@ function partitionMeterImages(images: MeterImage[]): {
 
 type DialDetailRow = DialDetailFromMetadata;
 
-/** Baseline dial editor rows — reconciled with `ml_prediction` when per-dial rows are stale zeros. */
+function mlBaselineMeterValue(reading: S3MeterReading): string {
+  return fieldTestPredictedReading(reading) || String(reading.meterValue ?? '');
+}
+
+/** Baseline dial editor rows — reconciled with raw model read when per-dial rows are stale. */
 function baselineDialRowsForReading(reading: S3MeterReading): DialDetailRow[] {
-  return reconcileDialRowsForReading(reading).map((d) => ({ ...d }));
+  return reconcileDialRowsForReading({
+    ...reading,
+    meterValue: mlBaselineMeterValue(reading),
+  }).map((d) => ({ ...d }));
 }
 
 function dialRowHasExtendedPipeline(row: DialDetailRow | undefined): boolean {
@@ -264,6 +276,8 @@ type StripDialEditProps = {
 type ReadingDetailImageCardProps = {
   image: MeterImage;
   reading: S3MeterReading;
+  /** On-device model digits for dial strip (separate from saved reviewer dial_details). */
+  modelDialRows: DialDetailRow[];
   selectedImage: string | null;
   onActivate: (imageId: string) => void;
   strip?: boolean;
@@ -289,6 +303,7 @@ function formatSessionIdForDisplay(id: string): string {
 const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   image,
   reading,
+  modelDialRows,
   selectedImage,
   onActivate,
   strip,
@@ -297,16 +312,36 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
   const [stripDialEditorOpen, setStripDialEditorOpen] = useState(false);
   const [dialPipelineModalOpen, setDialPipelineModalOpen] = useState(false);
 
+  const dialNumber =
+    image.metadata.dialIndex !== undefined ? image.metadata.dialIndex + 1 : undefined;
+  const modelDialDetail =
+    dialNumber !== undefined
+      ? modelDialRows.find((d) => d.dial === dialNumber)
+      : undefined;
   const dialDetail =
-    image.metadata.dialIndex !== undefined && reading.dialDetails
-      ? reading.dialDetails.find((d) => d.dial === (image.metadata.dialIndex! + 1))
+    dialNumber !== undefined && reading.dialDetails
+      ? reading.dialDetails.find((d) => d.dial === dialNumber)
       : undefined;
 
-  const expectedDigits = reading.expectedValue?.split('') || [];
-  const predictedDigits = reading.meterValue?.split('') || [];
+  const truthRaw = String(reading.expectedValue ?? '').replace(/\D/g, '');
+  const truthReading = truthRaw ? truthRaw.padStart(4, '0').slice(-4) : '';
   const dialPosition = image.metadata.dialIndex;
-  const expectedDigit = dialPosition !== undefined ? expectedDigits[dialPosition] : undefined;
-  const predictedDigit = dialPosition !== undefined ? predictedDigits[dialPosition] : undefined;
+  const modelDigit =
+    modelDialDetail != null && Number.isFinite(Number(modelDialDetail.prediction))
+      ? normalizeDialDigit(Number(modelDialDetail.prediction))
+      : null;
+  const truthChar =
+    dialPosition !== undefined && truthReading.length > dialPosition
+      ? truthReading[dialPosition]
+      : undefined;
+  const truthDigitNum =
+    truthChar !== undefined && /\d/.test(truthChar) ? parseInt(truthChar, 10) : null;
+  const hasReviewerCorrection =
+    truthDigitNum !== null && modelDigit !== null && truthDigitNum !== modelDigit;
+  const modelMatchesTruth =
+    truthDigitNum !== null && modelDigit !== null && truthDigitNum === modelDigit;
+  const editorDigit = truthDigitNum ?? modelDigit ?? 0;
+  const pipelineRow = dialDetail ?? modelDialDetail;
 
   const isSelected = selectedImage === image.id;
   const stripEdit = strip && stripReviewerEdit ? stripReviewerEdit : undefined;
@@ -374,7 +409,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
         )}
       </div>
 
-      {dialDetail && (
+      {(modelDialDetail || dialDetail) && (
         <div
           className="dial-prediction-display"
           onClick={(e) => {
@@ -386,8 +421,8 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
             {stripEdit && stripDialEditorOpen ? (
               <select
                 className="image-dial-strip-digit-select"
-                aria-label={`Digit for dial ${(image.metadata.dialIndex ?? 0) + 1}`}
-                value={normalizeDialDigit(Number(dialDetail.prediction))}
+                aria-label={`Ground truth digit for dial ${(image.metadata.dialIndex ?? 0) + 1}`}
+                value={editorDigit}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   e.stopPropagation();
@@ -403,20 +438,35 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
                 ))}
               </select>
             ) : (
-              <span className="prediction-number">{dialDetail.prediction}</span>
+              <span
+                className={[
+                  'prediction-number',
+                  hasReviewerCorrection ? 'prediction-number--model-mismatch' : '',
+                  !hasReviewerCorrection && modelMatchesTruth ? ' correct' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                title={
+                  hasReviewerCorrection
+                    ? 'Model prediction (reviewer corrected this dial)'
+                    : modelMatchesTruth
+                      ? 'Model matches reviewer ground truth'
+                      : undefined
+                }
+              >
+                {modelDigit ?? modelDialDetail?.prediction ?? dialDetail?.prediction ?? '—'}
+              </span>
             )}
           </div>
-          {reading.expectedValue &&
-            expectedDigit !== undefined &&
-            expectedDigit !== predictedDigit && (
+          {hasReviewerCorrection ? (
               <div className="prediction-row correct">
-                <span className="prediction-label">Correct:</span>
-                <span className="prediction-number correct">{expectedDigit}</span>
+                <span className="prediction-label">Ground truth:</span>
+                <span className="prediction-number correct">{truthDigitNum}</span>
               </div>
-            )}
-          {dialDetail.confidence != null && Number.isFinite(dialDetail.confidence) ? (
+            ) : null}
+          {pipelineRow?.confidence != null && Number.isFinite(pipelineRow.confidence) ? (
             <div className="prediction-confidence">
-              {formatPortalAccuracyConfidencePctFromFraction(dialDetail.confidence)} confidence
+              {formatPortalAccuracyConfidencePctFromFraction(pipelineRow.confidence)} confidence
             </div>
           ) : null}
           <button
@@ -432,7 +482,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
           >
             More details
           </button>
-          {dialPipelineModalOpen
+          {dialPipelineModalOpen && pipelineRow
             ? createPortal(
                 <div
                   className="dial-pipeline-modal-overlay"
@@ -463,7 +513,7 @@ const ReadingDetailImageCard: FC<ReadingDetailImageCardProps> = ({
                     </div>
                     <div className="dial-pipeline-modal-body">
                       <DialPipelineModalBody
-                        row={dialDetail}
+                        row={pipelineRow}
                         modelReading={reading.meterValue != null ? String(reading.meterValue) : ''}
                         dialIndexZeroBased={image.metadata.dialIndex ?? 0}
                       />
@@ -604,6 +654,18 @@ const ReadingDetail: React.FC = () => {
     };
   }, [reading, isLabelerMode, localDialRows, userCorrection, mlPrediction]);
 
+  /** Frozen on-device model digits for dial strip (blue predicted vs green ground truth). */
+  const modelDialRowsForStrip = useMemo((): DialDetailRow[] => {
+    if (!reading) return [];
+    return reconcileModelDialRowsForReading(reading).map((d) => ({ ...d }));
+  }, [
+    reading?.id,
+    reading?.meterValue,
+    reading?.rawPrediction,
+    reading?.dialDetails,
+    reading?.images,
+  ]);
+
   const imagePartition = useMemo(
     () =>
       effectiveReading
@@ -651,16 +713,17 @@ const ReadingDetail: React.FC = () => {
     setLocalDialRows((rows) => {
       const ix = rows.findIndex((r) => r.dial === dialNumber);
       if (ix < 0) return rows;
-      const next = rows.map((row, i) => (i === ix ? { ...row, prediction: n } : row));
-      setMlPrediction(concatDialDigitsFromRows(next));
-      return next;
+      return rows.map((row, i) => (i === ix ? { ...row, prediction: n } : row));
     });
-    const baseline = initialDialRowsRef.current.find((r) => r.dial === dialNumber);
-    const baseDig = baseline != null ? normalizeDialDigit(Number(baseline.prediction)) : null;
+    const modelRow = reconcileModelDialRowsForReading(reading ?? { dialDetails: [], images: [], meterValue: '' }).find(
+      (r) => r.dial === dialNumber,
+    );
+    const baseDig =
+      modelRow != null ? normalizeDialDigit(Number(modelRow.prediction)) : null;
     if (baseDig !== null && baseDig !== n) {
       setSelectedStatus((s) => (statusIsIncorrect(s) ? s : 'incorrect_new'));
     }
-  }, []);
+  }, [reading]);
 
   const [comments, setComments] = useState(reading?.comments || '');
   const [selectedStatus, setSelectedStatus] = useState<ReadingStatus>(
@@ -705,7 +768,7 @@ const ReadingDetail: React.FC = () => {
     setSelectedStatus(
       isReviewerSaveMode ? initialReviewerOutcomeStatus(reading) : reading.status,
     );
-    setMlPrediction(reading.meterValue != null ? String(reading.meterValue) : '');
+    setMlPrediction(mlBaselineMeterValue(reading));
     const baseRows = baselineDialRowsForReading(reading);
     const fromDials = concatDialDigitsFromRows(baseRows);
     const exp = reading.expectedValue != null ? String(reading.expectedValue).trim() : '';
@@ -724,6 +787,7 @@ const ReadingDetail: React.FC = () => {
     reading?.status,
     reading?.s3SessionPrefix,
     reading?.meterValue,
+    reading?.rawPrediction,
     reading?.expectedValue,
     reading?.comments,
     reading?.dialDetails,
@@ -740,7 +804,7 @@ const ReadingDetail: React.FC = () => {
       return selectedStatus !== r.status;
     }
     const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
-    const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
+    const baseMeter = mlBaselineMeterValue(r);
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
@@ -834,7 +898,7 @@ const ReadingDetail: React.FC = () => {
 
     const snapshotForMove = r;
     const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
-    const baseMeter = r.meterValue != null ? String(r.meterValue) : '';
+    const baseMeter = mlBaselineMeterValue(r);
     const baseComments = r.comments || '';
     const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
     const newDialStr = JSON.stringify(localDialRows);
@@ -1335,6 +1399,7 @@ const ReadingDetail: React.FC = () => {
                       key={image.id}
                       image={image}
                       reading={effectiveReading!}
+                      modelDialRows={modelDialRowsForStrip}
                       selectedImage={selectedImage}
                       onActivate={handleImageActivate}
                       strip
@@ -1356,6 +1421,7 @@ const ReadingDetail: React.FC = () => {
                       key={image.id}
                       image={image}
                       reading={effectiveReading!}
+                      modelDialRows={modelDialRowsForStrip}
                       selectedImage={selectedImage}
                       onActivate={handleImageActivate}
                     />
@@ -1372,6 +1438,7 @@ const ReadingDetail: React.FC = () => {
                         key={image.id}
                         image={image}
                         reading={effectiveReading!}
+                        modelDialRows={modelDialRowsForStrip}
                         selectedImage={selectedImage}
                         onActivate={handleImageActivate}
                       />
