@@ -3,7 +3,11 @@ import type { FieldTestRollup, UnitTestRunDetailResponse } from '../services/api
 import DashboardUnitTestCsvCharts from './DashboardUnitTestCsvCharts';
 import DialPctDonut from './DialPctDonut';
 import { useReadings } from '../context/ReadingsContext';
-import { resolveDialStats } from '../utils/unitTestCsvAnalytics';
+import {
+  averageDialAccuracyPct,
+  formatFieldTestDialHoverNote,
+  resolveDialStats,
+} from '../utils/unitTestCsvAnalytics';
 import {
   formatPortalAccuracyConfidencePct,
   roundPortalAccuracyConfidencePct,
@@ -34,15 +38,30 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
     };
   }, [rollup]);
 
-  const dialStats = useMemo(() => resolveDialStats(detail), [detail]);
-  const hasDialDonuts = dialStats.some((d) => d.accuracyPct != null || d.confidencePct != null);
+  const capturesIncorrect = Math.max(
+    0,
+    rollup.summary.correct != null && rollup.captureCount > 0
+      ? rollup.captureCount - rollup.summary.correct
+      : (rollup.capturesMarkedIncorrect ?? 0),
+  );
 
+  const dialStats = useMemo(
+    () =>
+      resolveDialStats(detail, {
+        fieldTest: true,
+        incorrectCaptureCount: capturesIncorrect,
+      }),
+    [detail, capturesIncorrect],
+  );
+  const avgDialAccuracyPct = useMemo(() => averageDialAccuracyPct(dialStats), [dialStats]);
+  const perDialCaptureCount = dialStats[0]?.withGroundTruth ?? rollup.captureCount;
+  const hasDialDonuts = dialStats.some((d) => d.accuracyPct != null || d.confidencePct != null);
   const readAccuracyPct =
-    rollup.summary.accuracyPercent != null && Number.isFinite(rollup.summary.accuracyPercent)
-      ? rollup.summary.accuracyPercent
-      : rollup.readsWithGroundTruth > 0
-        ? roundPortalAccuracyConfidencePct((100 * rollup.readsCorrect) / rollup.readsWithGroundTruth)
-        : null;
+    rollup.captureCount > 0
+      ? roundPortalAccuracyConfidencePct(
+          (100 * Math.max(0, rollup.captureCount - capturesIncorrect)) / rollup.captureCount,
+        )
+      : rollup.summary.accuracyPercent ?? null;
 
   return (
     <div className="field-test-cycle-dashboard">
@@ -57,26 +76,37 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
           ) : null}
         </div>
         <div className="field-test-kpi-card">
-          <span className="field-test-kpi-label">Reads</span>
+          <span className="field-test-kpi-label">Dial reads scored</span>
           <strong className="field-test-kpi-value">{rollup.totalReads.toLocaleString()}</strong>
+          <span className="field-test-kpi-sublabel">
+            {rollup.captureCount.toLocaleString()} captures × 4 dials (not one combined pool)
+          </span>
+        </div>
+        <div className="field-test-kpi-card">
+          <span className="field-test-kpi-label">Dial accuracy (avg)</span>
+          <strong className="field-test-kpi-value">
+            {formatPortalAccuracyConfidencePct(avgDialAccuracyPct)}
+          </strong>
+          <span className="field-test-kpi-sublabel">Mean of D1–D4 strict per-capture accuracy</span>
         </div>
         <div className="field-test-kpi-card">
           <span className="field-test-kpi-label">Read accuracy</span>
           <strong className="field-test-kpi-value">
             {formatPortalAccuracyConfidencePct(readAccuracyPct)}
           </strong>
+          <span className="field-test-kpi-sublabel">
+            {rollup.captureCount > 0
+              ? `${Math.max(0, rollup.captureCount - capturesIncorrect)}/${rollup.captureCount} captures correct (reviewer)`
+              : 'Reviewer correct / incorrect verdict'}
+          </span>
         </div>
         <div className="field-test-kpi-card">
           <span className="field-test-kpi-label">Marked incorrect</span>
-          <strong className="field-test-kpi-value">
-            {(rollup.capturesMarkedIncorrect ?? rollup.readsCorrected).toLocaleString()}
-          </strong>
+          <strong className="field-test-kpi-value">{capturesIncorrect.toLocaleString()}</strong>
           <span className="field-test-kpi-sublabel">
             {rollup.explicitDialCorrections != null && rollup.explicitDialCorrections > 0
-              ? `${rollup.explicitDialCorrections} dial flags`
-              : rollup.dialsModelWrong != null && rollup.dialsModelWrong > 0
-                ? `${rollup.dialsModelWrong} dial${rollup.dialsModelWrong === 1 ? '' : 's'} wrong vs truth`
-                : 'Reviewer marked incorrect on portal'}
+              ? `${rollup.explicitDialCorrections} explicit dial flags on those captures`
+              : 'Reviewer marked incorrect on portal'}
           </span>
         </div>
         <div className="field-test-kpi-card">
@@ -92,13 +122,23 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
           <header className="analytics-details-block-head">
             <h4>Per-dial — cycle aggregate</h4>
             <p className="analytics-details-block-lead">
-              Same layout as Metrics: four dials, accuracy and confidence across all captures in this cycle.
+              Each dial is scored on {perDialCaptureCount.toLocaleString()} captures. Hover a dial for incorrect counts.
             </p>
           </header>
           <div className="analytics-donut-sections">
             <div className="analytics-donut-section">
-              <h5>Accuracy</h5>
-              <div className="analytics-donut-grid">
+              <h5>Dial accuracy</h5>
+              <div className="analytics-donut-grid field-test-dial-donut-grid--with-avg">
+                {avgDialAccuracyPct != null ? (
+                  <DialPctDonut
+                    key="ft-acc-avg"
+                    dial={0}
+                    title="All dials (avg)"
+                    pct={avgDialAccuracyPct}
+                    metricLabel="accuracy"
+                    fill={ACCURACY_FILL}
+                  />
+                ) : null}
                 {dialStats.map((d) => (
                   <DialPctDonut
                     key={`ft-acc-${d.dial}`}
@@ -106,6 +146,7 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
                     pct={d.accuracyPct}
                     metricLabel="accuracy"
                     fill={ACCURACY_FILL}
+                    countNote={formatFieldTestDialHoverNote(d)}
                   />
                 ))}
               </div>
@@ -133,6 +174,8 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
         reportCapture
         confusionImageSource="field_test"
         workType={workType}
+        metricsMode="field_test"
+        incorrectCaptureCount={capturesIncorrect}
       />
     </div>
   );

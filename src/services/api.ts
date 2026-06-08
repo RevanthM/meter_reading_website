@@ -626,7 +626,7 @@ export interface FieldTestReadingsListResponse {
 }
 
 /** Bump when rollup `perImageRows` shape changes; client auto-refreshes older cached rollups. */
-export const FIELD_TEST_ANALYTICS_MIN_VERSION = 9;
+export const FIELD_TEST_ANALYTICS_MIN_VERSION = 13;
 
 export interface FieldTestRollup {
   version: number;
@@ -652,6 +652,16 @@ export interface FieldTestRollup {
   /** Dials where model digit ≠ reviewer ground truth. */
   dialsModelWrong?: number;
   correctionPct: number | null;
+  /** Per-dial strict model accuracy (no bill-lower) across scored captures. */
+  dialAccuracyBreakdown?: {
+    dial: number;
+    withGroundTruth: number;
+    correct: number;
+    wrongOnIncorrectCaptures?: number;
+    incorrectCaptureCount?: number;
+    accuracyPct: number | null;
+    confidencePct: number | null;
+  }[];
   summary: UnitTestCsvSummary;
   imageDifficultyBreakdown: UnitTestImageDifficultyTier[];
   perImageRows: Record<string, string>[];

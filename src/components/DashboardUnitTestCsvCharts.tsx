@@ -20,6 +20,7 @@ import type { UnitTestRunDetailResponse } from '../services/api';
 import type { WorkType } from '../types';
 import {
   confidenceHistogramFromPerImageRows,
+  formatFieldTestDialHoverNote,
   resolveDialStats,
   resolveDifficultyTiers,
   resolveRunPerformance,
@@ -111,6 +112,10 @@ type Props = {
   reportCapture?: boolean;
   confusionImageSource?: ConfusionImageSource;
   workType?: WorkType;
+  /** Field test uses reviewer capture accuracy and strict per-dial accuracy labels. */
+  metricsMode?: 'unit_test' | 'field_test';
+  /** Reviewer-marked incorrect captures — dial fraction denominator (e.g. 12). */
+  incorrectCaptureCount?: number;
 };
 
 const cardCapture = (enabled: boolean | undefined, label: string) =>
@@ -126,9 +131,19 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
   reportCapture = false,
   confusionImageSource,
   workType,
+  metricsMode = 'unit_test',
+  incorrectCaptureCount,
 }) => {
+  const fieldTest = metricsMode === 'field_test';
   const runPerf = useMemo(() => resolveRunPerformance(detail), [detail]);
-  const dialStats = useMemo(() => resolveDialStats(detail), [detail]);
+  const dialStats = useMemo(
+    () =>
+      resolveDialStats(
+        detail,
+        fieldTest ? { fieldTest: true, incorrectCaptureCount } : undefined,
+      ),
+    [detail, fieldTest, incorrectCaptureCount],
+  );
   const difficultyTiers = useMemo(() => resolveDifficultyTiers(detail), [detail]);
 
   const pieData = useMemo(
@@ -157,8 +172,14 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
     () =>
       dialStats
         .filter((d) => d.accuracyPct != null && Number.isFinite(d.accuracyPct))
-        .map((d) => ({ dial: `Dial ${d.dial}`, accuracy: d.accuracyPct as number })),
-    [dialStats],
+        .map((d) => {
+          return {
+            dial: `Dial ${d.dial}`,
+            accuracy: d.accuracyPct as number,
+            hoverNote: fieldTest ? formatFieldTestDialHoverNote(d) : null,
+          };
+        }),
+    [dialStats, fieldTest],
   );
 
   const dialDualData = useMemo(
@@ -224,15 +245,20 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
   return (
     <div className="dashboard-unit-test-analytics">
       <p className="dashboard-unit-test-run-summary" role="note">
-        {summary?.imagesProcessed ?? detail.perImageCount ?? '—'} images
+        {summary?.imagesProcessed ?? detail.perImageCount ?? '—'}{' '}
+        {fieldTest ? 'captures scored' : 'images'}
         {accPct != null && Number.isFinite(accPct)
-          ? ` · ${formatPortalAccuracyConfidencePct(accPct)} full-reading accuracy`
+          ? fieldTest
+            ? ` · ${formatPortalAccuracyConfidencePct(accPct)} read accuracy`
+            : ` · ${formatPortalAccuracyConfidencePct(accPct)} full-reading accuracy`
           : ''}
         {summary?.generated_utc ? ` · ${summary.generated_utc}` : ''}
       </p>
 
       <section className="dashboard-unit-test-analytics-section">
-        <h4 className="dashboard-unit-test-analytics-section-title">Overall model performance</h4>
+        <h4 className="dashboard-unit-test-analytics-section-title">
+          {fieldTest ? 'Read-level performance' : 'Overall model performance'}
+        </h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--2">
           <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Accuracy gauge')}>
             <h5>Accuracy gauge</h5>
@@ -263,7 +289,9 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
                   <span className="dashboard-unit-test-donut-pct">
                     {formatPortalAccuracyConfidencePct(accPct)}
                   </span>
-                  <span className="dashboard-unit-test-donut-label">overall accuracy</span>
+                  <span className="dashboard-unit-test-donut-label">
+                    {fieldTest ? 'read accuracy' : 'overall accuracy'}
+                  </span>
                 </div>
               </div>
             ) : (
@@ -272,7 +300,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
           </div>
 
           <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Correct vs incorrect')}>
-            <h5>Correct vs incorrect readings</h5>
+            <h5>{fieldTest ? 'Correct vs incorrect captures' : 'Correct vs incorrect readings'}</h5>
             {correctIncorrectBar.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={correctIncorrectBar} margin={{ top: 12, right: 8, left: 8, bottom: 4 }}>
@@ -299,7 +327,7 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
         <h4 className="dashboard-unit-test-analytics-section-title">Per-dial analysis</h4>
         <div className="dashboard-unit-test-analytics-grid dashboard-unit-test-analytics-grid--2">
           <div className="dashboard-pipeline-essential-card" {...cardCapture(reportCapture, 'UT — Dial accuracy')}>
-            <h5>Dial accuracy comparison</h5>
+            <h5>{fieldTest ? 'Dial accuracy (strict)' : 'Dial accuracy comparison'}</h5>
             {dialAccuracyData.length > 0 ? (
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart
@@ -312,7 +340,11 @@ const DashboardUnitTestCsvCharts: FC<Props> = ({
                   <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v) => `${v}%`} width={40} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    formatter={(v: number) => [formatPortalAccuracyConfidencePct(v), 'Accuracy']}
+                    formatter={(v: number, _name, item) => {
+                      const row = item?.payload as { hoverNote?: string | null } | undefined;
+                      if (fieldTest && row?.hoverNote) return [row.hoverNote, 'Dial accuracy'];
+                      return [formatPortalAccuracyConfidencePct(v), 'Dial accuracy'];
+                    }}
                   />
                   <Bar dataKey="accuracy" fill={ACCURACY_FILL} radius={[4, 4, 0, 0]} maxBarSize={48} isAnimationActive={false} />
                 </BarChart>

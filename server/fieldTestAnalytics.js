@@ -5,6 +5,7 @@ import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import {
+  captureCorrectByReviewer,
   captureMarkedIncorrectByReviewer,
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
@@ -12,7 +13,7 @@ import {
 } from './fieldTestDerive.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 9;
+export const FIELD_TEST_ROLLUP_VERSION = 13;
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
@@ -46,6 +47,91 @@ function imageConfidencePctFromRow(row) {
   return sessionConf;
 }
 
+function incorrectDialSetFromRow(row) {
+  const raw = String(row.incorrect_dial_numbers ?? '').trim();
+  if (!raw) return new Set();
+  const out = new Set();
+  for (const part of raw.split(/[,;]+/)) {
+    const n = parseInt(part.trim(), 10);
+    if (Number.isInteger(n) && n >= 1 && n <= 4) out.add(n);
+  }
+  return out;
+}
+
+/** Strict model digit vs reviewer ground truth (no dial-4 bill-lower). */
+function fieldTestDialCorrect(row, dial) {
+  if (incorrectDialSetFromRow(row).has(dial)) return false;
+  const exp = row[`dial${dial}_expected_digit`];
+  if (exp === '' || exp == null) return null;
+  const pred = row[`dial${dial}_predicted_digit`];
+  if (pred === '' || pred == null) return false;
+  return String(exp).trim() === String(pred).trim();
+}
+
+function dialAccuracyBreakdownFromRows(perImageRows, incorrectCaptureCount = 0) {
+  const out = [];
+  for (let d = 1; d <= 4; d += 1) {
+    let withGroundTruth = 0;
+    let correct = 0;
+    let wrongOnIncorrectCaptures = 0;
+    const confs = [];
+    for (const row of perImageRows) {
+      const ok = fieldTestDialCorrect(row, d);
+      if (ok == null) continue;
+      withGroundTruth += 1;
+      if (ok) correct += 1;
+      else if (captureIncorrectFromRow(row)) wrongOnIncorrectCaptures += 1;
+      const c = normalizeConfidencePct(
+        row[`dial${d}_composite_confidence`] ?? row[`dial${d}_confidence`],
+      );
+      if (c != null) confs.push(c);
+    }
+    out.push({
+      dial: d,
+      withGroundTruth,
+      correct,
+      wrongOnIncorrectCaptures,
+      incorrectCaptureCount,
+      accuracyPct:
+        withGroundTruth > 0
+          ? roundPortalAccuracyConfidencePct((100 * correct) / withGroundTruth)
+          : null,
+      confidencePct:
+        confs.length > 0
+          ? roundPortalAccuracyConfidencePct(confs.reduce((sum, c) => sum + c, 0) / confs.length)
+          : null,
+    });
+  }
+  return out;
+}
+
+function captureIncorrectFromRow(row) {
+  const marked = parseReadingMatch(row.reviewer_marked_incorrect);
+  if (marked === true) return true;
+  if (marked === false) return false;
+  const feedback = String(row.feedback_type || '').trim().toLowerCase();
+  if (feedback === 'incorrect') return true;
+  const status = String(row.folder_status || '').trim().toLowerCase();
+  const manuallyReviewed = parseReadingMatch(row.is_manually_reviewed) === true;
+  return (
+    status === 'incorrect_analyzed' ||
+    status === 'incorrect_labeled' ||
+    status === 'incorrect_training' ||
+    (status === 'incorrect_new' && manuallyReviewed)
+  );
+}
+
+function captureCorrectFromRow(row) {
+  if (captureIncorrectFromRow(row)) return false;
+  const reviewer = parseReadingMatch(row.reviewer_capture_correct);
+  if (reviewer === true) return true;
+  const feedback = String(row.feedback_type || '').trim().toLowerCase();
+  if (feedback === 'correct') return true;
+  const status = String(row.folder_status || '').trim().toLowerCase();
+  if (status === 'correct') return true;
+  return parseReadingMatch(row.is_correct) === true;
+}
+
 function difficultyStatsFromRows(perImageRows) {
   const tiers = [
     { code: 'd1', label: 'Normal' },
@@ -61,19 +147,10 @@ function difficultyStatsFromRows(perImageRows) {
     const bucket = buckets.get(code) || buckets.get('d1');
     if (!bucket) continue;
     bucket.imageCount += 1;
-    const match = parseReadingMatch(row.overall_reading_match);
     const expected = String(row.expected_reading_from_filename || '').trim();
     if (expected) {
       bucket.withGroundTruth += 1;
-      if (match === true) bucket.correct += 1;
-      else if (match === false) {
-        /* incorrect */
-      } else if (
-        (row.predicted_reading || '').trim() &&
-        expected === (row.predicted_reading || '').trim()
-      ) {
-        bucket.correct += 1;
-      }
+      if (captureCorrectFromRow(row)) bucket.correct += 1;
     }
     const conf = imageConfidencePctFromRow(row);
     if (conf != null) bucket.confs.push(conf);
@@ -119,18 +196,17 @@ function countReads(perImageRows, sessionItems = []) {
     if (item && captureMarkedIncorrectByReviewer(item)) capturesMarkedIncorrect += 1;
 
     for (let d = 1; d <= 4; d++) {
-      const exp = row[`dial${d}_expected_digit`];
-      if (exp === '' || exp == null) continue;
+      const ok = fieldTestDialCorrect(row, d);
+      if (ok == null) continue;
       totalReads += 1;
       readsWithGroundTruth += 1;
-      if (row[`dial${d}_digit_match`] === 'true') readsCorrect += 1;
-      else if (row[`dial${d}_digit_match`] === 'false') dialsModelWrong += 1;
+      if (ok) readsCorrect += 1;
+      else dialsModelWrong += 1;
     }
   }
 
-  /** Prefer explicit per-dial flags; else reviewer “incorrect” captures (~12–13 in May cycle). */
-  const readsCorrected =
-    explicitDialCorrections > 0 ? explicitDialCorrections : capturesMarkedIncorrect;
+  /** Sum of explicit per-dial flags (not the same as captures marked incorrect). */
+  const readsCorrected = explicitDialCorrections;
 
   return {
     totalReads,
@@ -155,26 +231,23 @@ export function buildFieldTestRollup(cycle, sessionItems) {
   const readStats = countReads(perImageRows, scorableItems);
 
   let capturesCorrect = 0;
-  let capturesWithGroundTruth = 0;
   const confs = [];
 
-  for (let i = 0; i < perImageRows.length; i += 1) {
+  for (let i = 0; i < scorableItems.length; i += 1) {
+    const item = scorableItems[i];
     const row = perImageRows[i];
-    const expected = String(row.expected_reading_from_filename || '').trim();
-    if (expected) {
-      capturesWithGroundTruth += 1;
-      if (parseReadingMatch(row.overall_reading_match) === true) {
-        capturesCorrect += 1;
-      }
-    }
+    if (captureCorrectByReviewer(item)) capturesCorrect += 1;
     const c = imageConfidencePctFromRow(row);
     if (c != null) confs.push(c);
   }
 
+  const capturesWithGroundTruth = captureCount;
   const accuracyPercent =
-    capturesWithGroundTruth > 0
-      ? roundPortalAccuracyConfidencePct((100 * capturesCorrect) / capturesWithGroundTruth)
+    captureCount > 0
+      ? roundPortalAccuracyConfidencePct((100 * capturesCorrect) / captureCount)
       : null;
+  const capturesIncorrect = Math.max(0, captureCount - capturesCorrect);
+  const dialAccuracyBreakdown = dialAccuracyBreakdownFromRows(perImageRows, capturesIncorrect);
   const averageConfidencePct =
     confs.length > 0
       ? roundPortalAccuracyConfidencePct(confs.reduce((a, b) => a + b, 0) / confs.length)
@@ -213,6 +286,7 @@ export function buildFieldTestRollup(cycle, sessionItems) {
         confs.length > 0 ? confs.reduce((a, b) => a + b, 0) / confs.length / 100 : null,
     },
     imageDifficultyBreakdown: difficultyStatsFromRows(perImageRows),
+    dialAccuracyBreakdown,
     perImageRows,
     perImageCount: perImageRows.length,
   };

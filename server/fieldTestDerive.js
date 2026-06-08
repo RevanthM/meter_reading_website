@@ -138,14 +138,43 @@ export function captureModelReadingCorrect(item) {
 }
 
 /**
- * Reviewer final check failed — portal Incorrect / is_correct false.
- * This is the source of truth for “marked incorrect” in field-test Results (not iOS per-dial flags alone).
+ * Same rules as Field test Images → “Reviewed incorrect” cohort.
+ * Do not use `is_correct === false` alone — Dynamo stores false when the flag is unset.
  */
-export function captureMarkedIncorrectByReviewer(item) {
+export function isFieldTestReviewedIncorrect(item) {
   if (!item) return false;
   const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
   if (feedback === 'incorrect') return true;
-  return item.is_correct === false;
+  const status = String(item.folder_status ?? '').trim().toLowerCase();
+  return (
+    status === 'incorrect_analyzed' ||
+    status === 'incorrect_labeled' ||
+    status === 'incorrect_training' ||
+    (status === 'incorrect_new' && item.is_manually_reviewed === true)
+  );
+}
+
+/** Same rules as Field test Images → “Reviewed correct” cohort. */
+export function isFieldTestReviewedCorrect(item) {
+  if (!item) return false;
+  const status = String(item.folder_status ?? '').trim().toLowerCase();
+  if (status === 'correct') return true;
+  const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
+  if (feedback === 'correct') return true;
+  return item.is_correct === true;
+}
+
+/**
+ * Reviewer marked capture incorrect (field-test Results).
+ * Alias for {@link isFieldTestReviewedIncorrect} — matches Images tab counts.
+ */
+export function captureMarkedIncorrectByReviewer(item) {
+  return isFieldTestReviewedIncorrect(item);
+}
+
+/** Reviewer verdict: capture passed portal Correct check (field-test read accuracy). */
+export function captureCorrectByReviewer(item) {
+  return isFieldTestReviewedCorrect(item);
 }
 
 /**
@@ -169,15 +198,7 @@ export function isFieldTestExcludedOutcome(item) {
 export function isFieldTestScorableCapture(item) {
   if (!item) return false;
   if (isFieldTestExcludedOutcome(item)) return false;
-
-  const feedback = String(item.feedback_type ?? '').trim().toLowerCase();
-  if (feedback === 'correct' || feedback === 'incorrect') return true;
-
-  const status = String(item.folder_status ?? '').trim().toLowerCase();
-  if (status === 'correct') return true;
-  if (status.startsWith('incorrect')) return true;
-
-  return false;
+  return isFieldTestReviewedCorrect(item) || isFieldTestReviewedIncorrect(item);
 }
 
 /** Field upload rows shown on Field test Images / list (same exclusion as scorable). */
@@ -379,10 +400,13 @@ export function sessionItemToPerImageRow(item) {
     perDial = perDialFromItem(item);
   }
 
-  const overallMatch = finalReading
+  const modelOverallMatch = finalReading
     ? String(captureModelMatchesGroundTruth(perDial))
     : '';
+  const reviewerCorrect = captureCorrectByReviewer(item);
+  const overallMatch = reviewerCorrect ? 'true' : 'false';
   const predicted = mlBaselineReadingFromMetadata(item);
+  const incorrectDials = incorrectDialNumbersFromItem(item);
 
   const row = {
     s3_key: item.primary_image_key || `${item.s3_session_prefix || ''}original.jpg`,
@@ -393,6 +417,10 @@ export function sessionItemToPerImageRow(item) {
     predicted_reading: predicted,
     expected_reading_from_filename: finalReading,
     overall_reading_match: overallMatch,
+    model_overall_reading_match: modelOverallMatch,
+    reviewer_capture_correct: reviewerCorrect ? 'true' : 'false',
+    reviewer_marked_incorrect: captureMarkedIncorrectByReviewer(item) ? 'true' : 'false',
+    is_manually_reviewed: item.is_manually_reviewed === true ? 'true' : 'false',
     captured_by: item.user_name || '',
     captured_at: item.captured_at || '',
     average_confidence: item.confidence != null ? String(item.confidence) : '',
@@ -403,6 +431,7 @@ export function sessionItemToPerImageRow(item) {
     user_correction: item.user_correction || '',
     final_reading: finalReading,
     feedback_type: item.feedback_type || '',
+    folder_status: item.folder_status || '',
     is_correct:
       item.is_correct === true ? 'true' : item.is_correct === false ? 'false' : '',
     portal_metadata_updated_by: item.portal_metadata_updated_by || '',
@@ -440,7 +469,13 @@ export function sessionItemToPerImageRow(item) {
     }
     row[`dial${d}_expected_digit`] = pd.expected != null ? String(pd.expected) : '';
     row[`dial${d}_predicted_digit`] = pd.predicted != null ? String(pd.predicted) : '';
-    row[`dial${d}_digit_match`] = pd.match != null ? (pd.match ? 'true' : 'false') : '';
+    if (incorrectDials.includes(d)) {
+      row[`dial${d}_digit_match`] = 'false';
+    } else if (pd.predicted != null && pd.expected != null) {
+      row[`dial${d}_digit_match`] = pd.predicted === pd.expected ? 'true' : 'false';
+    } else {
+      row[`dial${d}_digit_match`] = pd.match != null ? (pd.match ? 'true' : 'false') : '';
+    }
     if (dd?.confidence != null && Number.isFinite(Number(dd.confidence))) {
       row[`dial${d}_composite_confidence`] = String(dd.confidence);
       row[`dial${d}_confidence`] = String(dd.confidence);

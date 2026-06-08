@@ -12533,6 +12533,12 @@ label.training-hub-filter-card-title--input {
   }
 }
 
+@media (min-width: 900px) {
+  .field-test-dial-donut-grid--with-avg {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
 .analytics-donut {
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 10px;
@@ -12570,6 +12576,22 @@ label.training-hub-filter-card-title--input {
   margin: 0;
   text-align: center;
   padding: 2rem 0;
+  color: var(--text-muted, #64748b);
+}
+
+.analytics-donut__tooltip {
+  padding: 0.35rem 0.5rem;
+}
+
+.analytics-donut__tooltip-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.analytics-donut__tooltip-line + .analytics-donut__tooltip-line {
+  margin-top: 0.2rem;
   color: var(--text-muted, #64748b);
 }
 

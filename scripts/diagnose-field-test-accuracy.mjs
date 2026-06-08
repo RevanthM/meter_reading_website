@@ -10,8 +10,12 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { readFieldTestCycles } from '../server/fieldTestCycles.js';
 import { buildFieldTestRollup, filterSessionsForCycle } from '../server/fieldTestAnalytics.js';
 import {
+  captureMarkedIncorrectByReviewer,
+  captureCorrectByReviewer,
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
+  isFieldTestReviewedIncorrect,
+  isFieldTestReviewedCorrect,
   sessionItemToPerImageRow,
   deriveFieldTestFromMetadata,
 } from '../server/fieldTestDerive.js';
@@ -113,6 +117,45 @@ async function main() {
 
   const rollup = buildFieldTestRollup(cycle, inCycle);
 
+  let byReviewedIncorrect = 0;
+  let byReviewedCorrect = 0;
+  let byImagesCohortIncorrect = 0;
+  const missingFromRollup = [];
+
+  for (const item of inCycle) {
+    if (isFieldTestReviewedIncorrect(item)) byReviewedIncorrect += 1;
+    if (isFieldTestReviewedCorrect(item)) byReviewedCorrect += 1;
+    const status = String(item.folder_status ?? '').trim().toLowerCase();
+    const cohortIncorrect =
+      status === 'incorrect_analyzed' ||
+      status === 'incorrect_labeled' ||
+      status === 'incorrect_training' ||
+      (status === 'incorrect_new' && item.is_manually_reviewed === true);
+    if (cohortIncorrect) byImagesCohortIncorrect += 1;
+  }
+
+  for (const item of items) {
+    const row = sessionItemToPerImageRow(item);
+    if (parseMatch(row.reviewer_marked_incorrect) === true) continue;
+    if (
+      String(item.feedback_type ?? '').toLowerCase() === 'incorrect' ||
+      ['incorrect_analyzed', 'incorrect_labeled', 'incorrect_training'].includes(
+        String(item.folder_status ?? '').toLowerCase(),
+      ) ||
+      (String(item.folder_status ?? '').toLowerCase() === 'incorrect_new' &&
+        item.is_manually_reviewed === true)
+    ) {
+      missingFromRollup.push({
+        session: item.session_id,
+        folder_status: item.folder_status,
+        feedback_type: item.feedback_type,
+        is_manually_reviewed: item.is_manually_reviewed,
+        is_correct: item.is_correct,
+        reviewer_marked_incorrect: row.reviewer_marked_incorrect,
+      });
+    }
+  }
+
   let byOverallCompare = { correct: 0, incorrect: 0, noGt: 0 };
   let byNoCorrection = { correct: 0, incorrect: 0 };
   let byIsCorrect = { correct: 0, incorrect: 0, unset: 0 };
@@ -169,9 +212,20 @@ async function main() {
   console.log(`Captures in cycle (all): ${inCycle.length}`);
   console.log(`Scorable (correct/incorrect): ${items.length}`);
   console.log(`Excluded from results: ${inCycle.length - items.length}`);
+  console.log(`Rollup version: ${rollup.version}`);
   console.log(`Rollup captureCount: ${rollup.captureCount}`);
-  console.log(`Rollup summary: ${rollup.summary.correct}/${rollup.summary.withGroundTruth} full-reading (${rollup.summary.accuracyPercent}%)`);
-  console.log(`Rollup readsCorrected total: ${rollup.readsCorrected}`);
+  console.log(`Rollup capturesMarkedIncorrect: ${rollup.capturesMarkedIncorrect}`);
+  console.log(`Rollup summary: ${rollup.summary.correct}/${rollup.summary.withGroundTruth} capture (${rollup.summary.accuracyPercent}%)`);
+  console.log(`Rollup readsCorrected (dial flags): ${rollup.readsCorrected}`);
+  console.log(`In-cycle reviewed incorrect: ${byReviewedIncorrect}`);
+  console.log(`In-cycle reviewed correct: ${byReviewedCorrect}`);
+  console.log(`In-cycle Images cohort incorrect: ${byImagesCohortIncorrect}`);
+  console.log(`Scorable marked incorrect (rollup fn): ${items.filter(captureMarkedIncorrectByReviewer).length}`);
+  console.log(`Scorable marked correct (rollup fn): ${items.filter(captureCorrectByReviewer).length}`);
+  if (missingFromRollup.length) {
+    console.log('Scorable but reviewer_marked_incorrect false (unexpected):');
+    for (const s of missingFromRollup) console.log(' ', JSON.stringify(s));
+  }
   console.log('');
   console.log('Methods:');
   console.log(

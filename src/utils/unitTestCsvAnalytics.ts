@@ -29,7 +29,42 @@ export type UnitTestDialStats = {
   accuracyPct: number | null;
   /** 0–100 display */
   confidencePct: number | null;
+  /** Field test: dial wrong on captures reviewer marked incorrect. */
+  wrongOnIncorrectCaptures?: number;
+  /** Field test: total captures reviewer marked incorrect (same across dials). */
+  incorrectCaptureCount?: number;
 };
+
+/** Human-readable dial accuracy counts for field test donuts / tooltips. */
+export function formatFieldTestDialCountLabels(stat: UnitTestDialStats): {
+  /** e.g. "9/12" — dial wrong on reviewer-incorrect captures */
+  onIncorrect: string | null;
+  onIncorrectCaption: string | null;
+  /** e.g. "238/247" — correct dial reads across all scored captures */
+  overall: string | null;
+  overallCaption: string | null;
+} {
+  const onIncorrect =
+    stat.incorrectCaptureCount != null &&
+    stat.incorrectCaptureCount > 0 &&
+    stat.wrongOnIncorrectCaptures != null
+      ? `${stat.wrongOnIncorrectCaptures}/${stat.incorrectCaptureCount}`
+      : null;
+  const overall =
+    stat.withGroundTruth > 0 ? `${stat.correct}/${stat.withGroundTruth}` : null;
+  return {
+    onIncorrect,
+    onIncorrectCaption: onIncorrect ? 'wrong on reviewed incorrect captures' : null,
+    overall,
+    overallCaption: overall ? 'correct on captures (this dial only)' : null,
+  };
+}
+
+/** Short dial donut / bar hover, e.g. "6/9 incorrect". */
+export function formatFieldTestDialHoverNote(stat: UnitTestDialStats): string | null {
+  const labels = formatFieldTestDialCountLabels(stat);
+  return labels.onIncorrect ? `${labels.onIncorrect} incorrect` : null;
+}
 
 export type UnitTestImageDifficultyTierStats = UnitTestImageDifficultyTier;
 
@@ -217,6 +252,60 @@ export function dialStatsFromCsvSummary(summary: UnitTestCsvSummary): UnitTestDi
   return out;
 }
 
+export type DialStatsOptions = {
+  /** Field test: strict digit equality, honor reviewer incorrect-dial flags. */
+  fieldTest?: boolean;
+  /** Reviewer-marked incorrect capture count (e.g. 12) — overrides per-row inference. */
+  incorrectCaptureCount?: number;
+};
+
+/** Arithmetic mean of per-dial accuracy % (D1–D4). */
+export function averageDialAccuracyPct(stats: UnitTestDialStats[]): number | null {
+  const pcts = stats
+    .map((d) => d.accuracyPct)
+    .filter((p): p is number => p != null && Number.isFinite(p));
+  if (pcts.length === 0) return null;
+  return roundPortalAccuracyConfidencePct(pcts.reduce((sum, p) => sum + p, 0) / pcts.length);
+}
+
+/** Strict model digit vs reviewer ground truth (no dial-4 bill-lower). */
+export function fieldTestDialIsCorrect(row: Record<string, string>, dial: number): boolean | null {
+  if (incorrectDialSetFromRow(row).has(dial)) return false;
+  const exp = parseDigit(row[`dial${dial}_expected_digit`]);
+  if (exp == null) return null;
+  const pred = resolvePredictedDigit(row, dial);
+  if (pred == null) return false;
+  return pred === exp;
+}
+
+/** Matches Field test Images → “Reviewed incorrect” cohort. */
+function captureIncorrectFromFieldTestRow(row: Record<string, string>): boolean {
+  const marked = parseReadingMatch(row.reviewer_marked_incorrect);
+  if (marked === true) return true;
+  if (marked === false) return false;
+  const feedback = String(row.feedback_type || '').trim().toLowerCase();
+  if (feedback === 'incorrect') return true;
+  const status = String(row.folder_status || '').trim().toLowerCase();
+  const manuallyReviewed = parseReadingMatch(row.is_manually_reviewed) === true;
+  return (
+    status === 'incorrect_analyzed' ||
+    status === 'incorrect_labeled' ||
+    status === 'incorrect_training' ||
+    (status === 'incorrect_new' && manuallyReviewed)
+  );
+}
+
+function captureCorrectFromFieldTestRow(row: Record<string, string>): boolean {
+  if (captureIncorrectFromFieldTestRow(row)) return false;
+  const reviewer = parseReadingMatch(row.reviewer_capture_correct);
+  if (reviewer === true) return true;
+  const feedback = String(row.feedback_type || '').trim().toLowerCase();
+  if (feedback === 'correct') return true;
+  const status = String(row.folder_status || '').trim().toLowerCase();
+  if (status === 'correct') return true;
+  return parseReadingMatch(row.is_correct) === true;
+}
+
 export function incorrectDialSetFromRow(row: Record<string, string>): Set<number> {
   const raw = String(row.incorrect_dial_numbers ?? '').trim();
   if (!raw) return new Set();
@@ -229,32 +318,48 @@ export function incorrectDialSetFromRow(row: Record<string, string>): Set<number
 }
 
 /** Recompute per-dial stats from per-image rows when summary breakdown is missing. */
-export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitTestDialStats[] {
+export function dialStatsFromPerImageRows(
+  rows: Record<string, string>[],
+  options?: DialStatsOptions,
+): UnitTestDialStats[] {
+  const incorrectCaptureCount =
+    options?.incorrectCaptureCount ??
+    (options?.fieldTest
+      ? rows.filter((row) => captureIncorrectFromFieldTestRow(row)).length
+      : 0);
+
   const out: UnitTestDialStats[] = [];
   for (let d = 1; d <= 4; d += 1) {
     let withGroundTruth = 0;
     let correct = 0;
+    let wrongOnIncorrectCaptures = 0;
     const confs: number[] = [];
     for (const row of rows) {
-      const exp = parseDigit(row[`dial${d}_expected_digit`]);
-      if (exp == null) continue;
-      withGroundTruth += 1;
-      const incorrectDials = incorrectDialSetFromRow(row);
-      if (incorrectDials.has(d)) {
-        /* reviewer-flagged model miss */
+      if (options?.fieldTest) {
+        const ok = fieldTestDialIsCorrect(row, d);
+        if (ok == null) continue;
+        withGroundTruth += 1;
+        if (ok) correct += 1;
+        else if (captureIncorrectFromFieldTestRow(row)) wrongOnIncorrectCaptures += 1;
       } else {
-        const pred = resolvePredictedDigit(row, d);
-        const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
-        if (digitMatch === true) {
-          correct += 1;
-        } else if (
-          digitMatch !== false &&
-          pred != null &&
-          dialDigitMatches(exp, pred, d)
-        ) {
-          correct += 1;
-        } else if (parseReadingMatch(row.overall_reading_match) === true) {
-          correct += 1;
+        const exp = parseDigit(row[`dial${d}_expected_digit`]);
+        if (exp == null) continue;
+        withGroundTruth += 1;
+        const incorrectDials = incorrectDialSetFromRow(row);
+        if (incorrectDials.has(d)) {
+          /* reviewer-flagged model miss */
+        } else {
+          const pred = resolvePredictedDigit(row, d);
+          const digitMatch = parseDigitMatch(row[`dial${d}_digit_match`]);
+          if (digitMatch === true) {
+            correct += 1;
+          } else if (
+            digitMatch !== false &&
+            pred != null &&
+            dialDigitMatches(exp, pred, d)
+          ) {
+            correct += 1;
+          }
         }
       }
       const conf = confidencePctFromRaw(
@@ -277,6 +382,12 @@ export function dialStatsFromPerImageRows(rows: Record<string, string>[]): UnitT
         confs.length > 0
           ? roundPortalAccuracyConfidencePct(confs.reduce((a, b) => a + b, 0) / confs.length)
           : null,
+      ...(options?.fieldTest
+        ? {
+            wrongOnIncorrectCaptures,
+            incorrectCaptureCount,
+          }
+        : {}),
     });
   }
   return out;
@@ -530,10 +641,18 @@ export function runPerformanceFromSummary(summary: UnitTestCsvSummary): RunPerfo
   return { accuracyPct, withGroundTruth, correct, incorrect };
 }
 
-export function runPerformanceFromPerImageRows(rows: Record<string, string>[]): RunPerformance {
+export function runPerformanceFromPerImageRows(
+  rows: Record<string, string>[],
+  options?: DialStatsOptions,
+): RunPerformance {
   let withGroundTruth = 0;
   let correct = 0;
   for (const row of rows) {
+    if (options?.fieldTest) {
+      withGroundTruth += 1;
+      if (captureCorrectFromFieldTestRow(row)) correct += 1;
+      continue;
+    }
     const expected = (row.expected_reading_from_filename ?? '').trim();
     if (!expected) continue;
     withGroundTruth += 1;
@@ -552,15 +671,30 @@ export function runPerformanceFromPerImageRows(rows: Record<string, string>[]): 
 }
 
 export function resolveRunPerformance(detail: UnitTestRunDetailResponse): RunPerformance {
+  const fieldTest = isFieldTestRunDetail(detail);
+  if (fieldTest && detail.perImageRows?.length) {
+    return runPerformanceFromPerImageRows(detail.perImageRows, { fieldTest: true });
+  }
   const fromSummary = runPerformanceFromSummary(detail.summary);
   if (fromSummary.withGroundTruth > 0) return fromSummary;
   if (detail.perImageRows?.length) return runPerformanceFromPerImageRows(detail.perImageRows);
   return fromSummary;
 }
 
-export function resolveDialStats(detail: UnitTestRunDetailResponse): UnitTestDialStats[] {
+export function isFieldTestRunDetail(detail: UnitTestRunDetailResponse): boolean {
+  return String(detail.key || '').startsWith('field-test-cycle:');
+}
+
+export function resolveDialStats(
+  detail: UnitTestRunDetailResponse,
+  options?: DialStatsOptions,
+): UnitTestDialStats[] {
+  const fieldTest = options?.fieldTest ?? isFieldTestRunDetail(detail);
   if (detail.perImageRows?.length) {
-    const fromRows = dialStatsFromPerImageRows(detail.perImageRows);
+    const rowOptions: DialStatsOptions | undefined = fieldTest
+      ? { fieldTest: true, incorrectCaptureCount: options?.incorrectCaptureCount }
+      : undefined;
+    const fromRows = dialStatsFromPerImageRows(detail.perImageRows, rowOptions);
     if (fromRows.some((d) => d.withGroundTruth > 0)) return fromRows;
   }
   return dialStatsFromCsvSummary(detail.summary);
