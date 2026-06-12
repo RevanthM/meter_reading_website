@@ -18353,8 +18353,54 @@ label.training-hub-filter-card-title--input {
 .field-test-assignment-filter-toolbar {
   width: 100%;
   margin: var(--spacing-md) 0 0;
-  padding: var(--spacing-md) 0 0;
+  padding: var(--spacing-md) 0;
   border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+}
+
+/* Field test: assignment chips sit in the shared filter toolbar (first row). */
+.field-test-readings-filter-toolbar .readings-list-filter-toolbar-row-assign {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm) var(--spacing-md);
+  width: 100%;
+  margin: 0;
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.field-test-assignment-label,
+.readings-list-filter-toolbar-row-assign .readings-list-filter-label {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+}
+
+.readings-list-filter-toolbar-row-assign {
+  align-items: center;
+  width: 100%;
+}
+
+.readings-list-filter-toolbar-row-assign .readings-list-filter-chips,
+.readings-list-filter-toolbar-row-assign .readings-list-filter-chips-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .readings-list-filter-toolbar-row-assign .readings-list-filter-chip {

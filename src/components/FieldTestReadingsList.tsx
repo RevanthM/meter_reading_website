@@ -453,7 +453,9 @@ const FieldTestReadingsList: FC = () => {
 
           {!err ? (
             <>
-            <div className="readings-list-filter-toolbar field-test-assignment-filter-toolbar">
+            <div
+              className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
+            >
               <AssignedToMeToggle
                 active={assignFilterActive}
                 onChange={setAssignFilter}
@@ -461,10 +463,6 @@ const FieldTestReadingsList: FC = () => {
                 totalCount={filteredReadings.length}
                 progressRemaining={assignmentRemaining}
               />
-            </div>
-            <div
-              className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
-            >
               {showCyclePicker && cycles.length > 0 ? (
                 <label className="unit-test-images-filter-select-wrap">
                   <span className="unit-test-images-filter-label">Cycle</span>

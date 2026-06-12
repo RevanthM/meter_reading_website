@@ -19,7 +19,7 @@ const AssignedToMeToggle: FC<Props> = ({
 }) => {
   return (
     <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-assign">
-      <span className="readings-list-filter-label">Assignment</span>
+      <span className="readings-list-filter-label field-test-assignment-label">Assignment</span>
       <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
         <button
           type="button"

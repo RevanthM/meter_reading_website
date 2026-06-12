@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  /** Local secrets + VITE_* flags live in src/.env (same file the Node server loads). */
+  envDir: 'src',
   server: {
     port: 5173,
     /** If 5173 is busy, exit with an error instead of jumping to 5174. */
@@ -31,6 +33,11 @@ export default defineConfig({
         changeOrigin: true,
         timeout: 300_000,
         proxyTimeout: 300_000,
+      },
+      '/anica-login-api': {
+        target: 'https://chatanicaappep2.azurewebsites.net',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/anica-login-api/, '') || '/',
       },
     },
   },
