@@ -39,6 +39,7 @@ import {
   Target,
   Clock,
   RotateCw,
+  Compass,
   Loader2,
   ChevronLeft,
   ChevronRight,
@@ -64,9 +65,20 @@ import { confirmRemoveFromTestDataset } from '../utils/testDataRemoveConfirm';
 import {
   captureLocationListLine,
   captureLocationMapsUrl,
+  formatDecimalLatLon,
   formatLatLon,
   formatUploadModeLabel,
 } from '../utils/captureLocation';
+import {
+  captureDeviceTiltLevelLabel,
+  captureDeviceTiltUnavailableReason,
+  formatTiltDegrees,
+} from '../utils/captureDeviceTilt';
+import {
+  cameraFacingSubLabel,
+  captureCompassUnavailableReason,
+  meterFacingPrimaryLabel,
+} from '../utils/captureCompass';
 const PORTAL_WORK_TYPES: WorkType[] = ['1000', '2000', '3000', '4000', '5000'];
 
 export type ReadingDetailLocationState = {
@@ -1995,31 +2007,39 @@ const ReadingDetail: React.FC = () => {
                     <MapPin size={16} aria-hidden /> Location
                   </span>
                   <div className="value reading-detail-location-block">
-                    <span className="reading-detail-location-primary">
-                      {captureLocationListLine(reading.captureLocation) || reading.location}
-                    </span>
                     {reading.captureLocation?.placeLabel ? (
-                      <span className="reading-detail-location-sub">
-                        {reading.captureLocation.coordinateLabel ||
-                          (reading.captureLocation.latitude != null &&
-                          reading.captureLocation.longitude != null
-                            ? formatLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)
-                            : null)}
-                        {reading.captureLocation.accuracyM != null
-                          ? ` · ±${Math.round(reading.captureLocation.accuracyM)} m GPS`
-                          : ''}
+                      <span className="reading-detail-location-primary">{reading.captureLocation.placeLabel}</span>
+                    ) : null}
+                    {reading.captureLocation?.latitude != null &&
+                    reading.captureLocation?.longitude != null &&
+                    Number.isFinite(reading.captureLocation.latitude) &&
+                    Number.isFinite(reading.captureLocation.longitude) ? (
+                      <>
+                        <span className="reading-detail-location-sub reading-detail-location-coords">
+                          {formatLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)}
+                          {reading.captureLocation.accuracyM != null
+                            ? ` · ±${Math.round(reading.captureLocation.accuracyM)} m GPS`
+                            : ''}
+                        </span>
+                        <span className="reading-detail-location-sub reading-detail-location-decimal">
+                          {formatDecimalLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)}
+                        </span>
+                      </>
+                    ) : reading.captureLocation?.coordinateLabel ? (
+                      <span className="reading-detail-location-primary">
+                        {reading.captureLocation.coordinateLabel}
                       </span>
-                    ) : reading.captureLocation?.latitude != null &&
-                      reading.captureLocation?.longitude != null ? (
-                      <span className="reading-detail-location-sub reading-detail-location-coords">
-                        {formatLatLon(reading.captureLocation.latitude, reading.captureLocation.longitude)}
-                        {reading.captureLocation.accuracyM != null
-                          ? ` · ±${Math.round(reading.captureLocation.accuracyM)} m`
-                          : ''}
+                    ) : (
+                      <span className="reading-detail-location-primary">
+                        {captureLocationListLine(reading.captureLocation) || reading.location}
+                      </span>
+                    )}
+                    {reading.captureLocation?.capturedAt ? (
+                      <span className="reading-detail-location-sub">
+                        GPS recorded {formatReadingShortDate(reading.captureLocation.capturedAt)}
                       </span>
                     ) : null}
-                    {reading.captureLocation &&
-                    captureLocationMapsUrl(reading.captureLocation) ? (
+                    {reading.captureLocation && captureLocationMapsUrl(reading.captureLocation) ? (
                       <a
                         className="reading-detail-location-map-link"
                         href={captureLocationMapsUrl(reading.captureLocation)!}
@@ -2029,6 +2049,65 @@ const ReadingDetail: React.FC = () => {
                         Open in Maps
                       </a>
                     ) : null}
+                  </div>
+                </div>
+                <div className="metadata-item metadata-item--stacked">
+                  <span className="label">
+                    <RotateCw size={16} aria-hidden /> Photo angle
+                  </span>
+                  <div className="value reading-detail-location-block">
+                    {reading.captureDeviceTilt ? (
+                      <>
+                        <span className="reading-detail-location-primary">
+                          Roll {formatTiltDegrees(reading.captureDeviceTilt.rollDeg)} · Pitch{' '}
+                          {formatTiltDegrees(reading.captureDeviceTilt.pitchDeg)}
+                        </span>
+                        <span className="reading-detail-location-sub">
+                          {captureDeviceTiltLevelLabel(reading.captureDeviceTilt)}
+                          {reading.captureDeviceTilt.capturedAt
+                            ? ` · ${formatReadingShortDate(reading.captureDeviceTilt.capturedAt)}`
+                            : ''}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="reading-detail-location-primary">Not recorded</span>
+                        <span className="reading-detail-location-sub">
+                          {captureDeviceTiltUnavailableReason(reading.imageSource)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="metadata-item metadata-item--stacked">
+                  <span className="label">
+                    <Compass size={16} aria-hidden /> Meter facing
+                  </span>
+                  <div className="value reading-detail-location-block">
+                    {reading.captureCompass ? (
+                      <>
+                        <span className="reading-detail-location-primary">
+                          {meterFacingPrimaryLabel(reading.captureCompass)}
+                        </span>
+                        <span className="reading-detail-location-sub">
+                          {[
+                            cameraFacingSubLabel(reading.captureCompass),
+                            reading.captureCompass.capturedAt
+                              ? formatReadingShortDate(reading.captureCompass.capturedAt)
+                              : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="reading-detail-location-primary">Not recorded</span>
+                        <span className="reading-detail-location-sub">
+                          {captureCompassUnavailableReason(reading.imageSource)}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="metadata-item">

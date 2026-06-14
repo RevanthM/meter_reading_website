@@ -64,6 +64,8 @@ const LIST_READING_PROJECTION = [
   'primary_image_key',
   'image_count',
   'capture_location',
+  'capture_device_tilt',
+  'capture_compass',
   'review_assignment_batch_id',
   'review_assigned_to',
   'review_assigned_at',

@@ -2,6 +2,8 @@ import { inferPortalWorkTypeFromMetadata } from './workTypes.js';
 import { inferStatusAndSourceFromSessionPrefix, normalizeS3SessionPrefix } from './prefixInfer.js';
 import {
   formatCaptureLocationFromMetadata,
+  normalizeCaptureDeviceTilt,
+  normalizeCaptureCompass,
   normalizeCaptureLocation,
   normalizeDialDetailsFromMetadata,
   normalizeSessionConfidenceValue,
@@ -147,6 +149,12 @@ export function metadataToSessionItem(metadata, ctx) {
   if (metadata.capture_location && typeof metadata.capture_location === 'object') {
     item.capture_location = metadata.capture_location;
   }
+  if (metadata.capture_device_tilt && typeof metadata.capture_device_tilt === 'object') {
+    item.capture_device_tilt = metadata.capture_device_tilt;
+  }
+  if (metadata.capture_compass && typeof metadata.capture_compass === 'object') {
+    item.capture_compass = metadata.capture_compass;
+  }
 
   return item;
 }
@@ -160,6 +168,8 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     work_type: item.work_type_code,
     upload_mode: item.upload_mode,
     capture_location: item.capture_location,
+    capture_device_tilt: item.capture_device_tilt,
+    capture_compass: item.capture_compass,
   };
 
   return {
@@ -168,6 +178,8 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     dateOfReading: item.captured_at,
     location: formatCaptureLocationFromMetadata(metadata) || 'Location unavailable',
     captureLocation: normalizeCaptureLocation(metadata),
+    captureDeviceTilt: normalizeCaptureDeviceTilt(metadata),
+    captureCompass: normalizeCaptureCompass(metadata),
     type: item.source_type || 'field',
     status: item.folder_status,
     workType: item.work_type_code || item.portal_work_type || '1000',

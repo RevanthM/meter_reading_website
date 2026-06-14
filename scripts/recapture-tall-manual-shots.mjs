@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, '../docs/user-manual/images');
 const BASE = process.env.BASE_URL || 'http://localhost:5173';
-const SESSION = { UserID: 'manual-docs', EMailID: 'docs@anica.local' };
+const SESSION = { UserID: 'saireetika-manual-docs', EMailID: 'saireetika-docs@anica.local' };
 
 const SHOTS = [
   { file: '10-correct-list.png', path: '/readings/correct', role: 'reviewer' },

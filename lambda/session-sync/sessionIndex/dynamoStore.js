@@ -58,6 +58,8 @@ const LIST_READING_PROJECTION = [
   'primary_image_key',
   'image_count',
   'capture_location',
+  'capture_device_tilt',
+  'capture_compass',
 ].join(', ');
 
 function cleanItem(item) {

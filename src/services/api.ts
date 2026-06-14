@@ -86,11 +86,35 @@ export type CaptureLocation = {
   capturedAt?: string | null;
 };
 
+/** Gyro snapshot at in-app camera shutter (`metadata.capture_device_tilt`). */
+export type CaptureDeviceTilt = {
+  rollDeg?: number | null;
+  pitchDeg?: number | null;
+  levelDotOffsetXNorm?: number | null;
+  levelDotOffsetYNorm?: number | null;
+  isLevel?: boolean | null;
+  capturedAt?: string | null;
+};
+
+/** Compass snapshot at in-app camera shutter (`metadata.capture_compass`). */
+export type CaptureCompass = {
+  cameraHeadingDeg?: number | null;
+  cameraFacing?: string | null;
+  meterFacingDeg?: number | null;
+  meterFacing?: string | null;
+  headingAccuracyDeg?: number | null;
+  capturedAt?: string | null;
+};
+
 export interface S3MeterReading extends MeterReading {
   /** Exact S3 session prefix (…/sessionId/) for server-side moves. */
   s3SessionPrefix?: string;
   /** Full GPS / address payload; `location` is the short list label derived from this. */
   captureLocation?: CaptureLocation | null;
+  /** Phone roll/pitch at in-app camera shutter. */
+  captureDeviceTilt?: CaptureDeviceTilt | null;
+  /** Compass at shutter; meter facing = opposite of back-camera heading. */
+  captureCompass?: CaptureCompass | null;
   rawPrediction?: string;
   isCorrect?: boolean;
   confidence?: number;

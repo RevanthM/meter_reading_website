@@ -18,7 +18,13 @@ const FIXTURE = join(ROOT, 'docs/user-manual/fixtures/sample-upload.png');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 const AUTH_STATE = process.env.AUTH_STATE || '';
 
-const MOCK_SESSION = { UserID: 'manual-docs', EMailID: 'docs@anica.local', FirstName: 'Manual', LastName: 'Docs' };
+// saireetika* bypasses activation/role checks (see portalWorkMode.ts).
+const MOCK_SESSION = {
+  UserID: 'saireetika-manual-docs',
+  EMailID: 'saireetika-docs@anica.local',
+  FirstName: 'Manual',
+  LastName: 'Docs',
+};
 
 /** Minimal 1×1 PNG */
 const TINY_PNG = Buffer.from(

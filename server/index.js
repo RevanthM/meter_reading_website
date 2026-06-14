@@ -921,6 +921,49 @@ function normalizeCaptureLocation(metadata) {
   return { placeLabel, coordinateLabel, latitude, longitude, accuracyM, capturedAt };
 }
 
+/** Normalize iOS `metadata.capture_device_tilt` for API consumers. */
+function normalizeCaptureDeviceTilt(metadata) {
+  const tilt = metadata?.capture_device_tilt;
+  if (!tilt || typeof tilt !== 'object') return null;
+  const rollDeg = typeof tilt.roll_deg === 'number' && Number.isFinite(tilt.roll_deg) ? tilt.roll_deg : null;
+  const pitchDeg = typeof tilt.pitch_deg === 'number' && Number.isFinite(tilt.pitch_deg) ? tilt.pitch_deg : null;
+  const levelDotOffsetXNorm =
+    typeof tilt.level_dot_offset_x_norm === 'number' && Number.isFinite(tilt.level_dot_offset_x_norm)
+      ? tilt.level_dot_offset_x_norm
+      : null;
+  const levelDotOffsetYNorm =
+    typeof tilt.level_dot_offset_y_norm === 'number' && Number.isFinite(tilt.level_dot_offset_y_norm)
+      ? tilt.level_dot_offset_y_norm
+      : null;
+  const isLevel = tilt.is_level === true ? true : tilt.is_level === false ? false : null;
+  const capturedAt = typeof tilt.captured_at === 'string' ? tilt.captured_at.trim() || null : null;
+  if (rollDeg == null && pitchDeg == null && isLevel == null) return null;
+  return { rollDeg, pitchDeg, levelDotOffsetXNorm, levelDotOffsetYNorm, isLevel, capturedAt };
+}
+
+/** Normalize iOS `metadata.capture_compass` for API consumers. */
+function normalizeCaptureCompass(metadata) {
+  const compass = metadata?.capture_compass;
+  if (!compass || typeof compass !== 'object') return null;
+  const cameraHeadingDeg =
+    typeof compass.camera_heading_deg === 'number' && Number.isFinite(compass.camera_heading_deg)
+      ? compass.camera_heading_deg
+      : null;
+  const cameraFacing = typeof compass.camera_facing === 'string' ? compass.camera_facing.trim() || null : null;
+  const meterFacingDeg =
+    typeof compass.meter_facing_deg === 'number' && Number.isFinite(compass.meter_facing_deg)
+      ? compass.meter_facing_deg
+      : null;
+  const meterFacing = typeof compass.meter_facing === 'string' ? compass.meter_facing.trim() || null : null;
+  const headingAccuracyDeg =
+    typeof compass.heading_accuracy_deg === 'number' && Number.isFinite(compass.heading_accuracy_deg)
+      ? compass.heading_accuracy_deg
+      : null;
+  const capturedAt = typeof compass.captured_at === 'string' ? compass.captured_at.trim() || null : null;
+  if (cameraHeadingDeg == null && !cameraFacing && meterFacingDeg == null && !meterFacing) return null;
+  return { cameraHeadingDeg, cameraFacing, meterFacingDeg, meterFacing, headingAccuracyDeg, capturedAt };
+}
+
 /** Short list label: place name or coordinates (not field vs simulator). */
 function formatCaptureLocationFromMetadata(metadata) {
   const loc = normalizeCaptureLocation(metadata);
@@ -1004,6 +1047,8 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       dateOfReading: metadata.timestamp,
       location: formatCaptureLocationFromMetadata(metadata) || 'Location unavailable',
       captureLocation: normalizeCaptureLocation(metadata),
+      captureDeviceTilt: normalizeCaptureDeviceTilt(metadata),
+      captureCompass: normalizeCaptureCompass(metadata),
       type:
         metadata.upload_mode === 'field'
           ? 'field'

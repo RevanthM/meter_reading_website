@@ -31,6 +31,11 @@ export function formatLatLon(lat: number, lon: number): string {
   return `${Math.abs(lat).toFixed(5)}° ${latH}, ${Math.abs(lon).toFixed(5)}° ${lonH}`;
 }
 
+/** Decimal degrees for detail views (e.g. 33.88120, -117.96450). */
+export function formatDecimalLatLon(lat: number, lon: number): string {
+  return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+}
+
 export function captureLocationMapsUrl(loc: CaptureLocation): string | null {
   const lat = loc.latitude;
   const lon = loc.longitude;
