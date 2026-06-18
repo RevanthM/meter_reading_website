@@ -5,7 +5,20 @@ import {
   useSearchParams,
   useLocation,
 } from 'react-router-dom';
-import { Calendar, ClipboardList, Eye, MapPin, Search, SlidersHorizontal, User, X, ArrowDown, ArrowUp } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  ImageIcon,
+  MapPin,
+  Search,
+  SlidersHorizontal,
+  User,
+  X,
+} from 'lucide-react';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
 import CaptureViewModeToggle from './CaptureViewModeToggle';
@@ -50,11 +63,21 @@ import {
 } from '../utils/fieldTestImageFilters';
 import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
 import { readingMatchesDateRangeWindow } from '../utils/fieldTestReadings';
+import FieldTestCycleFilterSelect from './FieldTestCycleFilterSelect';
+import {
+  FIELD_TEST_ALL_CYCLES,
+  fieldTestCycleForDisplay,
+  fieldTestCycleIdForApi,
+  fieldTestCycleScopeLabel,
+  fieldTestCycleSelectValue,
+  fieldTestDefaultsToAllCycles,
+} from '../utils/fieldTestCycleFilter';
 
 const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
 const SEARCH_DEBOUNCE_MS = 350;
 const FIELD_TEST_VIEW_MODE_KEY = 'portal.fieldTest.viewMode';
+const FIELD_TEST_FILTERS_EXPANDED_KEY = 'portal.fieldTest.listFiltersExpanded';
 
 const FIELD_TEST_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
 type FieldTestCohortId = (typeof FIELD_TEST_COHORT_IDS)[number];
@@ -140,6 +163,13 @@ const FieldTestReadingsList: FC = () => {
   });
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [viewMode, setViewMode] = useCaptureViewMode(FIELD_TEST_VIEW_MODE_KEY);
+  const [filtersExpanded, setFiltersExpanded] = useState(() => {
+    try {
+      return localStorage.getItem(FIELD_TEST_FILTERS_EXPANDED_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
 
   const cycleIdParam = searchParams.get('cycleId') || '';
   const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
@@ -147,10 +177,11 @@ const FieldTestReadingsList: FC = () => {
   const rangePresetRaw = (searchParams.get('range') || '').trim();
   const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
   const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
-  const showCyclePicker = useMemo(() => {
-    const mode = outletCtx?.workMode;
-    return Boolean(mode && mode !== 'reviewer' && mode !== 'test_data_reviewer');
-  }, [outletCtx?.workMode]);
+  const defaultToAllCycles = fieldTestDefaultsToAllCycles(portalWorkMode);
+  const cycleSelectValue = fieldTestCycleSelectValue(cycleIdParam, activeCycle, defaultToAllCycles);
+  const apiCycleId = fieldTestCycleIdForApi(cycleSelectValue);
+  const displayCycle = fieldTestCycleForDisplay(cycles, cycleSelectValue);
+  const captureReady = cyclesResolved;
 
   useEffect(() => {
     if (!outletCtx?.workMode || !canViewFieldTestImages(outletCtx.workMode)) {
@@ -162,6 +193,14 @@ const FieldTestReadingsList: FC = () => {
     const t = window.setTimeout(() => setDebouncedQuery(filters.query), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [filters.query]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FIELD_TEST_FILTERS_EXPANDED_KEY, filtersExpanded ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [filtersExpanded]);
 
   const loadCycles = useCallback(async () => {
     try {
@@ -186,19 +225,16 @@ const FieldTestReadingsList: FC = () => {
     void loadCycles();
   }, [loadCycles]);
 
-  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
-  const captureCycleKey = showCyclePicker ? effectiveCycleId : 'reviewer-all';
-  const captureReady = !showCyclePicker || cyclesResolved;
+  const captureCycleKey = apiCycleId ?? FIELD_TEST_ALL_CYCLES;
 
   const loadCaptures = useCallback(
     async (opts?: { refresh?: boolean }) => {
       if (!captureReady) return;
-      if (showCyclePicker && !effectiveCycleId && cycles.length > 0) return;
 
       setErr(null);
       try {
         const res = (await fetchFieldTestCaptures(workType, {
-          cycleId: showCyclePicker ? effectiveCycleId : undefined,
+          cycleId: apiCycleId,
           page: 1,
           limit: 2000,
           format: 'readings',
@@ -215,11 +251,9 @@ const FieldTestReadingsList: FC = () => {
     },
     [
       workType,
-      showCyclePicker,
+      apiCycleId,
       captureCycleKey,
-      effectiveCycleId,
       captureReady,
-      cycles.length,
       mergeWithContext,
     ],
   );
@@ -240,7 +274,8 @@ const FieldTestReadingsList: FC = () => {
   const onCycleChange = (id: string) => {
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
-      if (id) n.set('cycleId', id);
+      if (id === FIELD_TEST_ALL_CYCLES) n.set('cycleId', FIELD_TEST_ALL_CYCLES);
+      else if (id) n.set('cycleId', id);
       else n.delete('cycleId');
       return n;
     });
@@ -360,6 +395,7 @@ const FieldTestReadingsList: FC = () => {
   }, [assignFilterActive, myBatches]);
 
   const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
+  const filtersPanelActive = filtersActive || assignFilterActive || Boolean(activeCohort);
   const clearFilters = () => {
     setFilters({
       query: '',
@@ -402,7 +438,7 @@ const FieldTestReadingsList: FC = () => {
 
   const countLabel = useMemo(() => {
     if (initialLoading && allReadings.length === 0) return 'Loading…';
-    const cyclePart = showCyclePicker && activeCycle ? ` · ${activeCycle.name}` : '';
+    const cyclePart = cycles.length > 0 ? ` · ${fieldTestCycleScopeLabel(cycleSelectValue, displayCycle)}` : '';
     const visibleCount = displayReadings.length;
     const loadedCount = allReadings.length;
     const countText =
@@ -420,8 +456,9 @@ const FieldTestReadingsList: FC = () => {
     allReadings.length,
     displayReadings.length,
     assignFilterActive,
-    activeCycle,
-    showCyclePicker,
+    cycleSelectValue,
+    displayCycle,
+    cycles.length,
     activeCohort,
     rangePreset,
   ]);
@@ -435,24 +472,51 @@ const FieldTestReadingsList: FC = () => {
           <div className="header-content list-page-header-with-actions">
             <div className="list-page-header-lead">
               <div className="page-title">
-                <ClipboardList size={32} strokeWidth={1.5} />
+                <ImageIcon size={32} strokeWidth={1.5} />
                 <div>
-                  <h1>Field test</h1>
+                  <h1>Images</h1>
                   <p aria-live="polite">{countLabel}</p>
                 </div>
               </div>
             </div>
-            <ListPageRefreshButton
-              variant="icon"
-              onRefresh={() => void handleRefresh()}
-              busy={toolbarBusy}
-              disabled={initialLoading && allReadings.length === 0}
-              title="Refresh field test list"
-            />
+            <div className="field-test-readings-header-actions">
+              <button
+                type="button"
+                className="field-test-filters-toggle"
+                onClick={() => setFiltersExpanded((open) => !open)}
+                aria-expanded={filtersExpanded}
+                aria-controls="field-test-readings-filters"
+              >
+                <SlidersHorizontal size={16} aria-hidden />
+                <span>{filtersExpanded ? 'Hide filters' : 'Show filters'}</span>
+                {filtersPanelActive ? (
+                  <span className="field-test-advanced-filters-active-dot" aria-label="Filters active" />
+                ) : null}
+                {filtersExpanded ? (
+                  <ChevronUp size={16} aria-hidden />
+                ) : (
+                  <ChevronDown size={16} aria-hidden />
+                )}
+              </button>
+              <ListPageRefreshButton
+                variant="icon"
+                onRefresh={() => void handleRefresh()}
+                busy={toolbarBusy}
+                disabled={initialLoading && allReadings.length === 0}
+                title="Refresh field test list"
+              />
+            </div>
           </div>
 
           {!err ? (
             <>
+            {!filtersExpanded && filtersPanelActive ? (
+              <p className="field-test-filters-collapsed-hint">
+                Filters are applied — expand to change assignment, search, status, or dates.
+              </p>
+            ) : null}
+            {filtersExpanded ? (
+            <div id="field-test-readings-filters" className="field-test-readings-filters-panel">
             <div
               className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
             >
@@ -463,22 +527,11 @@ const FieldTestReadingsList: FC = () => {
                 totalCount={filteredReadings.length}
                 progressRemaining={assignmentRemaining}
               />
-              {showCyclePicker && cycles.length > 0 ? (
-                <label className="unit-test-images-filter-select-wrap">
-                  <span className="unit-test-images-filter-label">Cycle</span>
-                  <select
-                    className="unit-test-images-filter-select"
-                    value={effectiveCycleId}
-                    onChange={(e) => onCycleChange(e.target.value)}
-                  >
-                    {cycles.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.startDate} – {c.endDate})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
+              <FieldTestCycleFilterSelect
+                cycles={cycles}
+                value={cycleSelectValue}
+                onChange={onCycleChange}
+              />
               <label className="unit-test-images-search-field">
                 <Search size={18} className="unit-test-images-search-icon" aria-hidden />
                 <input
@@ -642,6 +695,8 @@ const FieldTestReadingsList: FC = () => {
                 ) : null}
               </div>
             </div>
+            </div>
+            ) : null}
             <div className="readings-list-filter-toolbar-row field-test-readings-view-mode-row">
               <CaptureViewModeToggle mode={viewMode} onChange={setViewMode} />
               {viewMode === 'map' ? (

@@ -21,7 +21,6 @@ import ModelFactoryPage from './components/ModelFactoryPage';
 import TestDataPendingPage from './components/TestDataPendingPage';
 import UnitTestImagesPage from './components/UnitTestImagesPage';
 import UnitTestResultsPage from './components/UnitTestResultsPage';
-import FieldTestImagesPage from './components/FieldTestImagesPage';
 import FieldTestReadingsList from './components/FieldTestReadingsList';
 import FieldTestResultsPage from './components/FieldTestResultsPage';
 import ManualUploadPage from './components/ManualUploadPage';
@@ -68,7 +67,7 @@ function AppContent() {
           <Route path="/test-data/images" element={<UnitTestImagesPage />} />
           <Route path="/unit-test/results" element={<UnitTestResultsPage />} />
           <Route path="/field-test" element={<FieldTestReadingsList />} />
-          <Route path="/field-test/images" element={<FieldTestImagesPage />} />
+          <Route path="/field-test/images" element={<Navigate to="/field-test" replace />} />
           <Route path="/field-test/results" element={<FieldTestResultsPage />} />
           <Route path="/test-data/images/edit/:fileName" element={<Navigate to="/test-data/images" replace />} />
           <Route path="/manual-upload" element={<ManualUploadPage />} />

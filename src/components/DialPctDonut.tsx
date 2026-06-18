@@ -1,5 +1,5 @@
 import { useMemo, type FC } from 'react';
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import { ResponsiveContainer, PieChart, Pie, Tooltip } from 'recharts';
 import { formatPortalAccuracyConfidencePct } from '../utils/portalMetricFormat';
 
 const REMAINDER_FILL = '#e2e8f0';
@@ -80,12 +80,9 @@ const DialPctDonut: FC<Props> = ({
                   innerRadius="58%"
                   outerRadius="82%"
                   paddingAngle={1}
+                  stroke="none"
                   isAnimationActive={false}
-                >
-                  {slices.map((entry) => (
-                    <Cell key={entry.name} fill={entry.fill} stroke="none" />
-                  ))}
-                </Pie>
+                />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   content={({ active }) =>

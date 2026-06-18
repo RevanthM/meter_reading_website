@@ -20,7 +20,6 @@ import {
   Upload,
   ClipboardList,
   ImageIcon,
-  MapPin,
   ChevronDown,
   ScrollText,
 } from 'lucide-react';
@@ -127,19 +126,11 @@ const UNIT_TEST_GROUP = navGroup(
   [UNIT_TEST_IMAGES_NAV, UNIT_TEST_RUNS_NAV],
 );
 
-const FIELD_TEST_LIST_NAV: NavLeaf = {
-  path: '/field-test',
-  label: 'Field test',
-  description: 'Field capture review list',
-  hint: 'Review outcome, difficulty, and location',
-  icon: <MapPin size={17} strokeWidth={2} />,
-};
-
 const FIELD_TEST_IMAGES_NAV: NavLeaf = {
-  path: '/field-test/images',
+  path: '/field-test',
   label: 'Images',
-  description: 'Field captures in cycle',
-  hint: 'Map or grid · filter by cycle, user, difficulty',
+  description: 'Field capture review list',
+  hint: 'Map or list · filter by cycle, user, difficulty',
   icon: <ImageIcon size={17} strokeWidth={2} />,
 };
 
@@ -215,7 +206,7 @@ const PortalLayout: FC = () => {
             UNIT_TEST_IMAGES_NAV,
             TEST_DATA_PENDING_NAV,
           ]),
-          { kind: 'leaf', item: FIELD_TEST_LIST_NAV },
+          navGroup('field-test', 'Field test', 'Field captures and images', [FIELD_TEST_IMAGES_NAV]),
         ],
       };
     }
@@ -248,7 +239,7 @@ const PortalLayout: FC = () => {
               icon: <CheckCircle2 size={17} />,
             },
           ]),
-          { kind: 'leaf', item: FIELD_TEST_LIST_NAV },
+          navGroup('field-test', 'Field test', 'Field captures and images', [FIELD_TEST_IMAGES_NAV]),
           UPLOADS_GROUP,
         ],
       };
@@ -276,7 +267,10 @@ const PortalLayout: FC = () => {
             },
           ]),
           UNIT_TEST_GROUP,
-          FIELD_TEST_GROUP,
+          navGroup('field-test', 'Field test', 'Field captures and images', [
+            FIELD_TEST_IMAGES_NAV,
+            FIELD_TEST_RESULTS_NAV,
+          ]),
           UPLOADS_GROUP,
           navGroup('data', 'Data', 'All sessions and test-data queue', [
             {

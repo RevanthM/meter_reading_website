@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ['recharts'],
+  },
   /** Local secrets + VITE_* flags live in src/.env (same file the Node server loads). */
   envDir: 'src',
   server: {

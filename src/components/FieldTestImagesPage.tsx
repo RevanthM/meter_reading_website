@@ -44,6 +44,15 @@ import {
   readingMatchesDateRangeWindow,
 } from '../utils/fieldTestReadings';
 import FieldTestCorrectionMetaLines from './FieldTestCorrectionMetaLines';
+import FieldTestCycleFilterSelect from './FieldTestCycleFilterSelect';
+import {
+  FIELD_TEST_ALL_CYCLES,
+  fieldTestCycleForDisplay,
+  fieldTestCycleIdForApi,
+  fieldTestCycleScopeLabel,
+  fieldTestCycleSelectValue,
+  fieldTestDefaultsToAllCycles,
+} from '../utils/fieldTestCycleFilter';
 
 function difficultyBadgeClass(difficulty: string | null | undefined): string {
   const d = String(difficulty || 'normal').toLowerCase();
@@ -101,8 +110,11 @@ const FieldTestImagesPage: FC = () => {
   const rangePresetRaw = (searchParams.get('range') || '').trim();
   const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
   const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
-  const effectiveCycleId = cycleIdParam || activeCycle?.id || '';
-  const captureReady = cyclesResolved && Boolean(effectiveCycleId || cycles.length === 0);
+  const defaultToAllCycles = fieldTestDefaultsToAllCycles(outletCtx?.workMode);
+  const cycleSelectValue = fieldTestCycleSelectValue(cycleIdParam, activeCycle, defaultToAllCycles);
+  const apiCycleId = fieldTestCycleIdForApi(cycleSelectValue);
+  const displayCycle = fieldTestCycleForDisplay(cycles, cycleSelectValue);
+  const captureReady = cyclesResolved;
 
   useEffect(() => {
     if (!outletCtx?.workMode) return;
@@ -146,7 +158,7 @@ const FieldTestImagesPage: FC = () => {
       setErr(null);
       try {
         const res = (await fetchFieldTestCaptures(workType, {
-          cycleId: effectiveCycleId || undefined,
+          cycleId: apiCycleId,
           page: 1,
           limit: 2000,
           format: 'readings',
@@ -162,7 +174,7 @@ const FieldTestImagesPage: FC = () => {
         setInitialLoading(false);
       }
     },
-    [workType, effectiveCycleId, captureReady, mergeWithContext],
+    [workType, apiCycleId, captureReady, mergeWithContext],
   );
 
   useEffect(() => {
@@ -251,7 +263,8 @@ const FieldTestImagesPage: FC = () => {
   const onCycleChange = (id: string) => {
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
-      if (id) n.set('cycleId', id);
+      if (id === FIELD_TEST_ALL_CYCLES) n.set('cycleId', FIELD_TEST_ALL_CYCLES);
+      else if (id) n.set('cycleId', id);
       else n.delete('cycleId');
       return n;
     });
@@ -307,7 +320,7 @@ const FieldTestImagesPage: FC = () => {
 
   const imageCountLabel = useMemo(() => {
     if (initialLoading && allReadings.length === 0) return 'Loading…';
-    const cycleSuffix = activeCycle ? ` · ${activeCycle.name}` : '';
+    const cycleSuffix = ` · ${fieldTestCycleScopeLabel(cycleSelectValue, displayCycle)}`;
     const visibleCount = visibleCaptures.length;
     const filteredCount = filteredCaptures.length;
     const loadedCount = allReadings.length;
@@ -324,6 +337,8 @@ const FieldTestImagesPage: FC = () => {
     visibleCaptures.length,
     filteredCaptures.length,
     activeCycle,
+    cycleSelectValue,
+    displayCycle,
     rangePreset,
     presigning,
     refreshing,
@@ -398,22 +413,11 @@ const FieldTestImagesPage: FC = () => {
               <div
                 className={`unit-test-images-filter-toolbar field-test-images-filter-toolbar field-test-readings-filter-toolbar${toolbarBusy ? ' field-test-readings-filter-toolbar--busy' : ''}`}
               >
-                {cycles.length > 0 ? (
-                  <label className="unit-test-images-filter-select-wrap">
-                    <span className="unit-test-images-filter-label">Cycle</span>
-                    <select
-                      className="unit-test-images-filter-select"
-                      value={effectiveCycleId}
-                      onChange={(e) => onCycleChange(e.target.value)}
-                    >
-                      {cycles.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} ({c.startDate} – {c.endDate})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
+                <FieldTestCycleFilterSelect
+                  cycles={cycles}
+                  value={cycleSelectValue}
+                  onChange={onCycleChange}
+                />
                 <label className="unit-test-images-search-field">
                   <Search size={18} className="unit-test-images-search-icon" aria-hidden />
                   <input
