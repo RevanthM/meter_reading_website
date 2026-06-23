@@ -56,3 +56,4 @@ weights.pt
 # Local tooling / SAM build output (do not commit)
 .pdf-analysis/
 **/.aws-sam/
+exports/

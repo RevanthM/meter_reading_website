@@ -5,15 +5,17 @@ import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { captureDayFromIso } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import {
-  captureCorrectByReviewer,
-  captureMarkedIncorrectByReviewer,
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
   sessionItemToPerImageRow,
 } from './fieldTestDerive.js';
+import {
+  fieldTestStatsCaptureCorrect,
+  fieldTestStatsCaptureIncorrect,
+} from './portalManualReview.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 13;
+export const FIELD_TEST_ROLLUP_VERSION = 14;
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
 
 export function fieldTestRollupKey(workType, cycleId) {
@@ -106,6 +108,10 @@ function dialAccuracyBreakdownFromRows(perImageRows, incorrectCaptureCount = 0) 
 }
 
 function captureIncorrectFromRow(row) {
+  const portal = String(row.portal_manual_review_status || '').trim().toLowerCase();
+  if (portal === 'incorrect') return true;
+  if (portal === 'correct') return false;
+
   const marked = parseReadingMatch(row.reviewer_marked_incorrect);
   if (marked === true) return true;
   if (marked === false) return false;
@@ -122,6 +128,10 @@ function captureIncorrectFromRow(row) {
 }
 
 function captureCorrectFromRow(row) {
+  const portal = String(row.portal_manual_review_status || '').trim().toLowerCase();
+  if (portal === 'correct') return true;
+  if (portal === 'incorrect') return false;
+
   if (captureIncorrectFromRow(row)) return false;
   const reviewer = parseReadingMatch(row.reviewer_capture_correct);
   if (reviewer === true) return true;
@@ -193,7 +203,7 @@ function countReads(perImageRows, sessionItems = []) {
     const explicit =
       parseInt(row.reads_corrected_count || '0', 10) || (item ? countReadsCorrectedFromItem(item) : 0);
     if (explicit > 0) explicitDialCorrections += explicit;
-    if (item && captureMarkedIncorrectByReviewer(item)) capturesMarkedIncorrect += 1;
+    if (item && fieldTestStatsCaptureIncorrect(item)) capturesMarkedIncorrect += 1;
 
     for (let d = 1; d <= 4; d++) {
       const ok = fieldTestDialCorrect(row, d);
@@ -236,7 +246,7 @@ export function buildFieldTestRollup(cycle, sessionItems) {
   for (let i = 0; i < scorableItems.length; i += 1) {
     const item = scorableItems[i];
     const row = perImageRows[i];
-    if (captureCorrectByReviewer(item)) capturesCorrect += 1;
+    if (fieldTestStatsCaptureCorrect(item)) capturesCorrect += 1;
     const c = imageConfidencePctFromRow(row);
     if (c != null) confs.push(c);
   }

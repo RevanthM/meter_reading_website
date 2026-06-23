@@ -53,6 +53,16 @@ import {
   isDateRangePresetId,
   type DateRangePresetId,
 } from '../utils/dateRangePresets';
+import {
+  isPortalManualReviewFilterId,
+  matchesPortalManualReviewFilter,
+  normalizePortalManualReviewStatus,
+  portalManualReviewListBadge,
+  PORTAL_MANUAL_REVIEW_FILTER_IDS,
+  PORTAL_MANUAL_REVIEW_LABELS,
+  type PortalManualReviewFilterId,
+} from '../utils/portalManualReview';
+import { formatSessionIdTimestampForList } from '../utils/sessionDisplay';
 import { getReadingListStatusDisplay, isAwaitingReviewerReview } from '../types';
 import {
   UNIT_TEST_DIFFICULTY_FILTER_OPTIONS,
@@ -79,7 +89,12 @@ const SEARCH_DEBOUNCE_MS = 350;
 const FIELD_TEST_VIEW_MODE_KEY = 'portal.fieldTest.viewMode';
 const FIELD_TEST_FILTERS_EXPANDED_KEY = 'portal.fieldTest.listFiltersExpanded';
 
-const FIELD_TEST_COHORT_IDS = ['untrained', 'correct', 'incorrect', 'training', 'test_data'] as const;
+const FIELD_TEST_REVIEW_COHORT_IDS = ['untrained', 'correct', 'incorrect'] as const;
+const FIELD_TEST_DATASET_COHORT_IDS = ['training', 'test_data'] as const;
+const FIELD_TEST_COHORT_IDS = [
+  ...FIELD_TEST_REVIEW_COHORT_IDS,
+  ...FIELD_TEST_DATASET_COHORT_IDS,
+] as const;
 type FieldTestCohortId = (typeof FIELD_TEST_COHORT_IDS)[number];
 
 const FIELD_TEST_COHORT_LABELS: Record<FieldTestCohortId, string> = {
@@ -176,6 +191,12 @@ const FieldTestReadingsList: FC = () => {
   const activeCohort: FieldTestCohortId | null = isFieldTestCohortId(cohortParamRaw) ? cohortParamRaw : null;
   const rangePresetRaw = (searchParams.get('range') || '').trim();
   const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
+  const portalManualReviewRaw = (searchParams.get('portalManualReview') || '').trim().toLowerCase();
+  const activePortalManualReview: PortalManualReviewFilterId | null = isPortalManualReviewFilterId(
+    portalManualReviewRaw,
+  )
+    ? portalManualReviewRaw
+    : null;
   const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
   const defaultToAllCycles = fieldTestDefaultsToAllCycles(portalWorkMode);
   const cycleSelectValue = fieldTestCycleSelectValue(cycleIdParam, activeCycle, defaultToAllCycles);
@@ -293,6 +314,18 @@ const FieldTestReadingsList: FC = () => {
     );
   };
 
+  const setPortalManualReviewParam = (next: PortalManualReviewFilterId | null) => {
+    setSearchParams(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        if (!next) n.delete('portalManualReview');
+        else n.set('portalManualReview', next);
+        return n;
+      },
+      { replace: true },
+    );
+  };
+
   const clearDateRangeFilters = useCallback(() => {
     setSearchParams(
       (prev) => {
@@ -349,6 +382,9 @@ const FieldTestReadingsList: FC = () => {
     if (activeCohort) {
       list = list.filter((r) => matchesFieldTestCohort(r, activeCohort));
     }
+    if (activePortalManualReview) {
+      list = list.filter((r) => matchesPortalManualReviewFilter(r, activePortalManualReview));
+    }
     list = [...list].sort((a, b) => {
       const cmp = String(b.dateOfReading || b.createdAt || '').localeCompare(
         String(a.dateOfReading || a.createdAt || ''),
@@ -356,7 +392,7 @@ const FieldTestReadingsList: FC = () => {
       return filters.sortDir === 'desc' ? cmp : -cmp;
     });
     return list;
-  }, [allReadings, presetWindow, filterInput, activeCohort, filters.sortDir]);
+  }, [allReadings, presetWindow, filterInput, activeCohort, activePortalManualReview, filters.sortDir]);
 
   const setAssignFilter = useCallback(
     (active: boolean) => {
@@ -395,7 +431,8 @@ const FieldTestReadingsList: FC = () => {
   }, [assignFilterActive, myBatches]);
 
   const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
-  const filtersPanelActive = filtersActive || assignFilterActive || Boolean(activeCohort);
+  const filtersPanelActive =
+    filtersActive || assignFilterActive || Boolean(activeCohort) || Boolean(activePortalManualReview);
   const clearFilters = () => {
     setFilters({
       query: '',
@@ -447,9 +484,12 @@ const FieldTestReadingsList: FC = () => {
         : visibleCount.toLocaleString();
     const base = `${countText} capture${visibleCount === 1 ? '' : 's'}${cyclePart}`;
     const cohortPart = activeCohort ? ` · ${FIELD_TEST_COHORT_LABELS[activeCohort]}` : '';
+    const portalReviewPart = activePortalManualReview
+      ? ` · ${PORTAL_MANUAL_REVIEW_LABELS[activePortalManualReview]}`
+      : '';
     const datePart = rangePreset ? ` · ${formatPresetLabel(rangePreset)}` : '';
     const busyPart = refreshing ? ' · updating…' : '';
-    return `${base}${cohortPart}${datePart}${busyPart}`;
+    return `${base}${cohortPart}${portalReviewPart}${datePart}${busyPart}`;
   }, [
     initialLoading,
     refreshing,
@@ -460,6 +500,7 @@ const FieldTestReadingsList: FC = () => {
     displayCycle,
     cycles.length,
     activeCohort,
+    activePortalManualReview,
     rangePreset,
   ]);
 
@@ -645,9 +686,9 @@ const FieldTestReadingsList: FC = () => {
                 </button>
               ) : null}
             </div>
-            <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort field-test-readings-cohort-row">
+            <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort field-test-readings-review-row">
               <SlidersHorizontal size={16} aria-hidden />
-              <span className="readings-list-filter-label">Show</span>
+              <span className="readings-list-filter-label">Review</span>
               <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
                 <button
                   type="button"
@@ -657,7 +698,7 @@ const FieldTestReadingsList: FC = () => {
                 >
                   All
                 </button>
-                {FIELD_TEST_COHORT_IDS.map((id) => (
+                {FIELD_TEST_REVIEW_COHORT_IDS.map((id) => (
                   <button
                     key={id}
                     type="button"
@@ -666,6 +707,48 @@ const FieldTestReadingsList: FC = () => {
                     aria-pressed={activeCohort === id}
                   >
                     {FIELD_TEST_COHORT_LABELS[id]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort field-test-readings-dataset-row">
+              <span className="readings-list-filter-label">Dataset</span>
+              <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
+                {FIELD_TEST_DATASET_COHORT_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`readings-list-filter-chip${activeCohort === id ? ' active' : ''}`}
+                    onClick={() => setCohortParam(activeCohort === id ? null : id)}
+                    aria-pressed={activeCohort === id}
+                  >
+                    {FIELD_TEST_COHORT_LABELS[id]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-cohort field-test-readings-portal-review-row">
+              <span className="readings-list-filter-label">Portal review</span>
+              <div className="readings-list-filter-chips readings-list-filter-chips-wrap">
+                <button
+                  type="button"
+                  className={`readings-list-filter-chip${!activePortalManualReview ? ' active' : ''}`}
+                  onClick={() => setPortalManualReviewParam(null)}
+                  aria-pressed={!activePortalManualReview}
+                >
+                  All
+                </button>
+                {PORTAL_MANUAL_REVIEW_FILTER_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`readings-list-filter-chip${activePortalManualReview === id ? ' active' : ''}`}
+                    onClick={() =>
+                      setPortalManualReviewParam(activePortalManualReview === id ? null : id)
+                    }
+                    aria-pressed={activePortalManualReview === id}
+                  >
+                    {PORTAL_MANUAL_REVIEW_LABELS[id]}
                   </button>
                 ))}
               </div>
@@ -743,6 +826,7 @@ const FieldTestReadingsList: FC = () => {
                   <th>Location</th>
                   <th>Difficulty</th>
                   <th>Outcome</th>
+                  <th>Portal review</th>
                   <th scope="col" className="readings-th-sortable">
                     <button
                       type="button"
@@ -763,6 +847,7 @@ const FieldTestReadingsList: FC = () => {
                       )}
                     </button>
                   </th>
+                  <th className="readings-col-session-id">Capture ID</th>
                   <th>Captured by</th>
                   <th>Corrected by</th>
                   <th className="readings-th-meter-value">Meter value</th>
@@ -773,6 +858,10 @@ const FieldTestReadingsList: FC = () => {
                 {displayReadings.map((reading) => {
                   const { label, color } = getReadingListStatusDisplay(reading);
                   const correction = fieldTestReviewerCorrectionMeta(reading);
+                  const portalReviewStatus = normalizePortalManualReviewStatus(
+                    reading.portalManualReviewStatus,
+                  );
+                  const portalReview = portalManualReviewListBadge(portalReviewStatus);
                   return (
                     <tr key={reading.id}>
                       <td data-label="Location">
@@ -817,11 +906,47 @@ const FieldTestReadingsList: FC = () => {
                           ) : null}
                         </span>
                       </td>
+                      <td data-label="Portal review">
+                        <span className="readings-status-cell">
+                          <span
+                            className="status-badge"
+                            style={{
+                              backgroundColor: `${portalReview.color}20`,
+                              color: portalReview.color,
+                              borderColor: portalReview.color,
+                            }}
+                            title={
+                              [
+                                portalReview.fullLabel,
+                                reading.portalManualReviewedBy
+                                  ? `${reading.portalManualReviewedBy}${
+                                      reading.portalManualReviewedAt
+                                        ? ` · ${formatReadingDateTime(reading.portalManualReviewedAt)}`
+                                        : ''
+                                    }`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || undefined
+                            }
+                          >
+                            {portalReview.label}
+                          </span>
+                        </span>
+                      </td>
                       <td data-label="Date">
                         <div className="cell-with-icon">
                           <Calendar size={16} className="cell-icon" aria-hidden />
                           <span>{formatReadingShortDate(reading.dateOfReading)}</span>
                         </div>
+                      </td>
+                      <td className="readings-col-session-id" data-label="Capture ID">
+                        <code
+                          className="readings-session-id-cell"
+                          title={reading.id}
+                        >
+                          {formatSessionIdTimestampForList(reading.id)}
+                        </code>
                       </td>
                       <td data-label="Captured by">
                         <div className="cell-with-icon readings-col-captured">

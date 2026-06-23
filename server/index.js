@@ -1846,6 +1846,8 @@ const METADATA_PATCHABLE = new Set([
   'is_manually_reviewed',
   'confidence',
   'processing_time_ms',
+  'portal_manual_review_status',
+  'portal_manual_review_notes',
 ]);
 
 function validateDialDetailsForPatch(dialDetails) {
@@ -2106,6 +2108,33 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
     }
 
     const userEmail = typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'].trim() : '';
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'portal_manual_review_status')) {
+      if (!isReviewer) {
+        return res.status(403).json({ error: 'portal_manual_review_status requires reviewer or admin mode' });
+      }
+      const status = patch.portal_manual_review_status;
+      if (status !== 'correct' && status !== 'incorrect') {
+        return res.status(400).json({ error: 'portal_manual_review_status must be correct or incorrect' });
+      }
+      meta.portal_manual_review_status = status;
+      meta.portal_manual_reviewed_at = new Date().toISOString();
+      if (userEmail) meta.portal_manual_reviewed_by = userEmail.slice(0, 320);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'portal_manual_review_notes')) {
+      if (!isReviewer) {
+        return res.status(403).json({ error: 'portal_manual_review_notes requires reviewer or admin mode' });
+      }
+      if (typeof patch.portal_manual_review_notes !== 'string') {
+        return res.status(400).json({ error: 'portal_manual_review_notes must be a string' });
+      }
+      if (patch.portal_manual_review_notes.length > 8000) {
+        return res.status(400).json({ error: 'portal_manual_review_notes too long (max 8000)' });
+      }
+      meta.portal_manual_review_notes = patch.portal_manual_review_notes;
+    }
+
     meta.portal_metadata_updated_at = new Date().toISOString();
     if (userEmail) meta.portal_metadata_updated_by = userEmail.slice(0, 320);
     if (

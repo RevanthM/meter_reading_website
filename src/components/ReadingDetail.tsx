@@ -22,6 +22,11 @@ import {
   reconcileModelDialRowsForReading,
 } from '../utils/dialDetails';
 import { fieldTestPredictedReading } from '../utils/fieldTestDisplay';
+import {
+  isFieldTestPortalReading,
+  normalizePortalManualReviewStatus,
+  portalManualReviewBadge,
+} from '../utils/portalManualReview';
 import { formatPortalAccuracyConfidencePctFromFraction } from '../utils/portalMetricFormat';
 import type { DialDetailFromMetadata, DialPoint, S3MeterReading } from '../services/api';
 import {
@@ -611,6 +616,7 @@ const ReadingDetail: React.FC = () => {
 
   const reading = directReading || contextReading;
   const isManualUploadQueue = reading?.status === 'manually_uploaded';
+  const isFieldTestCapture = reading ? isFieldTestPortalReading(reading) : false;
 
   const readingQueueIds = useMemo(() => {
     const st = location.state as ReadingDetailLocationState | null;
@@ -733,7 +739,9 @@ const ReadingDetail: React.FC = () => {
     const baseDig =
       modelRow != null ? normalizeDialDigit(Number(modelRow.prediction)) : null;
     if (baseDig !== null && baseDig !== n) {
-      setSelectedStatus((s) => (statusIsIncorrect(s) ? s : 'incorrect_new'));
+      if (!reading || !isFieldTestPortalReading(reading)) {
+        setSelectedStatus((s) => (statusIsIncorrect(s) ? s : 'incorrect_new'));
+      }
     }
   }, [reading]);
 
@@ -749,6 +757,10 @@ const ReadingDetail: React.FC = () => {
   const [imageDifficulty, setImageDifficulty] = useState<ImageDifficulty>(null);
   const [approveBusy, setApproveBusy] = useState(false);
   const [removeFromTestBusy, setRemoveFromTestBusy] = useState(false);
+  const [portalManualReviewChoice, setPortalManualReviewChoice] = useState<'correct' | 'incorrect' | null>(null);
+  const [portalManualReviewNotes, setPortalManualReviewNotes] = useState('');
+  const [portalManualReviewSaving, setPortalManualReviewSaving] = useState(false);
+  const [portalManualReviewSaved, setPortalManualReviewSaved] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -794,6 +806,9 @@ const ReadingDetail: React.FC = () => {
         (reading.reviewerRecommendTraining ? 'training' : null),
     );
     setImageDifficulty(reading.imageDifficulty ?? null);
+    const portalStatus = normalizePortalManualReviewStatus(reading.portalManualReviewStatus);
+    setPortalManualReviewChoice(portalStatus === 'pending' ? null : portalStatus);
+    setPortalManualReviewNotes(reading.portalManualReviewNotes || '');
   }, [
     reading?.id,
     reading?.status,
@@ -806,7 +821,28 @@ const ReadingDetail: React.FC = () => {
     reading?.reviewerRecommendTraining,
     reading?.reviewerDatasetDestination,
     reading?.imageDifficulty,
+    reading?.portalManualReviewStatus,
+    reading?.portalManualReviewNotes,
     isReviewerSaveMode,
+  ]);
+
+  const portalManualReviewDirty = useMemo(() => {
+    const r = directReading || contextReading;
+    if (!r || !isFieldTestCapture) return false;
+    const savedStatus = normalizePortalManualReviewStatus(r.portalManualReviewStatus);
+    const savedNotes = r.portalManualReviewNotes || '';
+    if (savedStatus === 'pending') {
+      return portalManualReviewChoice === 'correct' || portalManualReviewChoice === 'incorrect';
+    }
+    return (
+      portalManualReviewChoice !== savedStatus || portalManualReviewNotes !== savedNotes
+    );
+  }, [
+    directReading,
+    contextReading,
+    isFieldTestCapture,
+    portalManualReviewChoice,
+    portalManualReviewNotes,
   ]);
 
   const isDirty = useMemo(() => {
@@ -828,12 +864,13 @@ const ReadingDetail: React.FC = () => {
       mlPrediction !== baseMeter ||
       newDialStr !== baseDialStr ||
       comments !== baseComments ||
-      selectedStatus !== r.status ||
+      (!isFieldTestCapture && selectedStatus !== r.status) ||
       datasetDestination !== baseDest ||
       imageDifficulty !== baseDifficulty
     );
   }, [
     isLabelerMode,
+    isFieldTestCapture,
     directReading,
     contextReading,
     userCorrection,
@@ -909,6 +946,7 @@ const ReadingDetail: React.FC = () => {
     }
 
     const snapshotForMove = r;
+    const fieldTestCapture = isFieldTestPortalReading(snapshotForMove);
     const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
     const baseMeter = mlBaselineMeterValue(r);
     const baseComments = r.comments || '';
@@ -918,9 +956,11 @@ const ReadingDetail: React.FC = () => {
       r.reviewerDatasetDestination ?? (r.reviewerRecommendTraining ? 'training' : null);
     const baseDifficulty = r.imageDifficulty ?? null;
 
-    const targetStatus = isReviewerSaveMode
-      ? resolveReviewerSaveStatus(selectedStatus, snapshotForMove.status)
-      : selectedStatus;
+    const targetStatus = fieldTestCapture
+      ? snapshotForMove.status
+      : isReviewerSaveMode
+        ? resolveReviewerSaveStatus(selectedStatus, snapshotForMove.status)
+        : selectedStatus;
     const desiredIsCorrect = targetStatus === 'correct';
     const baseIsCorrect = r.isCorrect ?? r.status === 'correct';
 
@@ -931,9 +971,9 @@ const ReadingDetail: React.FC = () => {
       comments !== baseComments ||
       datasetDestination !== baseDest ||
       imageDifficulty !== baseDifficulty ||
-      (isReviewerSaveMode && desiredIsCorrect !== baseIsCorrect);
+      (isReviewerSaveMode && !fieldTestCapture && desiredIsCorrect !== baseIsCorrect);
 
-    const statusWillChange = targetStatus !== snapshotForMove.status;
+    const statusWillChange = !fieldTestCapture && targetStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
 
     const optimistic = applyDetailFormToReading(snapshotForMove, {
@@ -1016,7 +1056,7 @@ const ReadingDetail: React.FC = () => {
         if (shouldMarkManual) {
           patch.is_manually_reviewed = true;
         }
-        if (isReviewerSaveMode) {
+        if (isReviewerSaveMode && !fieldTestCapture) {
           patch.is_correct = desiredIsCorrect;
         }
 
@@ -1086,6 +1126,49 @@ const ReadingDetail: React.FC = () => {
     isReviewerSaveMode,
     portalWorkMode,
     isManualUploadQueue,
+  ]);
+
+  const handlePortalManualReviewSave = useCallback(async () => {
+    const r = directReading || contextReading;
+    if (!r?.s3SessionPrefix || !isFieldTestPortalReading(r)) return;
+    if (!isReviewerSaveMode) return;
+    if (portalManualReviewChoice !== 'correct' && portalManualReviewChoice !== 'incorrect') return;
+
+    setPortalManualReviewSaving(true);
+    try {
+      const savedReading = await patchSessionMetadata(
+        r.id,
+        workTypeForApi,
+        {
+          s3SessionPrefix: r.s3SessionPrefix,
+          patch: {
+            portal_manual_review_status: portalManualReviewChoice,
+            portal_manual_review_notes: portalManualReviewNotes,
+          },
+        },
+        userEmail || undefined,
+        portalWorkMode,
+      );
+      setDirectReading(savedReading);
+      upsertReading(savedReading);
+      setPortalManualReviewSaved(true);
+      window.setTimeout(() => setPortalManualReviewSaved(false), 2000);
+    } catch (error) {
+      console.error('Failed to save portal manual review:', error);
+      alert(error instanceof Error ? error.message : 'Portal manual review save failed.');
+    } finally {
+      setPortalManualReviewSaving(false);
+    }
+  }, [
+    directReading,
+    contextReading,
+    isReviewerSaveMode,
+    portalManualReviewChoice,
+    portalManualReviewNotes,
+    workTypeForApi,
+    userEmail,
+    portalWorkMode,
+    upsertReading,
   ]);
 
   const handleApproveUnitTest = useCallback(async () => {
@@ -1723,6 +1806,118 @@ const ReadingDetail: React.FC = () => {
                     </>
                   ) : null}
 
+                  {isFieldTestCapture ? (
+                    <>
+                      <div className="reading-detail-field-test-outcome">
+                        <span className="reading-detail-viewonly-label">Field test</span>
+                        <span
+                          className="reading-detail-status-pill"
+                          style={{
+                            borderColor: statusColors[reading.status],
+                            color: statusColors[reading.status],
+                            backgroundColor: `${statusColors[reading.status]}14`,
+                          }}
+                        >
+                          {statusLabels[reading.status]}
+                        </span>
+                      </div>
+
+                      {isReviewerSaveMode ? (
+                        <div className="reading-detail-portal-manual-review">
+                          {(() => {
+                            const portalStatus = normalizePortalManualReviewStatus(
+                              reading.portalManualReviewStatus,
+                            );
+                            const current = portalManualReviewBadge(portalStatus);
+                            return (
+                              <>
+                                <div className="reading-detail-portal-manual-review-head">
+                                  <span className="reading-detail-viewonly-label">Portal review</span>
+                                  {portalStatus !== 'pending' ? (
+                                    <span
+                                      className="reading-detail-status-pill"
+                                      style={{
+                                        borderColor: current.color,
+                                        color: current.color,
+                                        backgroundColor: `${current.color}14`,
+                                      }}
+                                    >
+                                      {current.label}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {reading.portalManualReviewedBy ? (
+                                  <p className="reading-detail-field-hint reading-detail-portal-manual-review-meta">
+                                    Saved by {reading.portalManualReviewedBy}
+                                  </p>
+                                ) : null}
+                              </>
+                            );
+                          })()}
+                          <div
+                            className="reading-detail-portal-manual-review-options"
+                            role="radiogroup"
+                            aria-label="Portal review"
+                          >
+                            <label className="reading-detail-radio">
+                              <input
+                                type="radio"
+                                name="portal-manual-review"
+                                checked={portalManualReviewChoice === 'correct'}
+                                onChange={() => setPortalManualReviewChoice('correct')}
+                              />
+                              Correct
+                            </label>
+                            <label className="reading-detail-radio">
+                              <input
+                                type="radio"
+                                name="portal-manual-review"
+                                checked={portalManualReviewChoice === 'incorrect'}
+                                onChange={() => setPortalManualReviewChoice('incorrect')}
+                              />
+                              Incorrect
+                            </label>
+                          </div>
+                          <div className="comments-control reading-detail-portal-manual-review-notes">
+                            <label htmlFor="portal-manual-review-notes">
+                              Notes <span className="reading-detail-optional-tag">(optional)</span>
+                            </label>
+                            <textarea
+                              id="portal-manual-review-notes"
+                              rows={2}
+                              value={portalManualReviewNotes}
+                              onChange={(e) => setPortalManualReviewNotes(e.target.value)}
+                              placeholder="Add a note…"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className={`save-button reading-detail-portal-manual-review-save ${portalManualReviewSaved ? 'saved' : ''} ${portalManualReviewSaving ? 'saving' : ''}`}
+                            onClick={() => void handlePortalManualReviewSave()}
+                            disabled={portalManualReviewSaving || !portalManualReviewDirty}
+                            aria-busy={portalManualReviewSaving}
+                          >
+                            {portalManualReviewSaving ? (
+                              <>
+                                <Loader2 size={18} className="spin" aria-hidden />
+                                <span>Saving…</span>
+                              </>
+                            ) : portalManualReviewSaved ? (
+                              <>
+                                <Check size={18} aria-hidden />
+                                <span>Saved</span>
+                              </>
+                            ) : (
+                              <>
+                                <Save size={18} aria-hidden />
+                                <span>Save review</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
                   <div className="status-control">
                     <label htmlFor="reading-detail-status">Outcome</label>
                     <select
@@ -1756,7 +1951,9 @@ const ReadingDetail: React.FC = () => {
                       <option value="not_sure">{statusLabels.not_sure}</option>
                     </select>
                   </div>
+                  )}
 
+                  {!isFieldTestCapture ? (
                   <fieldset className="reading-detail-radio-group">
                     <legend>Dataset</legend>
                     <label className="reading-detail-radio">
@@ -1790,7 +1987,10 @@ const ReadingDetail: React.FC = () => {
                       Test dataset rows are approved by the <strong>test data reviewer</strong> role.
                     </p>
                   </fieldset>
+                  ) : null}
 
+                  {!isFieldTestCapture ? (
+                  <>
                   <fieldset className="reading-detail-radio-group">
                     <legend>Image classification</legend>
                     {(
@@ -1859,6 +2059,8 @@ const ReadingDetail: React.FC = () => {
                       </>
                     )}
                   </button>
+                  </>
+                  ) : null}
                 </>
               )}
             </section>

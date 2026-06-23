@@ -70,6 +70,10 @@ const LIST_READING_PROJECTION = [
   'review_assigned_to',
   'review_assigned_at',
   'review_assigned_by',
+  'portal_manual_review_status',
+  'portal_manual_reviewed_by',
+  'portal_manual_reviewed_at',
+  'portal_manual_review_notes',
 ].join(', ');
 
 function cleanItem(item) {

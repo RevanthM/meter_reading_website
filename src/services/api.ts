@@ -152,6 +152,11 @@ export interface S3MeterReading extends MeterReading {
   /** Email from `portal_metadata_updated_by` after a portal save to metadata.json. */
   portalMetadataUpdatedBy?: string;
   portalMetadataUpdatedAt?: string;
+  /** Second-pass portal QA on field test captures (`portal_manual_review_status`). */
+  portalManualReviewStatus?: 'correct' | 'incorrect' | null;
+  portalManualReviewedBy?: string;
+  portalManualReviewedAt?: string;
+  portalManualReviewNotes?: string;
   /** Image count when list API omits full `images` (Dynamo index path). */
   imageCount?: number;
   /** Portal bulk upload awaiting a 4-digit label. */
@@ -852,6 +857,7 @@ export async function fetchFieldTestCaptures(
     presign?: boolean;
     format?: 'captures' | 'readings';
     refresh?: boolean;
+    portalManualReview?: 'pending' | 'correct' | 'incorrect' | 'all';
   },
 ): Promise<FieldTestCapturesResponse | FieldTestReadingsListResponse> {
   const q = new URLSearchParams({ workType });
@@ -871,6 +877,9 @@ export async function fetchFieldTestCaptures(
     q.set('datePreset', options.datePreset);
   }
   if (options?.sortDir) q.set('sortDir', options.sortDir);
+  if (options?.portalManualReview && options.portalManualReview !== 'all') {
+    q.set('portalManualReview', options.portalManualReview);
+  }
   if (options?.format === 'readings') q.set('format', 'readings');
   if (options?.presign) q.set('presign', '1');
   try {
@@ -1292,6 +1301,9 @@ export type SessionMetadataPatch = {
   is_manually_reviewed?: boolean;
   confidence?: number;
   processing_time_ms?: number;
+  /** Portal-only second review on field test captures (does not change field test outcome). */
+  portal_manual_review_status?: 'correct' | 'incorrect';
+  portal_manual_review_notes?: string;
 };
 
 export async function patchSessionMetadata(

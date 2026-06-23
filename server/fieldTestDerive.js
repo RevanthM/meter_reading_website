@@ -3,13 +3,17 @@
  *
  * Capture lifecycle (field test):
  * 1. iOS — user photographs the meter; they either fix dials/readings on device or accept as correct.
- * 2. Portal — reviewer checks the capture; Correct / Incorrect is the final verdict for metrics.
- * 3. If the reviewer marks Incorrect, the capture counts as wrong even when per-dial flags are missing in Dynamo.
+ * 2. Portal — reviewer checks the capture; Correct / Incorrect is the field-test layer verdict (Images tab).
+ * 3. Portal manual review — optional second QA pass; when set, overrides field-test verdict for Results stats only.
  *
  * Confusion matrix / accuracy: predicted = `ml_raw_prediction`; expected (GT) follows reviewer verdict —
  * Incorrect → `user_correction` (reviewer truth) first; Correct → accepted read (`final_reading` / `ml_raw`).
  */
 import { normalizeFieldTestCaptureTrigger } from './fieldTestCaptureTrigger.js';
+import {
+  fieldTestStatsCaptureCorrect,
+  fieldTestStatsCaptureIncorrect,
+} from './portalManualReview.js';
 
 const ON_TICK_EPSILON = 0.2;
 
@@ -404,7 +408,9 @@ export function sessionItemToPerImageRow(item) {
     ? String(captureModelMatchesGroundTruth(perDial))
     : '';
   const reviewerCorrect = captureCorrectByReviewer(item);
-  const overallMatch = reviewerCorrect ? 'true' : 'false';
+  const statsCorrect = fieldTestStatsCaptureCorrect(item);
+  const statsIncorrect = fieldTestStatsCaptureIncorrect(item);
+  const overallMatch = statsCorrect ? 'true' : 'false';
   const predicted = mlBaselineReadingFromMetadata(item);
   const incorrectDials = incorrectDialNumbersFromItem(item);
 
@@ -418,8 +424,13 @@ export function sessionItemToPerImageRow(item) {
     expected_reading_from_filename: finalReading,
     overall_reading_match: overallMatch,
     model_overall_reading_match: modelOverallMatch,
-    reviewer_capture_correct: reviewerCorrect ? 'true' : 'false',
-    reviewer_marked_incorrect: captureMarkedIncorrectByReviewer(item) ? 'true' : 'false',
+    reviewer_capture_correct: statsCorrect ? 'true' : 'false',
+    reviewer_marked_incorrect: statsIncorrect ? 'true' : 'false',
+    field_test_review_correct: reviewerCorrect ? 'true' : 'false',
+    portal_manual_review_status:
+      item.portal_manual_review_status === 'correct' || item.portal_manual_review_status === 'incorrect'
+        ? item.portal_manual_review_status
+        : '',
     is_manually_reviewed: item.is_manually_reviewed === true ? 'true' : 'false',
     captured_by: item.user_name || '',
     captured_at: item.captured_at || '',

@@ -295,6 +295,29 @@ function captureIncorrectFromFieldTestRow(row: Record<string, string>): boolean 
   );
 }
 
+export function fieldTestStatsOutcomeFromRow(
+  row: Record<string, string>,
+): 'correct' | 'incorrect' | null {
+  const portal = String(row.portal_manual_review_status || '').trim().toLowerCase();
+  if (portal === 'correct') return 'correct';
+  if (portal === 'incorrect') return 'incorrect';
+  return null;
+}
+
+export function fieldTestStatsCaptureCorrectFromRow(row: Record<string, string>): boolean {
+  const portal = fieldTestStatsOutcomeFromRow(row);
+  if (portal === 'correct') return true;
+  if (portal === 'incorrect') return false;
+  return captureCorrectFromFieldTestRow(row);
+}
+
+export function fieldTestStatsCaptureIncorrectFromRow(row: Record<string, string>): boolean {
+  const portal = fieldTestStatsOutcomeFromRow(row);
+  if (portal === 'correct') return false;
+  if (portal === 'incorrect') return true;
+  return captureIncorrectFromFieldTestRow(row);
+}
+
 function captureCorrectFromFieldTestRow(row: Record<string, string>): boolean {
   if (captureIncorrectFromFieldTestRow(row)) return false;
   const reviewer = parseReadingMatch(row.reviewer_capture_correct);
@@ -325,7 +348,7 @@ export function dialStatsFromPerImageRows(
   const incorrectCaptureCount =
     options?.incorrectCaptureCount ??
     (options?.fieldTest
-      ? rows.filter((row) => captureIncorrectFromFieldTestRow(row)).length
+      ? rows.filter((row) => fieldTestStatsCaptureIncorrectFromRow(row)).length
       : 0);
 
   const out: UnitTestDialStats[] = [];
@@ -340,7 +363,7 @@ export function dialStatsFromPerImageRows(
         if (ok == null) continue;
         withGroundTruth += 1;
         if (ok) correct += 1;
-        else if (captureIncorrectFromFieldTestRow(row)) wrongOnIncorrectCaptures += 1;
+        else if (fieldTestStatsCaptureIncorrectFromRow(row)) wrongOnIncorrectCaptures += 1;
       } else {
         const exp = parseDigit(row[`dial${d}_expected_digit`]);
         if (exp == null) continue;
@@ -650,7 +673,7 @@ export function runPerformanceFromPerImageRows(
   for (const row of rows) {
     if (options?.fieldTest) {
       withGroundTruth += 1;
-      if (captureCorrectFromFieldTestRow(row)) correct += 1;
+      if (fieldTestStatsCaptureCorrectFromRow(row)) correct += 1;
       continue;
     }
     const expected = (row.expected_reading_from_filename ?? '').trim();

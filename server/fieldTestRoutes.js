@@ -31,6 +31,7 @@ import {
 import { sessionItemToReading } from './sessionIndex/metadataMapping.js';
 import { resolvePrimaryListImageKey } from './sessionIndex/index.js';
 import { createResponseCache, parseCacheMs, setApiCacheHeaders } from './responseCache.js';
+import { matchesPortalManualReviewFilter } from './portalManualReview.js';
 
 const FIELD_TEST_CACHE_FRESH_MS = parseCacheMs(process.env.FIELD_TEST_CACHE_FRESH_MS, 45_000);
 
@@ -98,7 +99,8 @@ function matchesReadingFilters(reading, filters) {
   if (!matchesCaptureFilters(capture, filters)) return false;
   if (!matchesFieldTestCityFilter(reading, filters.location)) return false;
   if (!matchesFieldTestDatePreset(reading, filters.datePreset)) return false;
-  return matchesFieldTestCaptureTriggerFilter(reading, filters.captureTrigger);
+  if (!matchesFieldTestCaptureTriggerFilter(reading, filters.captureTrigger)) return false;
+  return matchesPortalManualReviewFilter(reading, filters.portalManualReview);
 }
 
 /**
@@ -302,6 +304,7 @@ export function registerFieldTestRoutes(app, deps) {
         location: String(req.query.location || ''),
         captureTrigger: String(req.query.captureTrigger || 'all'),
         datePreset: String(req.query.datePreset || 'all'),
+        portalManualReview: String(req.query.portalManualReview || 'all'),
       };
       const sortDir = String(req.query.sortDir || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
