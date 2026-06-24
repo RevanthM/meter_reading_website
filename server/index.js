@@ -39,6 +39,7 @@ import { registerAuditEventRoutes, appendAuditEvents } from './auditEvents.js';
 import { registerReviewAssignmentRoutes } from './reviewAssignments.js';
 import { isAdminPortalRequest } from './portalAdminAccess.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
+import { portalManualReviewFromMetadata } from './portalManualReview.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
 import archiver from 'archiver';
@@ -1039,6 +1040,8 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
       if (diff !== 0) return diff;
       return a.fileName.localeCompare(b.fileName);
     });
+
+    const portalManualReview = portalManualReviewFromMetadata(metadata);
     
     return {
       id: metadata.session_id,
@@ -1116,6 +1119,14 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
         typeof metadata.portal_metadata_updated_by === 'string' && metadata.portal_metadata_updated_by.trim() !== ''
           ? String(metadata.portal_metadata_updated_by).trim().slice(0, 320)
           : undefined,
+      portalMetadataUpdatedAt:
+        typeof metadata.portal_metadata_updated_at === 'string' && metadata.portal_metadata_updated_at.trim() !== ''
+          ? String(metadata.portal_metadata_updated_at).trim()
+          : undefined,
+      portalManualReviewStatus: portalManualReview.portal_manual_review_status,
+      portalManualReviewedBy: portalManualReview.portal_manual_reviewed_by ?? undefined,
+      portalManualReviewedAt: portalManualReview.portal_manual_reviewed_at ?? undefined,
+      portalManualReviewNotes: portalManualReview.portal_manual_review_notes ?? undefined,
       manualLabelPending:
         metadata.manual_label_pending === true ||
         (metadata.upload_source === 'portal_manual' &&
@@ -1128,7 +1139,7 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
           : '',
       images,
       createdAt: metadata.timestamp,
-      updatedAt: metadata.timestamp,
+      updatedAt: metadata.portal_metadata_updated_at || metadata.timestamp,
     };
   } catch (error) {
     console.error(`Error parsing session ${prefix}:`, error.message);

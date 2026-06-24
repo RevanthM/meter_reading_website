@@ -85,6 +85,18 @@ export function metadataToSessionItem(metadata, ctx) {
       metadata.portal_metadata_updated_at != null ? String(metadata.portal_metadata_updated_at) : null,
     portal_metadata_updated_by:
       metadata.portal_metadata_updated_by != null ? String(metadata.portal_metadata_updated_by) : null,
+    portal_manual_review_status:
+      metadata.portal_manual_review_status === 'correct' || metadata.portal_manual_review_status === 'incorrect'
+        ? metadata.portal_manual_review_status
+        : null,
+    portal_manual_reviewed_by:
+      typeof metadata.portal_manual_reviewed_by === 'string' && metadata.portal_manual_reviewed_by.trim()
+        ? metadata.portal_manual_reviewed_by.trim().slice(0, 320)
+        : null,
+    portal_manual_reviewed_at:
+      typeof metadata.portal_manual_reviewed_at === 'string' ? metadata.portal_manual_reviewed_at : null,
+    portal_manual_review_notes:
+      metadata.portal_manual_review_notes != null ? String(metadata.portal_manual_review_notes).slice(0, 8000) : null,
     review_assignment_batch_id:
       typeof metadata.review_assignment_batch_id === 'string' && metadata.review_assignment_batch_id.trim()
         ? metadata.review_assignment_batch_id.trim().slice(0, 64)
@@ -210,6 +222,10 @@ export function sessionItemToReading(item, { images = [] } = {}) {
     isManuallyReviewed: item.is_manually_reviewed === true,
     portalMetadataUpdatedBy: item.portal_metadata_updated_by ?? undefined,
     portalMetadataUpdatedAt: item.portal_metadata_updated_at ?? undefined,
+    portalManualReviewStatus: item.portal_manual_review_status ?? null,
+    portalManualReviewedBy: item.portal_manual_reviewed_by ?? undefined,
+    portalManualReviewedAt: item.portal_manual_reviewed_at ?? undefined,
+    portalManualReviewNotes: item.portal_manual_review_notes ?? undefined,
     reviewAssignmentBatchId: item.review_assignment_batch_id ?? undefined,
     reviewAssignedTo: item.review_assigned_to ?? undefined,
     reviewAssignedAt: item.review_assigned_at ?? undefined,
