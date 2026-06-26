@@ -135,6 +135,8 @@ export interface S3MeterReading extends MeterReading {
   feedbackType?: string;
   /** Field / unit test: user changed dials or final reading on device. */
   hadUserCorrection?: boolean;
+  /** Dial positions corrected vs on-device model (`reads_corrected_count` in metadata / Dynamo). */
+  readsCorrectedCount?: number | null;
   /** @deprecated Use reviewerDatasetDestination — kept for list filters. */
   reviewerRecommendTraining?: boolean;
   reviewerDatasetDestination?: ReviewerDatasetDestination;
