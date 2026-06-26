@@ -40,6 +40,7 @@ import { registerReviewAssignmentRoutes } from './reviewAssignments.js';
 import { isAdminPortalRequest } from './portalAdminAccess.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 import { portalManualReviewFromMetadata } from './portalManualReview.js';
+import { inferReadsCorrectedFromMetadata } from './fieldTestDerive.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
 import archiver from 'archiver';
@@ -1123,6 +1124,8 @@ async function parseSession(prefix, status, sourceType, workType = 'ANALOG_METER
         typeof metadata.portal_metadata_updated_at === 'string' && metadata.portal_metadata_updated_at.trim() !== ''
           ? String(metadata.portal_metadata_updated_at).trim()
           : undefined,
+      readsCorrectedCount: inferReadsCorrectedFromMetadata(metadata),
+      hadUserCorrection: inferReadsCorrectedFromMetadata(metadata) > 0,
       portalManualReviewStatus: portalManualReview.portal_manual_review_status,
       portalManualReviewedBy: portalManualReview.portal_manual_reviewed_by ?? undefined,
       portalManualReviewedAt: portalManualReview.portal_manual_reviewed_at ?? undefined,
@@ -2144,6 +2147,13 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
         return res.status(400).json({ error: 'portal_manual_review_notes too long (max 8000)' });
       }
       meta.portal_manual_review_notes = patch.portal_manual_review_notes;
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'user_correction') ||
+      Object.prototype.hasOwnProperty.call(patch, 'dial_details')
+    ) {
+      meta.reads_corrected_count = inferReadsCorrectedFromMetadata(meta);
     }
 
     meta.portal_metadata_updated_at = new Date().toISOString();

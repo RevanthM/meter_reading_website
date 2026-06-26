@@ -65,10 +65,18 @@ function pickGroundTruthReading(candidates) {
 export function finalReadingFromMetadata(metadata) {
   const hadDialCorrections = countReadsCorrectedFromItem(metadata) > 0;
   const feedback = String(metadata?.feedback_type ?? '').trim().toLowerCase();
-  const reviewerWrong = metadata?.is_correct === false || feedback === 'incorrect';
+  const portalReviewWrong = metadata?.portal_manual_review_status === 'incorrect';
+  const reviewerWrong =
+    metadata?.is_correct === false || feedback === 'incorrect' || portalReviewWrong;
   const reviewerRight = metadata?.is_correct === true || feedback === 'correct';
+  const portalDialEdit =
+    Boolean(String(metadata?.portal_metadata_updated_by ?? '').trim()) &&
+    countFieldTestDialReadingChanges(
+      pickGroundTruthReading([metadata?.user_correction]),
+      mlBaselineReadingFromMetadata(metadata),
+    ) > 0;
 
-  if (hadDialCorrections || reviewerWrong) {
+  if (hadDialCorrections || reviewerWrong || portalDialEdit) {
     return pickGroundTruthReading([
       metadata?.user_correction,
       metadata?.final_reading,
@@ -134,6 +142,27 @@ export function countReadsCorrectedFromItem(item) {
   if (Number.isFinite(stored) && stored > 0) return stored;
 
   return 0;
+}
+
+/** Device flags first; otherwise infer dial edits from portal `user_correction` vs model baseline. */
+export function inferReadsCorrectedFromMetadata(metadata) {
+  const incorrect = incorrectDialNumbersFromItem(metadata);
+  if (incorrect.length > 0) return incorrect.length;
+
+  const correctedPos = Array.isArray(metadata?.user_corrected_positions)
+    ? metadata.user_corrected_positions.filter((n) => Number.isInteger(n))
+    : [];
+  if (correctedPos.length > 0) return correctedPos.length;
+
+  if (!metadata?.portal_metadata_updated_by) {
+    const stored = Number(metadata?.reads_corrected_count);
+    return Number.isFinite(stored) && stored > 0 ? stored : 0;
+  }
+
+  const model = mlBaselineReadingFromMetadata(metadata);
+  const user = pickGroundTruthReading([metadata?.user_correction]);
+  if (!user || !model) return 0;
+  return countFieldTestDialReadingChanges(user, model);
 }
 
 /** True when the on-device model needed no dial corrections (field-test ground truth). */
@@ -297,6 +326,14 @@ export function deriveFieldTestFromMetadata(metadata) {
       : correctedPositions.length > 0
         ? correctedPositions.length
         : 0;
+
+  if (readsCorrected === 0 && metadata?.portal_metadata_updated_by) {
+    const model = mlBaselineReadingFromMetadata(metadata);
+    const user = pickGroundTruthReading([metadata?.user_correction]);
+    if (user && model) {
+      readsCorrected = countFieldTestDialReadingChanges(user, model);
+    }
+  }
 
   const hadUserCorrection = readsCorrected > 0;
 
@@ -529,13 +566,23 @@ export function fieldTestReviewerCorrectionMeta(reading) {
     feedback_type: reading.feedbackType,
     is_correct: reading.isCorrect,
     reads_corrected_count: reading.readsCorrectedCount,
+    portal_manual_review_status: reading.portalManualReviewStatus,
+    portal_metadata_updated_by: reading.portalMetadataUpdatedBy,
   });
   const modelReading = mlBaselineReadingFromMetadata({
     ml_raw_prediction: reading.rawPrediction,
     ml_prediction: reading.meterValue,
   });
-  const dialsChangedCount = countFieldTestDialReadingChanges(groundTruth, modelReading);
-  const deviceCorrected = reading.hadUserCorrection === true;
+  const userCorrection = pad4Reading(reading.expectedValue);
+  const portalDialChanges =
+    userCorrection && modelReading ? countFieldTestDialReadingChanges(userCorrection, modelReading) : 0;
+  const dialsChangedCount = Math.max(
+    countFieldTestDialReadingChanges(groundTruth, modelReading),
+    correctedBy ? portalDialChanges : 0,
+  );
+  const readsCorrectedStored =
+    typeof reading.readsCorrectedCount === 'number' && reading.readsCorrectedCount > 0;
+  const deviceCorrected = reading.hadUserCorrection === true || readsCorrectedStored;
   const isCorrected = deviceCorrected || dialsChangedCount > 0;
   const portalAttributed = Boolean(isCorrected && correctedBy);
 

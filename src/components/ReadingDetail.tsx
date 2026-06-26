@@ -561,6 +561,8 @@ function applyDetailFormToReading(
     markReviewed?: boolean;
     portalManualReviewChoice?: 'correct' | 'incorrect' | null;
     portalManualReviewNotes?: string;
+    portalMetadataUpdatedBy?: string;
+    portalMetadataUpdatedAt?: string;
   },
 ): S3MeterReading {
   const reviewerDatasetDestination = opts.isReviewerSaveMode
@@ -586,6 +588,14 @@ function applyDetailFormToReading(
       opts.portalManualReviewNotes !== undefined
         ? opts.portalManualReviewNotes
         : base.portalManualReviewNotes,
+    portalMetadataUpdatedBy:
+      opts.portalMetadataUpdatedBy !== undefined
+        ? opts.portalMetadataUpdatedBy
+        : base.portalMetadataUpdatedBy,
+    portalMetadataUpdatedAt:
+      opts.portalMetadataUpdatedAt !== undefined
+        ? opts.portalMetadataUpdatedAt
+        : base.portalMetadataUpdatedAt,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1054,6 +1064,14 @@ const ReadingDetail: React.FC = () => {
 
     const statusWillChange = !fieldTestCapture && targetStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
+    const willPersistPortalMeta = metaDirty || shouldMarkManual || portalReviewDirty;
+    const portalSaveStamp =
+      willPersistPortalMeta && userEmail
+        ? {
+            portalMetadataUpdatedBy: userEmail,
+            portalMetadataUpdatedAt: new Date().toISOString(),
+          }
+        : {};
 
     const optimistic = applyDetailFormToReading(snapshotForMove, {
       selectedStatus: targetStatus,
@@ -1068,6 +1086,7 @@ const ReadingDetail: React.FC = () => {
       markReviewed: shouldMarkManual,
       portalManualReviewChoice: portalReviewDirty ? portalManualReviewChoice : undefined,
       portalManualReviewNotes: portalReviewDirty ? portalManualReviewNotes : undefined,
+      ...portalSaveStamp,
     });
     setDirectReading(optimistic);
     upsertReading(optimistic);

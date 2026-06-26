@@ -39,6 +39,7 @@ export function fieldTestReviewerCorrectionMeta(
   reading: Pick<
     S3MeterReading,
     | 'hadUserCorrection'
+    | 'readsCorrectedCount'
     | 'portalMetadataUpdatedBy'
     | 'portalMetadataUpdatedAt'
     | 'expectedValue'
@@ -47,14 +48,23 @@ export function fieldTestReviewerCorrectionMeta(
     | 'feedbackType'
     | 'isCorrect'
     | 'finalReading'
+    | 'portalManualReviewStatus'
   >,
 ): FieldTestCorrectionMeta {
   const correctedBy = String(reading.portalMetadataUpdatedBy ?? '').trim() || null;
   const correctedAt = String(reading.portalMetadataUpdatedAt ?? '').trim() || null;
   const groundTruth = fieldTestGroundTruthReading(reading);
   const modelReading = fieldTestPredictedReading(reading);
-  const dialsChangedCount = countFieldTestDialReadingChanges(groundTruth, modelReading);
-  const deviceCorrected = reading.hadUserCorrection === true;
+  const userCorrection = pad4(reading.expectedValue);
+  const portalDialChanges =
+    userCorrection && modelReading ? countFieldTestDialReadingChanges(userCorrection, modelReading) : 0;
+  const dialsChangedCount = Math.max(
+    countFieldTestDialReadingChanges(groundTruth, modelReading),
+    correctedBy ? portalDialChanges : 0,
+  );
+  const readsCorrectedStored =
+    typeof reading.readsCorrectedCount === 'number' && reading.readsCorrectedCount > 0;
+  const deviceCorrected = reading.hadUserCorrection === true || readsCorrectedStored;
   const isCorrected = deviceCorrected || dialsChangedCount > 0;
   const portalAttributed = Boolean(isCorrected && correctedBy);
 

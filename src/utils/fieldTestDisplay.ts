@@ -15,14 +15,27 @@ function pickGroundTruth(candidates: (string | null | undefined)[]): string {
 export function fieldTestGroundTruthReading(
   reading: Pick<
     S3MeterReading,
-    'expectedValue' | 'meterValue' | 'rawPrediction' | 'feedbackType' | 'isCorrect' | 'finalReading'
+    | 'expectedValue'
+    | 'meterValue'
+    | 'rawPrediction'
+    | 'feedbackType'
+    | 'isCorrect'
+    | 'finalReading'
+    | 'portalManualReviewStatus'
+    | 'portalMetadataUpdatedBy'
   > & { finalReading?: string | null },
 ): string | null {
   const feedback = String(reading.feedbackType ?? '').trim().toLowerCase();
-  const reviewerWrong = reading.isCorrect === false || feedback === 'incorrect';
+  const portalReviewWrong = reading.portalManualReviewStatus === 'incorrect';
+  const reviewerWrong =
+    reading.isCorrect === false || feedback === 'incorrect' || portalReviewWrong;
   const reviewerRight = reading.isCorrect === true || feedback === 'correct';
+  const portalDialEdit =
+    Boolean(String(reading.portalMetadataUpdatedBy ?? '').trim()) &&
+    pad4(reading.expectedValue) !== pad4(reading.rawPrediction ?? reading.meterValue) &&
+    Boolean(pad4(reading.expectedValue));
 
-  if (reviewerWrong) {
+  if (reviewerWrong || portalDialEdit) {
     const s = pickGroundTruth([
       reading.expectedValue,
       reading.finalReading,
