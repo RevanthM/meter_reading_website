@@ -11,6 +11,8 @@ export type PortalRole = PortalWorkMode;
 /** Passed from PortalLayout to child routes via `<Outlet context />`. */
 export type PortalOutletWorkContext = {
   workMode: PortalWorkMode;
+  /** Collapse the portal sidebar so list/table views can use full width. */
+  collapseSidebarForTableFocus: () => void;
 };
 
 const STORAGE_KEY = 'meter_portal_role';

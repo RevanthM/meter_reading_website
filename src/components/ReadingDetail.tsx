@@ -559,6 +559,8 @@ function applyDetailFormToReading(
     isManualUploadQueue: boolean;
     isReviewerSaveMode: boolean;
     markReviewed?: boolean;
+    portalManualReviewChoice?: 'correct' | 'incorrect' | null;
+    portalManualReviewNotes?: string;
   },
 ): S3MeterReading {
   const reviewerDatasetDestination = opts.isReviewerSaveMode
@@ -578,6 +580,12 @@ function applyDetailFormToReading(
     imageDifficulty: opts.isReviewerSaveMode ? opts.imageDifficulty : base.imageDifficulty,
     isManuallyReviewed: opts.markReviewed ? true : base.isManuallyReviewed,
     isCorrect: opts.selectedStatus === 'correct',
+    portalManualReviewStatus:
+      opts.portalManualReviewChoice ?? base.portalManualReviewStatus ?? null,
+    portalManualReviewNotes:
+      opts.portalManualReviewNotes !== undefined
+        ? opts.portalManualReviewNotes
+        : base.portalManualReviewNotes,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -759,8 +767,6 @@ const ReadingDetail: React.FC = () => {
   const [removeFromTestBusy, setRemoveFromTestBusy] = useState(false);
   const [portalManualReviewChoice, setPortalManualReviewChoice] = useState<'correct' | 'incorrect' | null>(null);
   const [portalManualReviewNotes, setPortalManualReviewNotes] = useState('');
-  const [portalManualReviewSaving, setPortalManualReviewSaving] = useState(false);
-  const [portalManualReviewSaved, setPortalManualReviewSaved] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -882,6 +888,41 @@ const ReadingDetail: React.FC = () => {
     imageDifficulty,
   ]);
 
+  const hasUnsavedChanges = useMemo(
+    () => isDirty || (isFieldTestCapture && portalManualReviewDirty),
+    [isDirty, isFieldTestCapture, portalManualReviewDirty],
+  );
+
+  const showPortalIncorrectReadingHint = useMemo(() => {
+    if (!isFieldTestCapture || !isReviewerSaveMode || portalManualReviewChoice !== 'incorrect') {
+      return false;
+    }
+    const r = directReading || contextReading;
+    if (!r) return false;
+    const baseExpected = r.expectedValue != null ? String(r.expectedValue) : '';
+    const baseMeter = mlBaselineMeterValue(r);
+    const baseDialStr = JSON.stringify(baselineDialRowsForReading(r));
+    const newDialStr = JSON.stringify(localDialRows);
+    const readingUpdated =
+      userCorrection !== baseExpected ||
+      mlPrediction !== baseMeter ||
+      newDialStr !== baseDialStr;
+    if (readingUpdated) return false;
+    if (normalizePortalManualReviewStatus(r.portalManualReviewStatus) === 'incorrect') {
+      return false;
+    }
+    return true;
+  }, [
+    isFieldTestCapture,
+    isReviewerSaveMode,
+    portalManualReviewChoice,
+    directReading,
+    contextReading,
+    userCorrection,
+    mlPrediction,
+    localDialRows,
+  ]);
+
   const performSaveAction = useCallback(async (): Promise<boolean> => {
     const r = directReading || contextReading;
     if (!r?.s3SessionPrefix) {
@@ -973,6 +1014,44 @@ const ReadingDetail: React.FC = () => {
       imageDifficulty !== baseDifficulty ||
       (isReviewerSaveMode && !fieldTestCapture && desiredIsCorrect !== baseIsCorrect);
 
+    const portalReviewDirty =
+      fieldTestCapture &&
+      isReviewerSaveMode &&
+      (() => {
+        const savedStatus = normalizePortalManualReviewStatus(r.portalManualReviewStatus);
+        const savedNotes = r.portalManualReviewNotes || '';
+        if (savedStatus === 'pending') {
+          return portalManualReviewChoice === 'correct' || portalManualReviewChoice === 'incorrect';
+        }
+        return (
+          portalManualReviewChoice !== savedStatus || portalManualReviewNotes !== savedNotes
+        );
+      })();
+
+    if (portalReviewDirty) {
+      if (portalManualReviewChoice !== 'correct' && portalManualReviewChoice !== 'incorrect') {
+        alert('Choose Portal review: Correct or Incorrect before saving.');
+        return false;
+      }
+    }
+
+    const readingMetaDirty =
+      userCorrection !== baseExpected ||
+      mlPrediction !== baseMeter ||
+      newDialStr !== baseDialStr;
+
+    const newlyMarkingPortalIncorrect =
+      portalReviewDirty &&
+      portalManualReviewChoice === 'incorrect' &&
+      normalizePortalManualReviewStatus(r.portalManualReviewStatus) !== 'incorrect';
+
+    if (newlyMarkingPortalIncorrect && !readingMetaDirty) {
+      alert(
+        'Portal review is Incorrect — update the reading before saving. Use the pencil on dial crops or edit the correct whole-meter reading.',
+      );
+      return false;
+    }
+
     const statusWillChange = !fieldTestCapture && targetStatus !== snapshotForMove.status;
     const shouldMarkManual = r.isManuallyReviewed !== true && (metaDirty || statusWillChange);
 
@@ -987,6 +1066,8 @@ const ReadingDetail: React.FC = () => {
       isManualUploadQueue,
       isReviewerSaveMode,
       markReviewed: shouldMarkManual,
+      portalManualReviewChoice: portalReviewDirty ? portalManualReviewChoice : undefined,
+      portalManualReviewNotes: portalReviewDirty ? portalManualReviewNotes : undefined,
     });
     setDirectReading(optimistic);
     upsertReading(optimistic);
@@ -996,8 +1077,10 @@ const ReadingDetail: React.FC = () => {
     setIsSaving(true);
     let savedReading: S3MeterReading | null = null;
     let patchPrefix = snapshotForMove.s3SessionPrefix;
+    let didPersist = false;
     try {
       if (isReviewerSaveMode && statusWillChange && snapshotForMove.s3SessionPrefix) {
+        didPersist = true;
         await updateReadingStatus(
           snapshotForMove.id,
           targetStatus,
@@ -1017,11 +1100,12 @@ const ReadingDetail: React.FC = () => {
         }
       }
 
-      if (metaDirty || shouldMarkManual) {
+      if (metaDirty || shouldMarkManual || portalReviewDirty) {
         if (!patchPrefix) {
           alert('This session cannot be saved. Contact an administrator.');
           return false;
         }
+        didPersist = true;
         const patch: SessionMetadataPatch = {};
         if (metaDirty) {
           patch.ml_prediction = isManualUploadQueue ? userCorrection : mlPrediction;
@@ -1059,6 +1143,10 @@ const ReadingDetail: React.FC = () => {
         if (isReviewerSaveMode && !fieldTestCapture) {
           patch.is_correct = desiredIsCorrect;
         }
+        if (portalReviewDirty && portalManualReviewChoice) {
+          patch.portal_manual_review_status = portalManualReviewChoice;
+          patch.portal_manual_review_notes = portalManualReviewNotes;
+        }
 
         savedReading = await patchSessionMetadata(
           snapshotForMove.id,
@@ -1078,6 +1166,8 @@ const ReadingDetail: React.FC = () => {
           isManualUploadQueue,
           isReviewerSaveMode,
           markReviewed: shouldMarkManual,
+          portalManualReviewChoice: portalReviewDirty ? portalManualReviewChoice : undefined,
+          portalManualReviewNotes: portalReviewDirty ? portalManualReviewNotes : undefined,
         });
         setDirectReading(merged);
         upsertReading(merged);
@@ -1094,6 +1184,10 @@ const ReadingDetail: React.FC = () => {
             }
           },
         );
+      }
+
+      if (!didPersist) {
+        return true;
       }
 
       setIsSaved(true);
@@ -1126,49 +1220,8 @@ const ReadingDetail: React.FC = () => {
     isReviewerSaveMode,
     portalWorkMode,
     isManualUploadQueue,
-  ]);
-
-  const handlePortalManualReviewSave = useCallback(async () => {
-    const r = directReading || contextReading;
-    if (!r?.s3SessionPrefix || !isFieldTestPortalReading(r)) return;
-    if (!isReviewerSaveMode) return;
-    if (portalManualReviewChoice !== 'correct' && portalManualReviewChoice !== 'incorrect') return;
-
-    setPortalManualReviewSaving(true);
-    try {
-      const savedReading = await patchSessionMetadata(
-        r.id,
-        workTypeForApi,
-        {
-          s3SessionPrefix: r.s3SessionPrefix,
-          patch: {
-            portal_manual_review_status: portalManualReviewChoice,
-            portal_manual_review_notes: portalManualReviewNotes,
-          },
-        },
-        userEmail || undefined,
-        portalWorkMode,
-      );
-      setDirectReading(savedReading);
-      upsertReading(savedReading);
-      setPortalManualReviewSaved(true);
-      window.setTimeout(() => setPortalManualReviewSaved(false), 2000);
-    } catch (error) {
-      console.error('Failed to save portal manual review:', error);
-      alert(error instanceof Error ? error.message : 'Portal manual review save failed.');
-    } finally {
-      setPortalManualReviewSaving(false);
-    }
-  }, [
-    directReading,
-    contextReading,
-    isReviewerSaveMode,
     portalManualReviewChoice,
     portalManualReviewNotes,
-    workTypeForApi,
-    userEmail,
-    portalWorkMode,
-    upsertReading,
   ]);
 
   const handleApproveUnitTest = useCallback(async () => {
@@ -1176,7 +1229,7 @@ const ReadingDetail: React.FC = () => {
     if (!r?.id) return;
     setApproveBusy(true);
     try {
-      if (isDirty) {
+      if (hasUnsavedChanges) {
         const saved = await performSaveAction();
         if (!saved) return;
       }
@@ -1205,7 +1258,7 @@ const ReadingDetail: React.FC = () => {
     }
     setRemoveFromTestBusy(true);
     try {
-      if (isDirty) {
+      if (hasUnsavedChanges) {
         const saved = await performSaveAction();
         if (!saved) return;
       }
@@ -1242,7 +1295,7 @@ const ReadingDetail: React.FC = () => {
   const showHeaderSaveButton = isReviewerSaveMode || isTestDataReviewerMode;
   const headerSaveDisabled =
     isSaving ||
-    !isDirty ||
+    !hasUnsavedChanges ||
     (isTestDataReviewerMode && (removeFromTestBusy || approveBusy));
   const headerSaveLabel = isTestDataReviewerMode ? 'Save corrections' : 'Save changes';
 
@@ -1271,8 +1324,13 @@ const ReadingDetail: React.FC = () => {
   );
 
   const rNow = directReading || contextReading;
+  const portalReviewIncorrect =
+    isFieldTestCapture &&
+    (portalManualReviewChoice === 'incorrect' ||
+      normalizePortalManualReviewStatus(rNow?.portalManualReviewStatus) === 'incorrect');
   const incorrectContext = (() => {
     if (!rNow) return false;
+    if (portalReviewIncorrect) return true;
     return statusIsIncorrect(selectedStatus) || statusIsIncorrect(rNow.status);
   })();
   useEffect(() => {
@@ -1878,6 +1936,16 @@ const ReadingDetail: React.FC = () => {
                               Incorrect
                             </label>
                           </div>
+                          {showPortalIncorrectReadingHint ? (
+                            <p
+                              className="reading-detail-portal-manual-review-hint"
+                              role="status"
+                            >
+                              You marked this Incorrect — update the reading before saving. Use the{' '}
+                              <strong>pencil</strong> on dial crops below, or edit the correct whole-meter
+                              reading in More details.
+                            </p>
+                          ) : null}
                           <div className="comments-control reading-detail-portal-manual-review-notes">
                             <label htmlFor="portal-manual-review-notes">
                               Notes <span className="reading-detail-optional-tag">(optional)</span>
@@ -1892,17 +1960,17 @@ const ReadingDetail: React.FC = () => {
                           </div>
                           <button
                             type="button"
-                            className={`save-button reading-detail-portal-manual-review-save ${portalManualReviewSaved ? 'saved' : ''} ${portalManualReviewSaving ? 'saving' : ''}`}
-                            onClick={() => void handlePortalManualReviewSave()}
-                            disabled={portalManualReviewSaving || !portalManualReviewDirty}
-                            aria-busy={portalManualReviewSaving}
+                            className={`save-button reading-detail-portal-manual-review-save ${isSaved ? 'saved' : ''} ${isSaving ? 'saving' : ''}`}
+                            onClick={handleSave}
+                            disabled={isSaving || !hasUnsavedChanges}
+                            aria-busy={isSaving}
                           >
-                            {portalManualReviewSaving ? (
+                            {isSaving ? (
                               <>
                                 <Loader2 size={18} className="spin" aria-hidden />
                                 <span>Saving…</span>
                               </>
-                            ) : portalManualReviewSaved ? (
+                            ) : isSaved ? (
                               <>
                                 <Check size={18} aria-hidden />
                                 <span>Saved</span>

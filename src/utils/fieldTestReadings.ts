@@ -69,12 +69,20 @@ export function filterFieldTestReadingsForCycle(
   });
 }
 
+/** Pacific capture day for list date filters (matches server fieldTestDateFilter). */
+export function fieldTestCaptureDayKey(reading: {
+  dateOfReading?: string;
+  createdAt?: string;
+}): string {
+  return calendarDayKeyInPortalTz(reading.dateOfReading || reading.createdAt || '');
+}
+
 /** Matches ReadingsList date chips — Pacific yyyy-mm-dd in [from, to]. */
 export function readingMatchesDateRangeWindow(
-  reading: { dateOfReading?: string },
+  reading: { dateOfReading?: string; createdAt?: string },
   window: { from: string; to: string } | null | undefined,
 ): boolean {
   if (!window) return true;
-  const day = calendarDayKeyInPortalTz(reading.dateOfReading || '');
+  const day = fieldTestCaptureDayKey(reading);
   return Boolean(day && day >= window.from && day <= window.to);
 }

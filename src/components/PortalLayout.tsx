@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type FC, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -170,6 +170,7 @@ const PortalLayout: FC = () => {
       setWorkMode(next);
       setStoredPortalWorkMode(next);
       setMobileNavOpen(false);
+      setSidebarCollapsed(true);
       if (pathname !== '/') {
         navigate('/', { replace: true });
       }
@@ -186,6 +187,17 @@ const PortalLayout: FC = () => {
     }
     return false;
   });
+
+  const collapseSidebarForTableFocus = useCallback(() => {
+    setSidebarCollapsed(true);
+  }, []);
+
+  const prevWorkModeRef = useRef(workMode);
+  useEffect(() => {
+    if (prevWorkModeRef.current === workMode) return;
+    prevWorkModeRef.current = workMode;
+    setSidebarCollapsed(true);
+  }, [workMode]);
 
   const { navEntries, roleHint } = useMemo((): { navEntries: NavEntry[]; roleHint: string } => {
     const homeDash: NavLeaf = {
@@ -628,7 +640,9 @@ const PortalLayout: FC = () => {
         </header>
 
         <div className="portal-outlet">
-          <Outlet context={{ workMode } satisfies PortalOutletWorkContext} />
+          <Outlet
+            context={{ workMode, collapseSidebarForTableFocus } satisfies PortalOutletWorkContext}
+          />
         </div>
       </div>
     </div>

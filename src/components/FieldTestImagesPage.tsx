@@ -32,12 +32,8 @@ import {
   fieldTestFiltersActive,
   filterFieldTestReadings,
 } from '../utils/fieldTestImageFilters';
-import {
-  formatPresetLabel,
-  getDateRangeFromPreset,
-  isDateRangePresetId,
-  type DateRangePresetId,
-} from '../utils/dateRangePresets';
+import { usePortalListDateRangeFilter } from '../hooks/usePortalListDateRangeFilter';
+import { formatPresetLabel, type DateRangePresetId } from '../utils/dateRangePresets';
 import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
 import {
   fieldTestCaptureFromReading,
@@ -107,9 +103,19 @@ const FieldTestImagesPage: FC = () => {
   });
 
   const cycleIdParam = searchParams.get('cycleId') || '';
-  const rangePresetRaw = (searchParams.get('range') || '').trim();
-  const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
-  const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
+  const {
+    rangePreset,
+    activeDateWindow,
+    dateFromDraft,
+    setDateFromDraft,
+    dateToDraft,
+    setDateToDraft,
+    clearDateRangeFilters,
+    applyRangePreset,
+    applyCustomDateRangeFromDraft,
+    dateRangeLabel,
+    hasDateFilter,
+  } = usePortalListDateRangeFilter(searchParams, setSearchParams);
   const defaultToAllCycles = fieldTestDefaultsToAllCycles(outletCtx?.workMode);
   const cycleSelectValue = fieldTestCycleSelectValue(cycleIdParam, activeCycle, defaultToAllCycles);
   const apiCycleId = fieldTestCycleIdForApi(cycleSelectValue);
@@ -201,7 +207,7 @@ const FieldTestImagesPage: FC = () => {
   const cities = useMemo(() => buildFieldTestCityOptions(allReadings), [allReadings]);
 
   const filteredReadings = useMemo(() => {
-    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, presetWindow));
+    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, activeDateWindow));
     list = filterFieldTestReadings(list, filterInput);
     return [...list].sort((a, b) => {
       const cmp = String(b.dateOfReading || b.createdAt || '').localeCompare(
@@ -209,7 +215,7 @@ const FieldTestImagesPage: FC = () => {
       );
       return filters.sortDir === 'desc' ? cmp : -cmp;
     });
-  }, [allReadings, presetWindow, filterInput, filters.sortDir]);
+  }, [allReadings, activeDateWindow, filterInput, filters.sortDir]);
 
   const filteredCaptures = useMemo(
     () => filteredReadings.map(fieldTestCaptureFromReading),
@@ -270,32 +276,11 @@ const FieldTestImagesPage: FC = () => {
     });
   };
 
-  const clearDateRangeFilters = useCallback(() => {
-    setSearchParams(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        n.delete('range');
-        return n;
-      },
-      { replace: true },
-    );
-  }, [setSearchParams]);
+  const applyDateFilters = useCallback(() => {
+    applyCustomDateRangeFromDraft();
+  }, [applyCustomDateRangeFromDraft]);
 
-  const applyRangePreset = useCallback(
-    (preset: DateRangePresetId) => {
-      setSearchParams(
-        (prev) => {
-          const n = new URLSearchParams(prev);
-          n.set('range', preset);
-          return n;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
+  const filtersActive = fieldTestFiltersActive(filterInput) || hasDateFilter;
   const clearFilters = () => {
     setFilters({
       query: '',
@@ -328,7 +313,7 @@ const FieldTestImagesPage: FC = () => {
       filteredCount !== loadedCount || visibleCount < filteredCount
         ? `${visibleCount.toLocaleString()} of ${filteredCount.toLocaleString()}`
         : filteredCount.toLocaleString();
-    const datePart = rangePreset ? ` · ${formatPresetLabel(rangePreset)}` : '';
+    const datePart = dateRangeLabel ? ` · ${dateRangeLabel}` : '';
     const busyPart = presigning ? ' · loading previews…' : refreshing ? ' · updating…' : '';
     return `${countText} ${filteredCount === 1 ? 'image' : 'images'}${cycleSuffix}${datePart}${busyPart}`;
   }, [
@@ -339,7 +324,7 @@ const FieldTestImagesPage: FC = () => {
     activeCycle,
     cycleSelectValue,
     displayCycle,
-    rangePreset,
+    dateRangeLabel,
     presigning,
     refreshing,
   ]);
@@ -560,7 +545,7 @@ const FieldTestImagesPage: FC = () => {
                       {formatPresetLabel(id)}
                     </button>
                   ))}
-                  {rangePreset ? (
+                  {hasDateFilter ? (
                     <button
                       type="button"
                       className="readings-list-filter-chip readings-list-filter-chip-muted"
@@ -569,6 +554,31 @@ const FieldTestImagesPage: FC = () => {
                       Clear dates
                     </button>
                   ) : null}
+                </div>
+                <div className="field-test-readings-date-range-fields">
+                  <label className="field-test-readings-date-range-field">
+                    <span className="readings-list-filter-label">From</span>
+                    <input
+                      type="date"
+                      className="readings-list-filter-date"
+                      value={dateFromDraft}
+                      onChange={(e) => setDateFromDraft(e.target.value)}
+                      aria-label="Capture date from"
+                    />
+                  </label>
+                  <label className="field-test-readings-date-range-field">
+                    <span className="readings-list-filter-label">To</span>
+                    <input
+                      type="date"
+                      className="readings-list-filter-date"
+                      value={dateToDraft}
+                      onChange={(e) => setDateToDraft(e.target.value)}
+                      aria-label="Capture date to"
+                    />
+                  </label>
+                  <button type="button" className="readings-list-filter-apply" onClick={applyDateFilters}>
+                    Apply dates
+                  </button>
                 </div>
               </div>
               <div className="readings-list-filter-toolbar-row field-test-readings-view-mode-row">

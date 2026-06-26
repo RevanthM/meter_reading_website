@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import {
   useNavigate,
   useOutletContext,
@@ -47,12 +47,7 @@ import { formatUnitTestDifficultyTag } from '../utils/unitTestImageNaming';
 import { captureLocationListLine } from '../utils/captureLocation';
 import { formatReadingDateTime, formatReadingShortDate } from '../utils/readingDisplayDates';
 import { fieldTestReviewerCorrectionMeta } from '../utils/fieldTestCorrectionMeta';
-import {
-  formatPresetLabel,
-  getDateRangeFromPreset,
-  isDateRangePresetId,
-  type DateRangePresetId,
-} from '../utils/dateRangePresets';
+import { usePortalListDateRangeFilter } from '../hooks/usePortalListDateRangeFilter';
 import {
   isPortalManualReviewFilterId,
   matchesPortalManualReviewFilter,
@@ -74,6 +69,7 @@ import {
 import { buildFieldTestCityOptions } from '../utils/fieldTestLocation';
 import { readingMatchesDateRangeWindow } from '../utils/fieldTestReadings';
 import FieldTestCycleFilterSelect from './FieldTestCycleFilterSelect';
+import PortalDateRangeFilter from './PortalDateRangeFilter';
 import {
   FIELD_TEST_ALL_CYCLES,
   fieldTestCycleForDisplay,
@@ -82,8 +78,6 @@ import {
   fieldTestCycleSelectValue,
   fieldTestDefaultsToAllCycles,
 } from '../utils/fieldTestCycleFilter';
-
-const DATE_PRESET_IDS: DateRangePresetId[] = ['today', 'yesterday', 'last7', 'last30'];
 
 const SEARCH_DEBOUNCE_MS = 350;
 const FIELD_TEST_VIEW_MODE_KEY = 'portal.fieldTest.viewMode';
@@ -189,15 +183,12 @@ const FieldTestReadingsList: FC = () => {
   const cycleIdParam = searchParams.get('cycleId') || '';
   const cohortParamRaw = (searchParams.get('cohort') || '').trim().toLowerCase();
   const activeCohort: FieldTestCohortId | null = isFieldTestCohortId(cohortParamRaw) ? cohortParamRaw : null;
-  const rangePresetRaw = (searchParams.get('range') || '').trim();
-  const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
   const portalManualReviewRaw = (searchParams.get('portalManualReview') || '').trim().toLowerCase();
   const activePortalManualReview: PortalManualReviewFilterId | null = isPortalManualReviewFilterId(
     portalManualReviewRaw,
   )
     ? portalManualReviewRaw
     : null;
-  const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
   const defaultToAllCycles = fieldTestDefaultsToAllCycles(portalWorkMode);
   const cycleSelectValue = fieldTestCycleSelectValue(cycleIdParam, activeCycle, defaultToAllCycles);
   const apiCycleId = fieldTestCycleIdForApi(cycleSelectValue);
@@ -222,6 +213,37 @@ const FieldTestReadingsList: FC = () => {
       /* ignore */
     }
   }, [filtersExpanded]);
+
+  const focusTableLayout = useCallback(() => {
+    setFiltersExpanded(false);
+    outletCtx?.collapseSidebarForTableFocus?.();
+  }, [outletCtx]);
+
+  const {
+    rangePreset,
+    activeDateWindow,
+    dateFromDraft,
+    setDateFromDraft,
+    dateToDraft,
+    setDateToDraft,
+    clearDateRangeFilters,
+    applyRangePreset,
+    applyCustomDateRangeFromDraft,
+    dateRangeLabel,
+    hasDateFilter,
+  } = usePortalListDateRangeFilter(searchParams, setSearchParams);
+
+  const applyFiltersAndFocus = useCallback(() => {
+    applyCustomDateRangeFromDraft();
+    focusTableLayout();
+  }, [applyCustomDateRangeFromDraft, focusTableLayout]);
+
+  const prevPortalWorkModeRef = useRef(portalWorkMode);
+  useEffect(() => {
+    if (prevPortalWorkModeRef.current === portalWorkMode) return;
+    prevPortalWorkModeRef.current = portalWorkMode;
+    focusTableLayout();
+  }, [portalWorkMode, focusTableLayout]);
 
   const loadCycles = useCallback(async () => {
     try {
@@ -326,37 +348,6 @@ const FieldTestReadingsList: FC = () => {
     );
   };
 
-  const clearDateRangeFilters = useCallback(() => {
-    setSearchParams(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        n.delete('date');
-        n.delete('from');
-        n.delete('to');
-        n.delete('range');
-        return n;
-      },
-      { replace: true },
-    );
-  }, [setSearchParams]);
-
-  const applyRangePreset = useCallback(
-    (preset: DateRangePresetId) => {
-      setSearchParams(
-        (prev) => {
-          const n = new URLSearchParams(prev);
-          n.delete('date');
-          n.delete('from');
-          n.delete('to');
-          n.set('range', preset);
-          return n;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
   const filterInput = useMemo(
     (): FieldTestCaptureFilters => ({
       ...filters,
@@ -377,7 +368,7 @@ const FieldTestReadingsList: FC = () => {
   const cities = useMemo(() => buildFieldTestCityOptions(allReadings), [allReadings]);
 
   const filteredReadings = useMemo(() => {
-    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, presetWindow));
+    let list = allReadings.filter((r) => readingMatchesDateRangeWindow(r, activeDateWindow));
     list = filterFieldTestReadings(list, filterInput);
     if (activeCohort) {
       list = list.filter((r) => matchesFieldTestCohort(r, activeCohort));
@@ -392,7 +383,7 @@ const FieldTestReadingsList: FC = () => {
       return filters.sortDir === 'desc' ? cmp : -cmp;
     });
     return list;
-  }, [allReadings, presetWindow, filterInput, activeCohort, activePortalManualReview, filters.sortDir]);
+  }, [allReadings, activeDateWindow, filterInput, activeCohort, activePortalManualReview, filters.sortDir]);
 
   const setAssignFilter = useCallback(
     (active: boolean) => {
@@ -430,7 +421,7 @@ const FieldTestReadingsList: FC = () => {
     return myBatches.reduce((n, b) => n + (b.myProgress?.remaining ?? 0), 0);
   }, [assignFilterActive, myBatches]);
 
-  const filtersActive = fieldTestFiltersActive(filterInput) || Boolean(rangePreset);
+  const filtersActive = fieldTestFiltersActive(filterInput) || hasDateFilter;
   const filtersPanelActive =
     filtersActive || assignFilterActive || Boolean(activeCohort) || Boolean(activePortalManualReview);
   const clearFilters = () => {
@@ -487,7 +478,7 @@ const FieldTestReadingsList: FC = () => {
     const portalReviewPart = activePortalManualReview
       ? ` · ${PORTAL_MANUAL_REVIEW_LABELS[activePortalManualReview]}`
       : '';
-    const datePart = rangePreset ? ` · ${formatPresetLabel(rangePreset)}` : '';
+    const datePart = dateRangeLabel ? ` · ${dateRangeLabel}` : '';
     const busyPart = refreshing ? ' · updating…' : '';
     return `${base}${cohortPart}${portalReviewPart}${datePart}${busyPart}`;
   }, [
@@ -501,13 +492,18 @@ const FieldTestReadingsList: FC = () => {
     cycles.length,
     activeCohort,
     activePortalManualReview,
-    rangePreset,
+    dateRangeLabel,
+    refreshing,
   ]);
 
   const toolbarBusy = refreshing;
 
   return (
-    <div className="readings-list-page field-test-readings-list-page">
+    <div
+      className={`readings-list-page field-test-readings-list-page${
+        !filtersExpanded ? ' field-test-readings-list-page--table-focus' : ''
+      }`}
+    >
       <header className="page-header field-test-readings-page-header">
         <div className="field-test-readings-header-inner">
           <div className="header-content list-page-header-with-actions">
@@ -553,7 +549,7 @@ const FieldTestReadingsList: FC = () => {
             <>
             {!filtersExpanded && filtersPanelActive ? (
               <p className="field-test-filters-collapsed-hint">
-                Filters are applied — expand to change assignment, search, status, or dates.
+                Filters are applied — expand to adjust, then click Apply filters.
               </p>
             ) : null}
             {filtersExpanded ? (
@@ -580,6 +576,12 @@ const FieldTestReadingsList: FC = () => {
                   placeholder="Search by reading or session…"
                   value={filters.query}
                   onChange={(e) => setFilters((p) => ({ ...p, query: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      applyFiltersAndFocus();
+                    }
+                  }}
                   aria-label="Search field test captures"
                 />
                 {filters.query ? (
@@ -754,29 +756,26 @@ const FieldTestReadingsList: FC = () => {
               </div>
             </div>
             <div className="readings-list-filter-toolbar-row field-test-readings-date-row">
-              <span className="readings-list-filter-label">When captured</span>
-              <div className="readings-list-filter-chips">
-                {DATE_PRESET_IDS.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`readings-list-filter-chip${rangePreset === id ? ' active' : ''}`}
-                    onClick={() => applyRangePreset(id)}
-                    aria-pressed={rangePreset === id}
-                  >
-                    {formatPresetLabel(id)}
-                  </button>
-                ))}
-                {rangePreset ? (
-                  <button
-                    type="button"
-                    className="readings-list-filter-chip readings-list-filter-chip-muted"
-                    onClick={clearDateRangeFilters}
-                  >
-                    Clear dates
-                  </button>
-                ) : null}
-              </div>
+              <PortalDateRangeFilter
+                rangePreset={rangePreset}
+                hasDateFilter={hasDateFilter}
+                dateFromDraft={dateFromDraft}
+                dateToDraft={dateToDraft}
+                onDateFromChange={setDateFromDraft}
+                onDateToChange={setDateToDraft}
+                onApplyPreset={applyRangePreset}
+                onClear={clearDateRangeFilters}
+                showApplyButton={false}
+                inline
+              />
+            </div>
+            <div className="field-test-readings-filter-actions">
+              <p className="field-test-readings-filter-actions-hint">
+                Set your filters above, then apply once to update the table and maximize space.
+              </p>
+              <button type="button" className="readings-list-filter-apply" onClick={applyFiltersAndFocus}>
+                Apply filters
+              </button>
             </div>
             </div>
             ) : null}

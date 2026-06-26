@@ -48,12 +48,9 @@ import {
 import type { PortalOutletWorkContext } from '../utils/portalWorkMode';
 import { folderPrefixToSegment } from '../utils/trainingPipeline';
 import type { S3MeterReading } from '../services/api';
-import {
-  formatPresetLabel,
-  getDateRangeFromPreset,
-  isDateRangePresetId,
-  type DateRangePresetId,
-} from '../utils/dateRangePresets';
+import { usePortalListDateRangeFilter } from '../hooks/usePortalListDateRangeFilter';
+import PortalDateRangeFilter from './PortalDateRangeFilter';
+import { formatPresetLabel } from '../utils/dateRangePresets';
 import { calendarDayKeyInPortalTz, formatReadingShortDate } from '../utils/readingDisplayDates';
 import ListPageRefreshButton from './ListPageRefreshButton';
 import ListViewLoading from './ListViewLoading';
@@ -283,8 +280,6 @@ const ReadingsList: FC = () => {
 
   const pipelineSeg = (searchParams.get('pipeline') || '').trim();
   const dateFilter = (searchParams.get('date') || '').trim();
-  const fromFilter = (searchParams.get('from') || '').trim();
-  const toFilter = (searchParams.get('to') || '').trim();
   const appVersionParam = useMemo(() => {
     const raw = searchParams.get('appVersion');
     if (raw == null) return '';
@@ -297,9 +292,19 @@ const ReadingsList: FC = () => {
     }
   }, [searchParams]);
 
-  const rangePresetRaw = (searchParams.get('range') || '').trim();
-  const rangePreset: DateRangePresetId | '' = isDateRangePresetId(rangePresetRaw) ? rangePresetRaw : '';
-  const presetWindow = rangePreset ? getDateRangeFromPreset(rangePreset) : null;
+  const {
+    rangePreset,
+    presetWindow,
+    customDateWindow,
+    dateFromDraft,
+    setDateFromDraft,
+    dateToDraft,
+    setDateToDraft,
+    clearDateRangeFilters,
+    applyRangePreset,
+    applyCustomDateRangeFromDraft,
+    hasDateFilter,
+  } = usePortalListDateRangeFilter(searchParams, setSearchParams);
 
   const capturedParam = useMemo(() => (searchParams.get('captured') || '').trim(), [searchParams]);
 
@@ -380,12 +385,10 @@ const ReadingsList: FC = () => {
     let filtered = base;
     if (ISO_DAY.test(dateFilter)) {
       filtered = base.filter((r) => calendarDayKeyInPortalTz(r.dateOfReading || '') === dateFilter);
-    } else if (ISO_DAY.test(fromFilter) && ISO_DAY.test(toFilter)) {
-      const lo = fromFilter <= toFilter ? fromFilter : toFilter;
-      const hi = fromFilter <= toFilter ? toFilter : fromFilter;
+    } else if (customDateWindow) {
       filtered = base.filter((r) => {
         const day = calendarDayKeyInPortalTz(r.dateOfReading || '');
-        return Boolean(day && day >= lo && day <= hi);
+        return Boolean(day && day >= customDateWindow.from && day <= customDateWindow.to);
       });
     } else if (presetWindow) {
       filtered = base.filter((r) => {
@@ -408,8 +411,7 @@ const ReadingsList: FC = () => {
     getReadingsByStatus,
     listStatusKey,
     dateFilter,
-    fromFilter,
-    toFilter,
+    customDateWindow,
     presetWindow,
     appVersionParam,
     capturedParam,
@@ -494,36 +496,6 @@ const ReadingsList: FC = () => {
     [setSearchParams],
   );
 
-  const clearDateRangeFilters = useCallback(() => {
-    setSearchParams(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        n.delete('date');
-        n.delete('from');
-        n.delete('to');
-        n.delete('range');
-        return n;
-      },
-      { replace: true },
-    );
-  }, [setSearchParams]);
-
-  const applyRangePreset = useCallback(
-    (preset: DateRangePresetId) => {
-      setSearchParams(
-        (prev) => {
-          const n = new URLSearchParams(prev);
-          n.delete('date');
-          n.delete('from');
-          n.delete('to');
-          n.set('range', preset);
-          return n;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
 
   const applyCapturedFilter = useCallback(() => {
     setSearchParams(
@@ -539,12 +511,10 @@ const ReadingsList: FC = () => {
   }, [setSearchParams, capturedDraft]);
 
   const chartRangeWindow = useMemo(() => {
-    if (ISO_DAY.test(dateFilter)) return null;
-    if (!ISO_DAY.test(fromFilter) || !ISO_DAY.test(toFilter)) return null;
-    const lo = fromFilter <= toFilter ? fromFilter : toFilter;
-    const hi = fromFilter <= toFilter ? toFilter : fromFilter;
-    return { lo, hi };
-  }, [dateFilter, fromFilter, toFilter]);
+    if (dateFilter && ISO_DAY.test(dateFilter)) return null;
+    if (!customDateWindow) return null;
+    return { lo: customDateWindow.from, hi: customDateWindow.to };
+  }, [dateFilter, customDateWindow]);
 
   const rangeSubtitle = useMemo(() => {
     if (!chartRangeWindow) return null;
@@ -979,29 +949,18 @@ const ReadingsList: FC = () => {
             ))}
           </div>
         </div>
-        <div className="readings-list-filter-toolbar-row">
-          <span className="readings-list-filter-label">When captured</span>
-          <div className="readings-list-filter-chips">
-            {(['today', 'yesterday', 'last7', 'last30'] as const).map((id) => (
-              <button
-                key={id}
-                type="button"
-                className={`readings-list-filter-chip ${rangePreset === id ? 'active' : ''}`}
-                onClick={() => applyRangePreset(id)}
-              >
-                {formatPresetLabel(id)}
-              </button>
-            ))}
-            {rangePreset || ISO_DAY.test(dateFilter) || (ISO_DAY.test(fromFilter) && ISO_DAY.test(toFilter)) ? (
-              <button
-                type="button"
-                className="readings-list-filter-chip readings-list-filter-chip-muted"
-                onClick={clearDateRangeFilters}
-              >
-                Clear dates
-              </button>
-            ) : null}
-          </div>
+        <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-grow">
+          <PortalDateRangeFilter
+            rangePreset={rangePreset}
+            hasDateFilter={hasDateFilter || ISO_DAY.test(dateFilter)}
+            dateFromDraft={dateFromDraft}
+            dateToDraft={dateToDraft}
+            onDateFromChange={setDateFromDraft}
+            onDateToChange={setDateToDraft}
+            onApplyPreset={applyRangePreset}
+            onClear={clearDateRangeFilters}
+            onApplyCustom={applyCustomDateRangeFromDraft}
+          />
         </div>
         <div className="readings-list-filter-toolbar-row readings-list-filter-toolbar-row-grow">
           <span className="readings-list-filter-label">Captured by</span>
