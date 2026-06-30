@@ -13,6 +13,7 @@ import { normalizeFieldTestCaptureTrigger } from './fieldTestCaptureTrigger.js';
 import {
   fieldTestStatsCaptureCorrect,
   fieldTestStatsCaptureIncorrect,
+  normalizePortalManualReviewStatus,
 } from './portalManualReview.js';
 
 const ON_TICK_EPSILON = 0.2;
@@ -231,6 +232,10 @@ export function isFieldTestExcludedOutcome(item) {
 export function isFieldTestScorableCapture(item) {
   if (!item) return false;
   if (isFieldTestExcludedOutcome(item)) return false;
+  const portal = normalizePortalManualReviewStatus(
+    item?.portal_manual_review_status ?? item?.portalManualReviewStatus,
+  );
+  if (portal === 'correct' || portal === 'incorrect') return true;
   return isFieldTestReviewedCorrect(item) || isFieldTestReviewedIncorrect(item);
 }
 
@@ -374,6 +379,24 @@ export function isFieldUploadMetadata(metadata) {
   return String(metadata?.upload_mode || '').trim().toLowerCase() === 'field';
 }
 
+/** Metadata slice used for field-test ground truth + per-dial expected digits. */
+function fieldTestGroundMetaFromItem(item) {
+  return {
+    final_reading: item?.final_reading,
+    user_correction: item?.user_correction,
+    ml_prediction: item?.ml_prediction,
+    ml_raw_prediction: item?.ml_raw_prediction,
+    user_incorrect_dial_numbers: item?.user_incorrect_dial_numbers,
+    user_corrected_positions: item?.user_corrected_positions,
+    reads_corrected_count: item?.reads_corrected_count,
+    is_correct: item?.is_correct,
+    feedback_type: item?.feedback_type,
+    folder_status: item?.folder_status,
+    portal_manual_review_status: item?.portal_manual_review_status,
+    portal_metadata_updated_by: item?.portal_metadata_updated_by,
+  };
+}
+
 /** @param {object} item — Dynamo session item */
 export function perDialFromItem(item) {
   if (item?.per_dial_compact) {
@@ -389,15 +412,7 @@ export function perDialFromItem(item) {
       const parsed = JSON.parse(
         deriveFieldTestFromMetadata({
           dial_details: item.dial_details,
-          final_reading: item.final_reading,
-          user_correction: item.user_correction,
-          ml_prediction: item.ml_prediction,
-          ml_raw_prediction: item.ml_raw_prediction,
-          user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
-          user_corrected_positions: item.user_corrected_positions,
-          reads_corrected_count: item.reads_corrected_count,
-          is_correct: item.is_correct,
-          feedback_type: item.feedback_type,
+          ...fieldTestGroundMetaFromItem(item),
         }).per_dial_compact,
       );
       if (Array.isArray(parsed)) return parsed;
@@ -412,17 +427,7 @@ export function perDialFromItem(item) {
 export function sessionItemToPerImageRow(item) {
   const difficulty = normalizeDifficulty(item.image_difficulty);
   const code = difficultyToCode(difficulty);
-  const groundMeta = {
-    final_reading: item.final_reading,
-    user_correction: item.user_correction,
-    ml_prediction: item.ml_prediction,
-    ml_raw_prediction: item.ml_raw_prediction,
-    user_incorrect_dial_numbers: item.user_incorrect_dial_numbers,
-    user_corrected_positions: item.user_corrected_positions,
-    reads_corrected_count: item.reads_corrected_count,
-    is_correct: item.is_correct,
-    feedback_type: item.feedback_type,
-  };
+  const groundMeta = fieldTestGroundMetaFromItem(item);
   const finalReading = finalReadingFromMetadata(groundMeta);
   let perDial = [];
   if (Array.isArray(item.dial_details) && item.dial_details.length > 0) {
@@ -497,6 +502,7 @@ export function sessionItemToPerImageRow(item) {
     isCorrect: item.is_correct,
     finalReading,
     readsCorrectedCount: countReadsCorrectedFromItem(item),
+    portalManualReviewStatus: item.portal_manual_review_status,
   });
   row.is_corrected = correction.isCorrected ? 'true' : 'false';
   row.dials_changed_count = String(correction.dialsChangedCount);

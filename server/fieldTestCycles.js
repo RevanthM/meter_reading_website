@@ -2,7 +2,7 @@
  * Field test cycle registry on S3 (`{workType}/field_test_cycles/registry.json`).
  */
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { fieldTestRollupKey } from './fieldTestAnalytics.js';
+import { fieldTestRollupKey } from './fieldTestRollupPaths.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
 import { randomUUID } from 'node:crypto';
 

@@ -50,8 +50,9 @@ const FieldTestCycleDashboard: FC<Props> = ({ rollup }) => {
       resolveDialStats(detail, {
         fieldTest: true,
         incorrectCaptureCount: capturesIncorrect,
+        dialAccuracyBreakdown: rollup.dialAccuracyBreakdown,
       }),
-    [detail, capturesIncorrect],
+    [detail, capturesIncorrect, rollup.dialAccuracyBreakdown],
   );
   const avgDialAccuracyPct = useMemo(() => averageDialAccuracyPct(dialStats), [dialStats]);
   const perDialCaptureCount = dialStats[0]?.withGroundTruth ?? rollup.captureCount;

@@ -1,9 +1,10 @@
 /**
  * Precomputed field-test cycle rollups on S3 (fast Results tab).
  */
-import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { captureDayFromIso } from './fieldTestCycles.js';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { captureDayFromIso, readFieldTestCycles } from './fieldTestCycles.js';
 import { fieldTestCaptureDayKey } from './fieldTestCaptureDay.js';
+import { FIELD_TEST_ROLLUP_VERSION, fieldTestRollupKey } from './fieldTestRollupPaths.js';
 import {
   countReadsCorrectedFromItem,
   filterFieldTestScorableSessions,
@@ -15,14 +16,8 @@ import {
 } from './portalManualReview.js';
 import { normalizeConfidencePct, roundPortalAccuracyConfidencePct } from './portalMetricFormat.js';
 
-export const FIELD_TEST_ROLLUP_VERSION = 14;
+export { FIELD_TEST_ROLLUP_VERSION, fieldTestRollupKey } from './fieldTestRollupPaths.js';
 const ROLLUP_VERSION = FIELD_TEST_ROLLUP_VERSION;
-
-export function fieldTestRollupKey(workType, cycleId) {
-  const wt = String(workType || '1000').trim() || '1000';
-  const id = String(cycleId || '').trim();
-  return `${wt}/field_test_cycles/${id}/analytics_v${ROLLUP_VERSION}.json`;
-}
 
 function parseReadingMatch(raw) {
   const t = String(raw ?? '').trim().toLowerCase();
@@ -328,6 +323,33 @@ export async function writeFieldTestRollup(s3Client, bucket, workType, cycleId, 
     }),
   );
   return key;
+}
+
+/** Drop cached cycle rollups so Results recomputes after portal review / reading edits. */
+export async function invalidateFieldTestRollupsForCaptureDate(
+  s3Client,
+  bucket,
+  workType,
+  capturedAtIso,
+) {
+  const day = captureDayFromIso(capturedAtIso);
+  if (!day || !s3Client || !bucket) return;
+  const wt = String(workType || '1000').trim() || '1000';
+  const { cycles } = await readFieldTestCycles(s3Client, bucket, wt);
+  await Promise.all(
+    cycles
+      .filter((cycle) => day >= cycle.startDate && day <= cycle.endDate)
+      .map(async (cycle) => {
+        const key = fieldTestRollupKey(wt, cycle.id);
+        try {
+          await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        } catch (e) {
+          if (e?.name !== 'NoSuchKey' && e?.$metadata?.httpStatusCode !== 404) {
+            console.warn(`invalidateFieldTestRollupsForCaptureDate ${key}:`, e?.message || e);
+          }
+        }
+      }),
+  );
 }
 
 export function filterSessionsForCycle(sessions, cycle) {

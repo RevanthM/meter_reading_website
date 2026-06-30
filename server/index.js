@@ -40,7 +40,8 @@ import { registerReviewAssignmentRoutes } from './reviewAssignments.js';
 import { isAdminPortalRequest } from './portalAdminAccess.js';
 import { registerManualUploadRoutes } from './manualUpload.js';
 import { portalManualReviewFromMetadata } from './portalManualReview.js';
-import { inferReadsCorrectedFromMetadata } from './fieldTestDerive.js';
+import { inferReadsCorrectedFromMetadata, isFieldUploadMetadata } from './fieldTestDerive.js';
+import { invalidateFieldTestRollupsForCaptureDate } from './fieldTestAnalytics.js';
 // Portal local Python inference disabled (requires a machine with YOLO weights).
 // import { registerPortalInferenceRoutes } from './portalInferenceUpload.js';
 import archiver from 'archiver';
@@ -2187,6 +2188,20 @@ app.patch('/api/readings/:id/metadata', async (req, res) => {
     });
 
     invalidateReadingsCache('all', reading.workType || workTypeHint || '1000');
+
+    if (
+      isFieldUploadMetadata(meta) &&
+      (Object.prototype.hasOwnProperty.call(patch, 'portal_manual_review_status') ||
+        Object.prototype.hasOwnProperty.call(patch, 'user_correction') ||
+        Object.prototype.hasOwnProperty.call(patch, 'dial_details'))
+    ) {
+      void invalidateFieldTestRollupsForCaptureDate(
+        s3Client,
+        BUCKET_NAME,
+        reading.workType || workTypeHint || '1000',
+        meta.timestamp || reading.dateOfReading,
+      ).catch((err) => console.warn('invalidateFieldTestRollupsForCaptureDate:', err?.message || err));
+    }
 
     await loadActivityLog();
     activityLog.unshift({

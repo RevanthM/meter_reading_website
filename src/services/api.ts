@@ -657,7 +657,7 @@ export interface FieldTestReadingsListResponse {
 }
 
 /** Bump when rollup `perImageRows` shape changes; client auto-refreshes older cached rollups. */
-export const FIELD_TEST_ANALYTICS_MIN_VERSION = 13;
+export const FIELD_TEST_ANALYTICS_MIN_VERSION = 16;
 
 export interface FieldTestRollup {
   version: number;

@@ -1,0 +1,42 @@
+---
+description: Field test Results accuracy — portal review ground truth, rollups, and dial stats
+globs: meter_reading_website/server/fieldTest*.js,meter_reading_website/server/portalManualReview.js,meter_reading_website/src/components/FieldTest*.tsx,meter_reading_website/src/utils/fieldTest*.ts,meter_reading_website/src/utils/unitTestCsvAnalytics.ts
+alwaysApply: false
+---
+
+# Field test Results analytics (canonical logic)
+
+Field test **Results** is a second QA layer on top of on-device captures. Keep server + UI aligned.
+
+## Capture-level accuracy (read accuracy)
+
+- **Scorable set**: include captures with field-test folder verdict (correct / incorrect pipeline) **or** portal manual review `correct` / `incorrect`. Exclude no_dials / not_sure.
+- **Correct vs incorrect for Results**: `fieldTestStatsCaptureCorrect` / `fieldTestStatsCaptureIncorrect` in `portalManualReview.js`.
+  - Portal manual review **overrides** field-test folder verdict when set.
+  - `portal_manual_review_status === 'incorrect'` → capture counts as incorrect.
+  - `portal_manual_review_status === 'correct'` → capture counts as correct.
+
+## Per-dial accuracy (strict model vs reviewer truth)
+
+- Compare **on-device model digit** (`dialN_predicted_digit` / `ml_raw_prediction` baseline) to **reviewer ground-truth digit** (`dialN_expected_digit`).
+- **No dial-4 bill-lower forgiveness** in field test Results (strict equality).
+- Ground truth for expected digits must use `fieldTestGroundMetaFromItem()` → `finalReadingFromMetadata()` with:
+  - `portal_manual_review_status`
+  - `portal_metadata_updated_by`
+  - `user_correction`, `feedback_type`, `is_correct`, device correction flags
+- Portal **Incorrect** or portal dial edit → prefer `user_correction` chain, not stale `ml_raw`.
+
+## Building rows / rollups
+
+- `sessionItemToPerImageRow()` must pass full ground meta (including portal fields) into `deriveFieldTestFromMetadata` and `finalReadingFromMetadata`.
+- Rollup version lives in `fieldTestRollupPaths.js` only (avoid import cycles with `fieldTestCycles.js`). **Bump version** when analytics semantics change.
+- Invalidate cached cycle rollups when portal review or reading metadata is patched (`invalidateFieldTestRollupsForCaptureDate`).
+
+## UI
+
+- **Field test Results dial donuts**: prefer server `rollup.dialAccuracyBreakdown` via `resolveDialStats(..., { dialAccuracyBreakdown })`. Do not recompute from stale per-image rows on the client when breakdown is present.
+- After server analytics changes, user must **Refresh** cycle analytics (rollup rebuild).
+
+## Regression check (June Cycle 2, work type 1000)
+
+With portal-incorrect captures in cycle, expect read accuracy **below 100%** and per-dial accuracy **not all 100%** (e.g. D4 often lower). If read accuracy is realistic but all dial donuts are 100%, ground meta is missing portal fields or UI is ignoring `dialAccuracyBreakdown`.

@@ -257,6 +257,16 @@ export type DialStatsOptions = {
   fieldTest?: boolean;
   /** Reviewer-marked incorrect capture count (e.g. 12) — overrides per-row inference. */
   incorrectCaptureCount?: number;
+  /** Precomputed server breakdown (field test Results rollup). */
+  dialAccuracyBreakdown?: Array<{
+    dial: number;
+    withGroundTruth: number;
+    correct: number;
+    wrongOnIncorrectCaptures?: number;
+    incorrectCaptureCount?: number;
+    accuracyPct: number | null;
+    confidencePct: number | null;
+  }>;
 };
 
 /** Arithmetic mean of per-dial accuracy % (D1–D4). */
@@ -713,6 +723,21 @@ export function resolveDialStats(
   options?: DialStatsOptions,
 ): UnitTestDialStats[] {
   const fieldTest = options?.fieldTest ?? isFieldTestRunDetail(detail);
+  if (options?.dialAccuracyBreakdown?.length) {
+    return options.dialAccuracyBreakdown.map((d) => ({
+      dial: d.dial,
+      withGroundTruth: d.withGroundTruth,
+      correct: d.correct,
+      accuracyPct: d.accuracyPct,
+      confidencePct: d.confidencePct,
+      ...(fieldTest
+        ? {
+            wrongOnIncorrectCaptures: d.wrongOnIncorrectCaptures,
+            incorrectCaptureCount: d.incorrectCaptureCount,
+          }
+        : {}),
+    }));
+  }
   if (detail.perImageRows?.length) {
     const rowOptions: DialStatsOptions | undefined = fieldTest
       ? { fieldTest: true, incorrectCaptureCount: options?.incorrectCaptureCount }
